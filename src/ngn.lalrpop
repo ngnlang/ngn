@@ -1,0 +1,306 @@
+use crate::ast::*;
+use crate::lexer::Token;
+
+grammar;
+
+extern {
+    type Location = usize;
+    type Error = String;
+
+    enum Token {
+        Var => Token::Var,
+        Lit => Token::Lit,
+        If => Token::If,
+        While => Token::While,
+        Until => Token::Until,
+        Match => Token::Match,
+        Echo => Token::Echo,
+        Print => Token::Print,
+        Break => Token::Break,
+        Next => Token::Next,
+        True => Token::True,
+        False => Token::False,
+        End => Token::End,
+        
+        StarStar => Token::StarStar,
+        EqEq => Token::EqEq,
+        NotEq => Token::NotEq,
+        LessEq => Token::LessEq,
+        GreaterEq => Token::GreaterEq,
+        OrOr => Token::OrOr,
+        
+        Plus => Token::Plus,
+        Minus => Token::Minus,
+        Star => Token::Star,
+        Slash => Token::Slash,
+        Percent => Token::Percent,
+        Caret => Token::Caret,
+        Eq => Token::Eq,
+        Less => Token::Less,
+        Greater => Token::Greater,
+        Colon => Token::Colon,
+        Comma => Token::Comma,
+        LParen => Token::LParen,
+        RParen => Token::RParen,
+        LBracket => Token::LBracket,
+        RBracket => Token::RBracket,
+        LBrace => Token::LBrace,
+        RBrace => Token::RBrace,
+        
+        "Ident" => Token::Ident(<String>),
+        "String" => Token::String(<String>),
+        "Number" => Token::Number(<f64>),
+    }
+}
+
+pub Program: Vec<Stmt> = {
+    <stmts:Statement*> => stmts,
+};
+
+Statement: Stmt = {
+    IfStmt,
+    WhileStmt,
+    UntilStmt,
+    MatchStmt,
+    BreakStmt,
+    NextStmt,
+    EchoStmt,
+    PrintStmt,
+    AssignStmt,
+    ReassignStmt,
+};
+
+BreakStmt: Stmt = {
+    Break => Stmt::Break,
+};
+
+NextStmt: Stmt = {
+    Next => Stmt::Next,
+};
+
+EchoStmt: Stmt = {
+    Echo <e:Expr> => Stmt::Echo(e),
+};
+
+PrintStmt: Stmt = {
+    Print <e:Expr> => Stmt::Print(e),
+};
+
+IfStmt: Stmt = {
+    If LParen <cond:Expr> RParen <then_body:IfBody> <else_ifs:ElseIfClause*> <else_clause:ElseClause?> End => {
+        Stmt::If {
+            condition: cond,
+            then_block: then_body,
+            else_ifs,
+            else_block: else_clause,
+        }
+    },
+};
+
+IfBody: Vec<Stmt> = {
+    <stmts:Statement+> => stmts,
+    LBrace <stmts:Statement*> RBrace => stmts,
+};
+
+ElseIfClause: (Expr, Vec<Stmt>) = {
+    Colon LParen <cond:Expr> RParen <body:IfBody> => (cond, body),
+};
+
+ElseClause: Vec<Stmt> = {
+    Colon <body:IfBody> => body,
+};
+
+WhileStmt: Stmt = {
+    While LParen <cond:Expr> RParen <body:IfBody> End => {
+        Stmt::While { condition: cond, body }
+    },
+};
+
+UntilStmt: Stmt = {
+    Until LParen <cond:Expr> RParen <body:IfBody> End => {
+        Stmt::Until { condition: cond, body }
+    },
+};
+
+MatchStmt: Stmt = {
+    Match LParen <expr:Expr> RParen <cases:MatchCase*> <default:MatchDefault?> End => {
+        Stmt::Match {
+            expr,
+            cases,
+            default,
+        }
+    },
+};
+
+MatchCase: (Vec<Expr>, Vec<Stmt>) = {
+    Colon <tests:MatchTest> <body:IfBody> => (tests, body),
+};
+
+MatchTest: Vec<Expr> = {
+    <first:MatchLiteral> <rest:(OrOr <MatchLiteral>)*> => {
+        let mut result = vec![first];
+        result.extend(rest);
+        result
+    },
+};
+
+MatchLiteral: Expr = {
+    <n:"Number"> => crate::ast::Expr::Number(n),
+    <s:"String"> => crate::ast::Expr::String(s),
+    True => crate::ast::Expr::Bool(true),
+    False => crate::ast::Expr::Bool(false),
+};
+
+MatchDefault: Vec<Stmt> = {
+    Colon <body:IfBody> => body,
+};
+
+AssignStmt: Stmt = {
+    <kind:AssignKind> <name:Ident> <ty:TypeAnnotation?> Eq <value:Expr> => {
+        Stmt::Assign {
+            kind,
+            declared_type: ty,
+            name,
+            value,
+        }
+    },
+};
+
+AssignKind: AssignKind = {
+    Var => AssignKind::Var,
+    Lit => AssignKind::Lit,
+};
+
+ReassignStmt: Stmt = {
+    <name:Ident> Eq <value:Expr> => {
+        Stmt::Reassign { name, value }
+    },
+};
+
+TypeAnnotation: Type = {
+    Colon <t:TypeName> => t,
+};
+
+TypeName: Type = {
+    <s:"Ident"> => {
+        match s.as_str() {
+            "number" => Type::Number,
+            "string" => Type::String,
+            "bool" => Type::Bool,
+            "array" => Type::Array(Box::new(Type::Number)),
+            _ => panic!("Unknown type: {}", s),
+        }
+    },
+};
+
+Expr: Expr = {
+    Expr AddOp Term => {
+        let (left, op, right) = (<>);
+        match op.as_str() {
+            "+" => Expr::Add(Box::new(left), Box::new(right)),
+            "-" => Expr::Subtract(Box::new(left), Box::new(right)),
+            _ => unreachable!(),
+        }
+    },
+    Term,
+};
+
+Term: Expr = {
+    Term MulOp Comparison => {
+        let (left, op, right) = (<>);
+        match op.as_str() {
+            "*" => Expr::Multiply(Box::new(left), Box::new(right)),
+            "/" => Expr::Divide(Box::new(left), Box::new(right)),
+            "%" => Expr::Modulo(Box::new(left), Box::new(right)),
+            _ => unreachable!(),
+        }
+    },
+    Comparison,
+};
+
+Comparison: Expr = {
+    <left:Unary> <rest:(CompOp Unary)*> => {
+        rest.into_iter().fold(left, |acc, (op, right)| {
+            match op.as_str() {
+                "==" => Expr::Equal(Box::new(acc), Box::new(right)),
+                "!=" => Expr::NotEqual(Box::new(acc), Box::new(right)),
+                "<" => Expr::LessThan(Box::new(acc), Box::new(right)),
+                "<=" => Expr::LessThanOrEqual(Box::new(acc), Box::new(right)),
+                ">" => Expr::GreaterThan(Box::new(acc), Box::new(right)),
+                ">=" => Expr::GreaterThanOrEqual(Box::new(acc), Box::new(right)),
+                _ => unreachable!(),
+            }
+        })
+    },
+};
+
+Unary: Expr = {
+    Power,
+    Plus <e:Power> => e,
+    Minus <e:Power> => Expr::Negative(Box::new(e)),
+};
+
+Power: Expr = {
+    <base:Factor> PowerOp <exp:Power> => Expr::Power(Box::new(base), Box::new(exp)),
+    Factor,
+};
+
+Factor: Expr = {
+    Number,
+    String,
+    Bool,
+    Array,
+    <i:Ident> => Expr::Var(i),
+    LParen <e:Expr> RParen => e,
+};
+
+Number: Expr = {
+    <n:"Number"> => crate::ast::Expr::Number(n),
+};
+
+String: Expr = {
+    <s:"String"> => crate::ast::Expr::String(s),
+};
+
+Bool: Expr = {
+    True => crate::ast::Expr::Bool(true),
+    False => crate::ast::Expr::Bool(false),
+};
+
+Array: Expr = {
+    LBracket RBracket => Expr::Array(vec![]),
+    LBracket <first:Term> <rest:(Comma <Term>)*> RBracket => {
+        let mut all = vec![first];
+        all.extend(rest);
+        Expr::Array(all)
+    },
+};
+
+AddOp: String = {
+    Plus => "+".to_string(),
+    Minus => "-".to_string(),
+};
+
+MulOp: String = {
+    Star => "*".to_string(),
+    Slash => "/".to_string(),
+    Percent => "%".to_string(),
+};
+
+CompOp: String = {
+    EqEq => "==".to_string(),
+    NotEq => "!=".to_string(),
+    LessEq => "<=".to_string(),
+    GreaterEq => ">=".to_string(),
+    Less => "<".to_string(),
+    Greater => ">".to_string(),
+};
+
+PowerOp: String = {
+    StarStar => "**".to_string(),
+    Caret => "^".to_string(),
+};
+
+Ident: String = {
+    <s:"Ident"> => s,
+};
