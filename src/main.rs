@@ -10,7 +10,7 @@ fn main() {
         .expect("Failed to read ngn file");
 
     let tokens = lexer::tokenize(&source);
-    
+
     match ngn::ProgramParser::new().parse(tokens.into_iter()) {
         Ok(ast) => run(&ast),
         Err(e) => eprintln!("Parse error: {}", e),
@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use ast::{Expr, Stmt};
 use lalrpop_util::lalrpop_mod;
 
-use crate::ast::{AssignKind, ControlFlow, Value};
+use crate::ast::{AssignKind, ControlFlow, MatchType, Value};
 
 fn format_value(v: &Value) -> String {
     match v {
@@ -233,8 +233,44 @@ fn execute_stmt(
             }
             ControlFlow::None
         }
-        // We'll add Match here next
-        _ => ControlFlow::None,
+        Stmt::Match { expr, cases, default, match_type } => {
+            let val = eval_expr(expr, env);
+            let mut matched = false;
+            
+            for (tests, stmts) in cases {
+                // For match any, continue if we already matched
+                if *match_type == MatchType::Any && matched {
+                    let flow = execute_block(stmts, env);
+                    if flow == ControlFlow::Break {
+                        return ControlFlow::None;
+                    }
+                    continue;
+                }
+                
+                for test in tests {
+                    let test_val = eval_expr(test, env);
+                    if values_equal(&val, &test_val) {
+                        matched = true;
+                        let flow = execute_block(stmts, env);
+                        
+                        match (match_type, flow) {
+                            (MatchType::One, ControlFlow::Next) => continue,
+                            (MatchType::One, _) => return ControlFlow::None,
+                            
+                            (MatchType::Any, ControlFlow::Break) => return ControlFlow::None,
+                            (MatchType::Any, _) => continue,
+                        }
+                    }
+                }
+            }
+            
+            // No match found, execute default if it exists
+            if let Some(default_stmts) = default {
+                execute_block(default_stmts, env)
+            } else {
+                ControlFlow::None
+            }
+        }
     }
 }
 
@@ -246,6 +282,9 @@ fn execute_block(
         let flow = execute_stmt(stmt, env);
         if flow == ControlFlow::Break {
             return ControlFlow::Break;
+        }
+        if flow == ControlFlow::Next {
+            return ControlFlow::Next;
         }
     }
     ControlFlow::None

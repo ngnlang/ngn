@@ -14,6 +14,8 @@ extern {
         While => Token::While,
         Until => Token::Until,
         Match => Token::Match,
+        One => Token::One,
+        Any => Token::Any,
         Echo => Token::Echo,
         Print => Token::Print,
         Break => Token::Break,
@@ -123,17 +125,34 @@ UntilStmt: Stmt = {
 };
 
 MatchStmt: Stmt = {
-    Match LParen <expr:Expr> RParen <cases:MatchCase*> <default:MatchDefault?> End => {
+    MatchOne,
+    MatchAny,
+};
+
+MatchOne: Stmt = {
+    Match One LParen <expr:Expr> RParen <cases:MatchCase*> <default:MatchDefault?> End => {
         Stmt::Match {
             expr,
             cases,
             default,
+            match_type: crate::ast::MatchType::One,
+        }
+    },
+};
+
+MatchAny: Stmt = {
+    Match Any LParen <expr:Expr> RParen <cases:MatchCase*> <default:MatchDefault?> End => {
+        Stmt::Match {
+            expr,
+            cases,
+            default,
+            match_type: crate::ast::MatchType::Any,
         }
     },
 };
 
 MatchCase: (Vec<Expr>, Vec<Stmt>) = {
-    Colon <tests:MatchTest> <body:IfBody> => (tests, body),
+    Colon <tests:MatchTest> <body:Statement+> => (tests, body),
 };
 
 MatchTest: Vec<Expr> = {

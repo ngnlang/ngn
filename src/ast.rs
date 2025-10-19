@@ -46,8 +46,17 @@ pub enum Stmt {
     Print(Expr),
     Assign { kind: AssignKind, declared_type: Option<Type>, name: String, value: Expr },
     Reassign { name: String, value: Expr },
-    If { condition: Expr, then_block: Vec<Stmt>, else_ifs: Vec<(Expr, Vec<Stmt>)>, else_block: Option<Vec<Stmt>> },
-    Match { expr: Expr, cases: Vec<(Vec<Expr>, Vec<Stmt>)>, default: Option<Vec<Stmt>> },
+    If { 
+        condition: Expr, 
+        then_block: Vec<Stmt>, 
+        else_ifs: Vec<(Expr, Vec<Stmt>)>, 
+        else_block: Option<Vec<Stmt>> },
+    Match { 
+        expr: Expr, 
+        cases: Vec<(Vec<Expr>, Vec<Stmt>)>, 
+        default: Option<Vec<Stmt>>,
+        match_type: MatchType,
+    },
     While { condition: Expr, body: Vec<Stmt> },
     Until { condition: Expr, body: Vec<Stmt> },
     Break,
@@ -65,4 +74,10 @@ pub enum ControlFlow {
     None,
     Break,
     Next,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MatchType {
+    One,
+    Any,
 }
