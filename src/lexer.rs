@@ -6,9 +6,9 @@ impl std::fmt::Display for Token {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
-    Any, Var, Lit, If, While, Until, Match, Echo, Print, Break, Next, True, False, End,
+    Any, Var, Lit, If, Not, While, Until, Match, Echo, Print, Break, Next, True, False, End,
     StarStar, EqEq, NotEq, LessEq, GreaterEq, OrOr,
-    Plus, Minus, One, Star, Slash, Percent, Caret, Eq, Less, Greater, Colon, Comma,
+    Plus, Minus, One, Once, Star, Slash, Percent, Caret, Eq, Less, Greater, Colon, Comma,
     LParen, RParen, LBracket, RBracket, LBrace, RBrace,
     Ident(String), String(String), Number(f64),
 }
@@ -120,6 +120,7 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
                     "var" => Token::Var,
                     "lit" => Token::Lit,
                     "if" => Token::If,
+                    "not" => Token::Not,
                     "while" => Token::While,
                     "until" => Token::Until,
                     "match" => Token::Match,
@@ -131,6 +132,7 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
                     "false" => Token::False,
                     "end" => Token::End,
                     "one" => Token::One,
+                    "once" => Token::Once,
                     "any" => Token::Any,
                     _ => Token::Ident(ident),
                 };

@@ -59,6 +59,10 @@ fn eval_expr(e: &Expr, env: &HashMap<String, (AssignKind, Value)>) -> Value {
             let values: Vec<Value> = exprs.iter().map(|e| eval_expr(e, env)).collect();
             Value::Array(values)
         },
+        Expr::Not(e) => {
+            let val = eval_expr(e, env);
+            Value::Bool(!is_truthy(&val))
+        },
         Expr::Add(a, b) => {
             match (eval_expr(a, env), eval_expr(b, env)) {
                 (Value::Number(x), Value::Number(y)) => Value::Number(x + y),
@@ -217,7 +221,21 @@ fn execute_stmt(
             }
             ControlFlow::None
         }
+        Stmt::OnceWhile { condition, body } => {
+            loop {
+                match execute_block(body, env) {
+                    ControlFlow::Break => break,
+                    ControlFlow::Next => continue,
+                    ControlFlow::None => {}
+                }
 
+                let cond_value = eval_expr(condition, env);
+                if !is_truthy(&cond_value) {
+                    break;
+                }
+            }
+            ControlFlow::None
+        }
         Stmt::Until { condition, body } => {
             loop {
                 let cond_value = eval_expr(condition, env);
@@ -229,6 +247,21 @@ fn execute_stmt(
                     ControlFlow::Break => break,
                     ControlFlow::Next => continue,
                     ControlFlow::None => {}
+                }
+            }
+            ControlFlow::None
+        }
+        Stmt::OnceUntil { condition, body } => {
+            loop {
+                match execute_block(body, env) {
+                    ControlFlow::Break => break,
+                    ControlFlow::Next => continue,
+                    ControlFlow::None => {}
+                }
+
+                let cond_value = eval_expr(condition, env);
+                if is_truthy(&cond_value) {
+                    break;
                 }
             }
             ControlFlow::None

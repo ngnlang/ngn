@@ -23,6 +23,7 @@ pub enum Expr {
     String(String),
     Bool(bool),
     Array(Vec<Expr>),
+    Not(Box<Expr>),
     Add(Box<Expr>, Box<Expr>),
     Subtract(Box<Expr>, Box<Expr>),
     Multiply(Box<Expr>, Box<Expr>),
@@ -58,7 +59,9 @@ pub enum Stmt {
         match_type: MatchType,
     },
     While { condition: Expr, body: Vec<Stmt> },
+    OnceWhile { condition: Expr, body: Vec<Stmt> },
     Until { condition: Expr, body: Vec<Stmt> },
+    OnceUntil { condition: Expr, body: Vec<Stmt> },
     Break,
     Next,
 }

@@ -11,11 +11,13 @@ extern {
         Var => Token::Var,
         Lit => Token::Lit,
         If => Token::If,
+        Not => Token::Not,
         While => Token::While,
         Until => Token::Until,
         Match => Token::Match,
         One => Token::One,
         Any => Token::Any,
+        Once => Token::Once,
         Echo => Token::Echo,
         Print => Token::Print,
         Break => Token::Break,
@@ -62,7 +64,9 @@ pub Program: Vec<Stmt> = {
 Statement: Stmt = {
     IfStmt,
     WhileStmt,
+    OnceWhileStmt,
     UntilStmt,
+    OnceUntilStmt,
     MatchStmt,
     BreakStmt,
     NextStmt,
@@ -89,9 +93,14 @@ PrintStmt: Stmt = {
 };
 
 IfStmt: Stmt = {
-    If LParen <cond:Expr> RParen <then_body:IfBody> <else_ifs:ElseIfClause*> <else_clause:ElseClause?> End => {
+    If <negated:Not?> LParen <cond:Expr> RParen <then_body:IfBody> <else_ifs:ElseIfClause*> <else_clause:ElseClause?> End => {
+        let condition = if negated.is_some() {
+            crate::ast::Expr::Not(Box::new(cond))
+        } else {
+            cond
+        };
         Stmt::If {
-            condition: cond,
+            condition,
             then_block: then_body,
             else_ifs,
             else_block: else_clause,
@@ -105,7 +114,14 @@ IfBody: Vec<Stmt> = {
 };
 
 ElseIfClause: (Expr, Vec<Stmt>) = {
-    Colon LParen <cond:Expr> RParen <body:IfBody> => (cond, body),
+    Colon <negated:Not?> LParen <cond:Expr> RParen <body:IfBody> => {
+        let condition = if negated.is_some() {
+            crate::ast::Expr::Not(Box::new(cond))
+        } else {
+            cond
+        };
+        (condition, body)
+    },
 };
 
 ElseClause: Vec<Stmt> = {
@@ -118,9 +134,21 @@ WhileStmt: Stmt = {
     },
 };
 
+OnceWhileStmt: Stmt = {
+    Once While LParen <cond:Expr> RParen <body:IfBody> End => {
+        Stmt::OnceWhile { condition: cond, body }
+    },
+};
+
 UntilStmt: Stmt = {
     Until LParen <cond:Expr> RParen <body:IfBody> End => {
         Stmt::Until { condition: cond, body }
+    },
+};
+
+OnceUntilStmt: Stmt = {
+    Once Until LParen <cond:Expr> RParen <body:IfBody> End => {
+        Stmt::OnceUntil { condition: cond, body }
     },
 };
 
