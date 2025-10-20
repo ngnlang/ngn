@@ -37,6 +37,8 @@ pub enum Expr {
     LessThanOrEqual(Box<Expr>, Box<Expr>),
     GreaterThan(Box<Expr>, Box<Expr>),
     GreaterThanOrEqual(Box<Expr>, Box<Expr>),
+    Assign { name: String, value: Box<Expr> },
+    CompoundAssign { name: String, op: String, value: Box<Expr> },
     Var(String),
     Lit(String),
 }

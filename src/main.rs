@@ -50,13 +50,16 @@ fn values_equal(a: &Value, b: &Value) -> bool {
     }
 }
 
-fn eval_expr(e: &Expr, env: &HashMap<String, (AssignKind, Value)>) -> Value {
+fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value)>) -> Value {
     match e {
         Expr::Number(n) => Value::Number(*n),
         Expr::String(s) => Value::String(s.clone()),
         Expr::Bool(b) => Value::Bool(*b),
         Expr::Array(exprs) => {
-            let values: Vec<Value> = exprs.iter().map(|e| eval_expr(e, env)).collect();
+            let mut values: Vec<Value> = Vec::new();
+            for e in exprs {
+                values.push(eval_expr(e, env));
+            }
             Value::Array(values)
         },
         Expr::Not(e) => {
@@ -140,6 +143,16 @@ fn eval_expr(e: &Expr, env: &HashMap<String, (AssignKind, Value)>) -> Value {
                 _ => panic!("Type error: cannot compare non-numbers"),
             }
         }
+        Expr::Assign { name, value } => {
+            let v = eval_expr(value, env);
+            env.insert(name.clone(), (AssignKind::Var, v.clone()));
+            v
+        }
+        Expr::CompoundAssign { name, op: _, value } => {
+            let v = eval_expr(value, env);
+            env.insert(name.clone(), (AssignKind::Var, v.clone()));
+            v
+        }
         Expr::Var(name) => env.get(name).map(|(_, v)| v.clone()).unwrap_or(Value::Number(0.0)),
         Expr::Lit(name) => env.get(name).map(|(_, v)| v.clone()).unwrap_or(Value::Number(0.0)),
     }
@@ -169,7 +182,7 @@ fn execute_stmt(
             if !env.contains_key(name) {
                 panic!("Variable '{}' not declared", name);
             }
-            let (kind, _) = env.get(name).unwrap();
+            let kind = env.get(name).map(|(k, _)| k.clone()).unwrap();
             match kind {
                 AssignKind::Var => {
                     let v = eval_expr(value, env);

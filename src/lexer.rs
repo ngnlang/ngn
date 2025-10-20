@@ -9,6 +9,7 @@ pub enum Token {
     Any, Var, Lit, If, Not, While, Until, Match, Echo, Print, Break, Next, True, False, End,
     StarStar, EqEq, NotEq, LessEq, GreaterEq, OrOr,
     Plus, Minus, One, Once, Star, Slash, Percent, Caret, Eq, Less, Greater, Colon, Comma,
+    PlusEq, MinusEq, StarEq, SlashEq, PercentEq, StarStarEq, CaretEq,
     LParen, RParen, LBracket, RBracket, LBrace, RBrace,
     Ident(String), String(String), Number(f64),
 }
@@ -20,11 +21,30 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
     while let Some((pos, ch)) = chars.next() {
         match ch {
             ' ' | '\t' | '\n' | '\r' => continue,
+
+            '/' if chars.peek().map(|(_, c)| *c) == Some('/') => {
+                // Skip comment until end of line
+                chars.next(); // consume second /
+                while let Some((_, c)) = chars.next() {
+                    if c == '\n' || c == '\r' {
+                        break;
+                    }
+                }
+                continue;
+            },
             
             '*' => {
                 if chars.peek().map(|(_, c)| *c) == Some('*') {
-                    chars.next();
-                    tokens.push((pos, Token::StarStar, pos + 2));
+                    chars.next(); // consume second *
+                    if chars.peek().map(|(_, c)| *c) == Some('=') {
+                        chars.next(); // consume =
+                        tokens.push((pos, Token::StarStarEq, pos + 3));
+                    } else {
+                        tokens.push((pos, Token::StarStar, pos + 2));
+                    }
+                } else if chars.peek().map(|(_, c)| *c) == Some('=') {
+                    chars.next(); // consume =
+                    tokens.push((pos, Token::StarEq, pos + 2));
                 } else {
                     tokens.push((pos, Token::Star, pos + 1));
                 }
@@ -75,11 +95,46 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
                 }
             }
             
-            '+' => tokens.push((pos, Token::Plus, pos + 1)),
-            '-' => tokens.push((pos, Token::Minus, pos + 1)),
-            '/' => tokens.push((pos, Token::Slash, pos + 1)),
-            '%' => tokens.push((pos, Token::Percent, pos + 1)),
-            '^' => tokens.push((pos, Token::Caret, pos + 1)),
+            '+' => {
+                if chars.peek().map(|(_, c)| *c) == Some('=') {
+                    chars.next();
+                    tokens.push((pos, Token::PlusEq, pos + 2));
+                } else {
+                    tokens.push((pos, Token::Plus, pos + 1));
+                }
+            },
+            '-' => {
+                if chars.peek().map(|(_, c)| *c) == Some('=') {
+                    chars.next();
+                    tokens.push((pos, Token::MinusEq, pos + 2));
+                } else {
+                    tokens.push((pos, Token::Minus, pos + 1));
+                }
+            },
+            '/' => {
+                if chars.peek().map(|(_, c)| *c) == Some('=') {
+                    chars.next();
+                    tokens.push((pos, Token::SlashEq, pos + 2));
+                } else {
+                    tokens.push((pos, Token::Slash, pos + 1));
+                }
+            },
+            '%' => {
+                if chars.peek().map(|(_, c)| *c) == Some('=') {
+                    chars.next();
+                    tokens.push((pos, Token::PercentEq, pos + 2));
+                } else {
+                    tokens.push((pos, Token::Percent, pos + 1));
+                }
+            },
+            '^' => {
+                if chars.peek().map(|(_, c)| *c) == Some('=') {
+                    chars.next();
+                    tokens.push((pos, Token::CaretEq, pos + 2));
+                } else {
+                    tokens.push((pos, Token::Caret, pos + 1));
+                }
+            },
             ':' => tokens.push((pos, Token::Colon, pos + 1)),
             ',' => tokens.push((pos, Token::Comma, pos + 1)),
             '(' => tokens.push((pos, Token::LParen, pos + 1)),

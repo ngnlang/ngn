@@ -32,6 +32,14 @@ extern {
         LessEq => Token::LessEq,
         GreaterEq => Token::GreaterEq,
         OrOr => Token::OrOr,
+
+        PlusEq => Token::PlusEq,
+        MinusEq => Token::MinusEq,
+        StarEq => Token::StarEq,
+        SlashEq => Token::SlashEq,
+        PercentEq => Token::PercentEq,
+        StarStarEq => Token::StarStarEq,
+        CaretEq => Token::CaretEq,
         
         Plus => Token::Plus,
         Minus => Token::Minus,
@@ -224,49 +232,32 @@ ReassignStmt: Stmt = {
     },
 };
 
-TypeAnnotation: Type = {
-    Colon <t:TypeName> => t,
-};
-
-TypeName: Type = {
-    <s:"Ident"> => {
-        match s.as_str() {
-            "number" => Type::Number,
-            "string" => Type::String,
-            "bool" => Type::Bool,
-            "array" => Type::Array(Box::new(Type::Number)),
-            _ => panic!("Unknown type: {}", s),
-        }
-    },
-};
-
 Expr: Expr = {
-    Expr AddOp Term => {
-        let (left, op, right) = (<>);
-        match op.as_str() {
-            "+" => Expr::Add(Box::new(left), Box::new(right)),
-            "-" => Expr::Subtract(Box::new(left), Box::new(right)),
+    <name:Ident> <op:CompoundOp> <value:Expr> => {
+        let expanded = match op.as_str() {
+            "+=" => Expr::Add(Box::new(Expr::Var(name.clone())), Box::new(value)),
+            "-=" => Expr::Subtract(Box::new(Expr::Var(name.clone())), Box::new(value)),
+            "*=" => Expr::Multiply(Box::new(Expr::Var(name.clone())), Box::new(value)),
+            "/=" => Expr::Divide(Box::new(Expr::Var(name.clone())), Box::new(value)),
+            "%=" => Expr::Modulo(Box::new(Expr::Var(name.clone())), Box::new(value)),
+            "**=" => Expr::Power(Box::new(Expr::Var(name.clone())), Box::new(value)),
+            "^=" => Expr::Power(Box::new(Expr::Var(name.clone())), Box::new(value)),
             _ => unreachable!(),
-        }
+        };
+        Expr::CompoundAssign { name, op, value: Box::new(expanded) }
     },
-    Term,
-};
-
-Term: Expr = {
-    Term MulOp Comparison => {
-        let (left, op, right) = (<>);
-        match op.as_str() {
-            "*" => Expr::Multiply(Box::new(left), Box::new(right)),
-            "/" => Expr::Divide(Box::new(left), Box::new(right)),
-            "%" => Expr::Modulo(Box::new(left), Box::new(right)),
-            _ => unreachable!(),
-        }
+    <name:Ident> Eq <value:Expr> => {
+        Expr::Assign { name, value: Box::new(value) }
     },
     Comparison,
 };
 
+AndExpr: Expr = {
+    Comparison,
+};
+
 Comparison: Expr = {
-    <left:Unary> <rest:(CompOp Unary)*> => {
+    <left:Addition> <rest:(CompOp Addition)*> => {
         rest.into_iter().fold(left, |acc, (op, right)| {
             match op.as_str() {
                 "==" => Expr::Equal(Box::new(acc), Box::new(right)),
@@ -279,6 +270,29 @@ Comparison: Expr = {
             }
         })
     },
+};
+
+Addition: Expr = {
+    <left:Addition> <op:AddOp> <right:Multiplication> => {
+        match op.as_str() {
+            "+" => Expr::Add(Box::new(left), Box::new(right)),
+            "-" => Expr::Subtract(Box::new(left), Box::new(right)),
+            _ => unreachable!(),
+        }
+    },
+    Multiplication,
+};
+
+Multiplication: Expr = {
+    <left:Multiplication> <op:MulOp> <right:Unary> => {
+        match op.as_str() {
+            "*" => Expr::Multiply(Box::new(left), Box::new(right)),
+            "/" => Expr::Divide(Box::new(left), Box::new(right)),
+            "%" => Expr::Modulo(Box::new(left), Box::new(right)),
+            _ => unreachable!(),
+        }
+    },
+    Unary,
 };
 
 Unary: Expr = {
@@ -316,11 +330,21 @@ Bool: Expr = {
 
 Array: Expr = {
     LBracket RBracket => Expr::Array(vec![]),
-    LBracket <first:Term> <rest:(Comma <Term>)*> RBracket => {
+    LBracket <first:Multiplication> <rest:(Comma <Multiplication>)*> RBracket => {
         let mut all = vec![first];
         all.extend(rest);
         Expr::Array(all)
     },
+};
+
+CompoundOp: String = {
+    PlusEq => "+=".to_string(),
+    MinusEq => "-=".to_string(),
+    StarEq => "*=".to_string(),
+    SlashEq => "/=".to_string(),
+    PercentEq => "%=".to_string(),
+    StarStarEq => "**=".to_string(),
+    CaretEq => "^=".to_string(),
 };
 
 AddOp: String = {
@@ -346,6 +370,22 @@ CompOp: String = {
 PowerOp: String = {
     StarStar => "**".to_string(),
     Caret => "^".to_string(),
+};
+
+TypeAnnotation: Type = {
+    Colon <t:TypeName> => t,
+};
+
+TypeName: Type = {
+    <s:"Ident"> => {
+        match s.as_str() {
+            "number" => Type::Number,
+            "string" => Type::String,
+            "bool" => Type::Bool,
+            "array" => Type::Array(Box::new(Type::Number)),
+            _ => panic!("Unknown type: {}", s),
+        }
+    },
 };
 
 Ident: String = {
