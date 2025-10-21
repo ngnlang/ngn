@@ -25,6 +25,7 @@ extern {
         True => Token::True,
         False => Token::False,
         End => Token::End,
+        Newline => Token::Newline,
         
         StarStar => Token::StarStar,
         EqEq => Token::EqEq,
@@ -66,7 +67,11 @@ extern {
 }
 
 pub Program: Vec<Stmt> = {
-    <stmts:Statement*> => stmts,
+    <stmts:StatementLine*> => stmts,
+};
+
+StatementLine: Stmt = {
+    <stmt:Statement> <_nl:Newline*> => stmt,
 };
 
 Statement: Stmt = {
@@ -76,12 +81,7 @@ Statement: Stmt = {
     UntilStmt,
     OnceUntilStmt,
     MatchStmt,
-    BreakStmt,
-    NextStmt,
-    EchoStmt,
-    PrintStmt,
-    AssignStmt,
-    ReassignStmt,
+    SimpleStatement,
 };
 
 BreakStmt: Stmt = {
@@ -101,7 +101,20 @@ PrintStmt: Stmt = {
 };
 
 IfStmt: Stmt = {
-    If <negated:Not?> LParen <cond:Expr> RParen <then_body:IfBody> <else_ifs:ElseIfClause*> <else_clause:ElseClause?> End => {
+    If <negated:Not?> LParen <cond:Expr> RParen <then_body:IfBodySingleLine> <else_ifs:ElseIfClauseSingleLine*> <else_clause:ElseClauseSingleLine?> <_nl:Newline> => {
+        let condition = if negated.is_some() {
+            crate::ast::Expr::Not(Box::new(cond))
+        } else {
+            cond
+        };
+        Stmt::If {
+            condition,
+            then_block: then_body,
+            else_ifs,
+            else_block: else_clause,
+        }
+    },
+    If <negated:Not?> LParen <cond:Expr> RParen <_nl:Newline> <then_body:IfBodyMultiLine> <else_ifs:ElseIfClauseMultiLine*> <else_clause:ElseClauseMultiLine?> End => {
         let condition = if negated.is_some() {
             crate::ast::Expr::Not(Box::new(cond))
         } else {
@@ -116,13 +129,25 @@ IfStmt: Stmt = {
     },
 };
 
-IfBody: Vec<Stmt> = {
-    <stmts:Statement+> => stmts,
-    LBrace <stmts:Statement*> RBrace => stmts,
+IfBodySingleLine: Vec<Stmt> = {
+    <stmt:SimpleStatement> => vec![stmt],
 };
 
-ElseIfClause: (Expr, Vec<Stmt>) = {
-    Colon <negated:Not?> LParen <cond:Expr> RParen <body:IfBody> => {
+IfBodyMultiLine: Vec<Stmt> = {
+    <stmts:StatementLine+> => stmts,
+};
+
+SimpleStatement: Stmt = {
+    BreakStmt,
+    NextStmt,
+    EchoStmt,
+    PrintStmt,
+    AssignStmt,
+    ReassignStmt,
+};
+
+ElseIfClauseSingleLine: (Expr, Vec<Stmt>) = {
+    Colon <negated:Not?> LParen <cond:Expr> RParen <body:IfBodySingleLine> => {
         let condition = if negated.is_some() {
             crate::ast::Expr::Not(Box::new(cond))
         } else {
@@ -132,32 +157,79 @@ ElseIfClause: (Expr, Vec<Stmt>) = {
     },
 };
 
-ElseClause: Vec<Stmt> = {
-    Colon <body:IfBody> => body,
+ElseIfClauseMultiLine: (Expr, Vec<Stmt>) = {
+    Colon <_nl:Newline*> <negated:Not?> LParen <cond:Expr> RParen Newline? <body:IfBodyMultiLine> => {
+        let condition = if negated.is_some() {
+            crate::ast::Expr::Not(Box::new(cond))
+        } else {
+            cond
+        };
+        (condition, body)
+    },
 };
 
+ElseClauseSingleLine: Vec<Stmt> = {
+    Colon <body:IfBodySingleLine> => body,
+};
+
+ElseClauseMultiLine: Vec<Stmt> = {
+    Colon <_nl:Newline*> <body:IfBodyMultiLine> => body,
+};
+
+IfBody: Vec<Stmt> = {
+    <stmts:Statement+> => stmts,
+}
+
 WhileStmt: Stmt = {
-    While LParen <cond:Expr> RParen <body:IfBody> End => {
+    While LParen <cond:Expr> RParen <body:WhileBodySingleLine> <_nl:Newline> => {
+        Stmt::While { condition: cond, body }
+    },
+    While LParen <cond:Expr> RParen <_nl:Newline> <body:WhileBodyMultiLine> End => {
         Stmt::While { condition: cond, body }
     },
 };
 
 OnceWhileStmt: Stmt = {
-    Once While LParen <cond:Expr> RParen <body:IfBody> End => {
+    Once While LParen <cond:Expr> RParen <body:WhileBodySingleLine> <_nl:Newline> => {
+        Stmt::OnceWhile { condition: cond, body }
+    },
+    Once While LParen <cond:Expr> RParen <_nl:Newline> <body:WhileBodyMultiLine> End => {
         Stmt::OnceWhile { condition: cond, body }
     },
 };
 
+WhileBodySingleLine: Vec<Stmt> = {
+    <stmt:SimpleStatement> => vec![stmt],
+};
+
+WhileBodyMultiLine: Vec<Stmt> = {
+    <stmts:StatementLine+> => stmts,
+};
+
 UntilStmt: Stmt = {
-    Until LParen <cond:Expr> RParen <body:IfBody> End => {
+    Until LParen <cond:Expr> RParen <body:UntilBodySingleLine> <_nl:Newline> => {
+        Stmt::Until { condition: cond, body }
+    },
+    Until LParen <cond:Expr> RParen <_nl:Newline> <body:UntilBodyMultiLine> End => {
         Stmt::Until { condition: cond, body }
     },
 };
 
 OnceUntilStmt: Stmt = {
-    Once Until LParen <cond:Expr> RParen <body:IfBody> End => {
+    Once Until LParen <cond:Expr> RParen <body:UntilBodySingleLine> <_nl:Newline> => {
         Stmt::OnceUntil { condition: cond, body }
     },
+    Once Until LParen <cond:Expr> RParen <_nl:Newline> <body:UntilBodyMultiLine> End => {
+        Stmt::OnceUntil { condition: cond, body }
+    },
+};
+
+UntilBodySingleLine: Vec<Stmt> = {
+    <stmt:SimpleStatement> => vec![stmt],
+};
+
+UntilBodyMultiLine: Vec<Stmt> = {
+    <stmts:StatementLine+> => stmts,
 };
 
 MatchStmt: Stmt = {
@@ -166,7 +238,7 @@ MatchStmt: Stmt = {
 };
 
 MatchOne: Stmt = {
-    Match One LParen <expr:Expr> RParen <cases:MatchCase*> <default:MatchDefault?> End => {
+    Match One LParen <expr:Expr> RParen Newline <cases:MatchCase*> <default:MatchDefault?> End => {
         Stmt::Match {
             expr,
             cases,
@@ -177,7 +249,7 @@ MatchOne: Stmt = {
 };
 
 MatchAny: Stmt = {
-    Match Any LParen <expr:Expr> RParen <cases:MatchCase*> <default:MatchDefault?> End => {
+    Match Any LParen <expr:Expr> RParen Newline <cases:MatchCase*> <default:MatchDefault?> End => {
         Stmt::Match {
             expr,
             cases,
@@ -188,7 +260,7 @@ MatchAny: Stmt = {
 };
 
 MatchCase: (Vec<Expr>, Vec<Stmt>) = {
-    Colon <tests:MatchTest> <body:Statement+> => (tests, body),
+    Colon <tests:MatchTest> Newline <body:StatementLine+> => (tests, body),
 };
 
 MatchTest: Vec<Expr> = {
@@ -207,7 +279,7 @@ MatchLiteral: Expr = {
 };
 
 MatchDefault: Vec<Stmt> = {
-    Colon <body:IfBody> => body,
+    Colon Newline? <body:IfBody> Newline => body,
 };
 
 AssignStmt: Stmt = {

@@ -11,6 +11,7 @@ pub enum Token {
     Plus, Minus, One, Once, Star, Slash, Percent, Caret, Eq, Less, Greater, Colon, Comma,
     PlusEq, MinusEq, StarEq, SlashEq, PercentEq, StarStarEq, CaretEq,
     LParen, RParen, LBracket, RBracket, LBrace, RBrace,
+    Newline,
     Ident(String), String(String), Number(f64),
 }
 
@@ -20,7 +21,12 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
     
     while let Some((pos, ch)) = chars.next() {
         match ch {
-            ' ' | '\t' | '\n' | '\r' => continue,
+            ' ' | '\t' => continue,
+
+            '\n' | '\r' => {
+                tokens.push((pos, Token::Newline, pos + 1));
+                continue;
+            }
 
             '/' if chars.peek().map(|(_, c)| *c) == Some('/') => {
                 // Skip comment until end of line
