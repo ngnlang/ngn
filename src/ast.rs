@@ -40,7 +40,7 @@ pub enum Expr {
     Assign { name: String, value: Box<Expr> },
     CompoundAssign { name: String, op: String, value: Box<Expr> },
     Var(String),
-    Lit(String),
+    Const(String),
 }
 
 #[derive(Debug, Clone)]
@@ -71,7 +71,7 @@ pub enum Stmt {
 #[derive(Debug, Clone)]
 pub enum AssignKind {
     Var,
-    Lit,
+    Const,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

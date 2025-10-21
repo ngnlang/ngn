@@ -154,7 +154,7 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value)>) -> Value 
             v
         }
         Expr::Var(name) => env.get(name).map(|(_, v)| v.clone()).unwrap_or(Value::Number(0.0)),
-        Expr::Lit(name) => env.get(name).map(|(_, v)| v.clone()).unwrap_or(Value::Number(0.0)),
+        Expr::Const(name) => env.get(name).map(|(_, v)| v.clone()).unwrap_or(Value::Number(0.0)),
     }
 }
 
@@ -189,9 +189,9 @@ fn execute_stmt(
                     env.insert(name.clone(), (kind.clone(), v));
                     ControlFlow::None
                 }
-                AssignKind::Lit => {
+                AssignKind::Const => {
                     panic!("Cannot reassign {}", match kind {
-                        AssignKind::Lit => "lit",
+                        AssignKind::Const => "const",
                         _ => "variable",
                     });
                 }

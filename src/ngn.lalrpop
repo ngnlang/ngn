@@ -9,7 +9,7 @@ extern {
 
     enum Token {
         Var => Token::Var,
-        Lit => Token::Lit,
+        Const => Token::Const,
         If => Token::If,
         Not => Token::Not,
         While => Token::While,
@@ -295,7 +295,7 @@ AssignStmt: Stmt = {
 
 AssignKind: AssignKind = {
     Var => AssignKind::Var,
-    Lit => AssignKind::Lit,
+    Const => AssignKind::Const,
 };
 
 ReassignStmt: Stmt = {
