@@ -2,6 +2,7 @@ mod ast;
 mod lexer;
 
 use std::fs;
+use crate::ast::FnDef;
 
 lalrpop_mod!(pub ngn);
 
@@ -50,7 +51,7 @@ fn values_equal(a: &Value, b: &Value) -> bool {
     }
 }
 
-fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value)>) -> Value {
+fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value)>, fns: &mut HashMap<String, FnDef>) -> Value {
     match e {
         Expr::Number(n) => Value::Number(*n),
         Expr::String(s) => Value::String(s.clone()),
@@ -58,123 +59,149 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value)>) -> Value 
         Expr::Array(exprs) => {
             let mut values: Vec<Value> = Vec::new();
             for e in exprs {
-                values.push(eval_expr(e, env));
+                values.push(eval_expr(e, env, fns));
             }
             Value::Array(values)
         },
         Expr::Not(e) => {
-            let val = eval_expr(e, env);
+            let val = eval_expr(e, env, fns);
             Value::Bool(!is_truthy(&val))
         },
         Expr::Add(a, b) => {
-            match (eval_expr(a, env), eval_expr(b, env)) {
+            match (eval_expr(a, env, fns), eval_expr(b, env, fns)) {
                 (Value::Number(x), Value::Number(y)) => Value::Number(x + y),
                 (Value::String(x), Value::String(y)) => Value::String(format!("{}{}", x, y)),
                 _ => panic!("Type error: cannot add these types"),
             }
         }
         Expr::Subtract(a, b) => {
-            match (eval_expr(a, env), eval_expr(b, env)) {
+            match (eval_expr(a, env, fns), eval_expr(b, env, fns)) {
                 (Value::Number(x), Value::Number(y)) => Value::Number(x - y),
                 _ => panic!("Type error: cannot subtract non-numbers"),
             }
         }
         Expr::Multiply(a, b) => {
-            match (eval_expr(a, env), eval_expr(b, env)) {
+            match (eval_expr(a, env, fns), eval_expr(b, env, fns)) {
                 (Value::Number(x), Value::Number(y)) => Value::Number(x * y),
                 _ => panic!("Type error: cannot multiply non-numbers"),
             }
         }
         Expr::Divide(a, b) => {
-            match (eval_expr(a, env), eval_expr(b, env)) {
+            match (eval_expr(a, env, fns), eval_expr(b, env, fns)) {
                 (Value::Number(x), Value::Number(y)) => Value::Number(x / y),
                 _ => panic!("Type error: cannot divide non-numbers"),
             }
         }
         Expr::Negative(e) => {
-            match eval_expr(e, env) {
+            match eval_expr(e, env, fns) {
                 Value::Number(x) => Value::Number(-x),
                 _ => panic!("Type error: cannot negate non-number"),
             }
         }
         Expr::Power(a, b) => {
-            match (eval_expr(a, env), eval_expr(b, env)) {
+            match (eval_expr(a, env, fns), eval_expr(b, env, fns)) {
                 (Value::Number(x), Value::Number(y)) => Value::Number(x.powf(y)),
                 _ => panic!("Type error: cannot exponentiate non-numbers"),
             }
         }
         Expr::Modulo(a, b) => {
-            match (eval_expr(a, env), eval_expr(b, env)) {
+            match (eval_expr(a, env, fns), eval_expr(b, env, fns)) {
                 (Value::Number(x), Value::Number(y)) => Value::Number(x % y),
                 _ => panic!("Type error: cannot modulo non-numbers"),
             }
         }
         Expr::Equal(a, b) => {
-            let av = eval_expr(a, env);
-            let bv = eval_expr(b, env);
+            let av = eval_expr(a, env, fns);
+            let bv = eval_expr(b, env, fns);
             Value::Bool(values_equal(&av, &bv))
         }
         Expr::NotEqual(a, b) => {
-            let av = eval_expr(a, env);
-            let bv = eval_expr(b, env);
+            let av = eval_expr(a, env, fns);
+            let bv = eval_expr(b, env, fns);
             Value::Bool(!values_equal(&av, &bv))
         }
         Expr::LessThan(a, b) => {
-            match (eval_expr(a, env), eval_expr(b, env)) {
+            match (eval_expr(a, env, fns), eval_expr(b, env, fns)) {
                 (Value::Number(x), Value::Number(y)) => Value::Bool(x < y),
                 _ => panic!("Type error: cannot compare non-numbers"),
             }
         }
         Expr::LessThanOrEqual(a, b) => {
-            match (eval_expr(a, env), eval_expr(b, env)) {
+            match (eval_expr(a, env, fns), eval_expr(b, env, fns)) {
                 (Value::Number(x), Value::Number(y)) => Value::Bool(x <= y),
                 _ => panic!("Type error: cannot compare non-numbers"),
             }
         }
         Expr::GreaterThan(a, b) => {
-            match (eval_expr(a, env), eval_expr(b, env)) {
+            match (eval_expr(a, env, fns), eval_expr(b, env, fns)) {
                 (Value::Number(x), Value::Number(y)) => Value::Bool(x > y),
                 _ => panic!("Type error: cannot compare non-numbers"),
             }
         }
         Expr::GreaterThanOrEqual(a, b) => {
-            match (eval_expr(a, env), eval_expr(b, env)) {
+            match (eval_expr(a, env, fns), eval_expr(b, env, fns)) {
                 (Value::Number(x), Value::Number(y)) => Value::Bool(x >= y),
                 _ => panic!("Type error: cannot compare non-numbers"),
             }
         }
         Expr::Assign { name, value } => {
-            let v = eval_expr(value, env);
+            let v = eval_expr(value, env, fns);
             env.insert(name.clone(), (AssignKind::Var, v.clone()));
             v
         }
         Expr::CompoundAssign { name, op: _, value } => {
-            let v = eval_expr(value, env);
+            let v = eval_expr(value, env, fns);
             env.insert(name.clone(), (AssignKind::Var, v.clone()));
             v
         }
         Expr::Var(name) => env.get(name).map(|(_, v)| v.clone()).unwrap_or(Value::Number(0.0)),
         Expr::Const(name) => env.get(name).map(|(_, v)| v.clone()).unwrap_or(Value::Number(0.0)),
+        Expr::Call { name, args } => {
+            if let Some(fn_def) = fns.get(name).cloned() {
+                // Create new scope for function
+                let mut fn_env = env.clone();
+                
+                // Bind parameters
+                for (i, (param_name, _)) in fn_def.params.iter().enumerate() {
+                    let arg_val = if i < args.len() {
+                        eval_expr(&args[i], env, fns)
+                    } else {
+                        Value::Number(0.0)
+                    };
+                    fn_env.insert(param_name.clone(), (AssignKind::Var, arg_val));
+                }
+                
+                // Execute function body
+                let flow = execute_block(&fn_def.body, &mut fn_env, fns);
+                match flow {
+                    ControlFlow::Return(val) => val,
+                    _ => Value::Number(0.0),
+                }
+            } else {
+                panic!("Unknown function: {}", name);
+            }
+        }
     }
 }
 
 fn execute_stmt(
     stmt: &Stmt,
     env: &mut HashMap<String, (AssignKind, Value)>,
+    fns: &mut HashMap<String, FnDef>,
 ) -> ControlFlow {
     match stmt {
         Stmt::Echo(e) => {
-            let v = eval_expr(e, env);
+            let v = eval_expr(e, env, fns);
             print!("{}", format_value(&v));
             ControlFlow::None
         }
         Stmt::Print(e) => {
-            let v = eval_expr(e, env);
+            let v = eval_expr(e, env, fns);
             println!("{}", format_value(&v));
             ControlFlow::None
         }
         Stmt::Assign { kind, declared_type: _, name, value } => {
-            let v = eval_expr(value, env);
+            let v = eval_expr(value, env, fns);
             env.insert(name.clone(), (kind.clone(), v));
             ControlFlow::None
         }
@@ -185,7 +212,7 @@ fn execute_stmt(
             let kind = env.get(name).map(|(k, _)| k.clone()).unwrap();
             match kind {
                 AssignKind::Var => {
-                    let v = eval_expr(value, env);
+                    let v = eval_expr(value, env, fns);
                     env.insert(name.clone(), (kind.clone(), v));
                     ControlFlow::None
                 }
@@ -200,20 +227,20 @@ fn execute_stmt(
         Stmt::Break => ControlFlow::Break,
         Stmt::Next => ControlFlow::Next,
         Stmt::If { condition, then_block, else_ifs, else_block } => {
-            let cond_value = eval_expr(condition, env);
+            let cond_value = eval_expr(condition, env, fns);
             
             if is_truthy(&cond_value) {
-                execute_block(then_block, env)
+                execute_block(then_block, env, fns)
             } else {
                 for (else_if_cond, else_if_stmts) in else_ifs {
-                    let else_if_value = eval_expr(else_if_cond, env);
+                    let else_if_value = eval_expr(else_if_cond, env, fns);
                     if is_truthy(&else_if_value) {
-                        return execute_block(else_if_stmts, env);
+                        return execute_block(else_if_stmts, env, fns);
                     }
                 }
                 
                 if let Some(else_stmts) = else_block {
-                    execute_block(else_stmts, env)
+                    execute_block(else_stmts, env, fns)
                 } else {
                     ControlFlow::None
                 }
@@ -221,14 +248,15 @@ fn execute_stmt(
         }
         Stmt::While { condition, body } => {
             loop {
-                let cond_value = eval_expr(condition, env);
+                let cond_value = eval_expr(condition, env, fns);
                 if !is_truthy(&cond_value) {
                     break;
                 }
                 
-                match execute_block(body, env) {
+                match execute_block(body, env, fns) {
                     ControlFlow::Break => break,
                     ControlFlow::Next => continue,
+                    ControlFlow::Return(_) => return ControlFlow::None,
                     ControlFlow::None => {}
                 }
             }
@@ -236,13 +264,14 @@ fn execute_stmt(
         }
         Stmt::OnceWhile { condition, body } => {
             loop {
-                match execute_block(body, env) {
+                match execute_block(body, env, fns) {
                     ControlFlow::Break => break,
                     ControlFlow::Next => continue,
+                    ControlFlow::Return(_) => return ControlFlow::None,
                     ControlFlow::None => {}
                 }
 
-                let cond_value = eval_expr(condition, env);
+                let cond_value = eval_expr(condition, env, fns);
                 if !is_truthy(&cond_value) {
                     break;
                 }
@@ -251,14 +280,15 @@ fn execute_stmt(
         }
         Stmt::Until { condition, body } => {
             loop {
-                let cond_value = eval_expr(condition, env);
+                let cond_value = eval_expr(condition, env, fns);
                 if is_truthy(&cond_value) {
                     break;
                 }
                 
-                match execute_block(body, env) {
+                match execute_block(body, env, fns) {
                     ControlFlow::Break => break,
                     ControlFlow::Next => continue,
+                    ControlFlow::Return(_) => return ControlFlow::None,
                     ControlFlow::None => {}
                 }
             }
@@ -266,13 +296,14 @@ fn execute_stmt(
         }
         Stmt::OnceUntil { condition, body } => {
             loop {
-                match execute_block(body, env) {
+                match execute_block(body, env, fns) {
                     ControlFlow::Break => break,
                     ControlFlow::Next => continue,
+                    ControlFlow::Return(_) => return ControlFlow::None,
                     ControlFlow::None => {}
                 }
 
-                let cond_value = eval_expr(condition, env);
+                let cond_value = eval_expr(condition, env, fns);
                 if is_truthy(&cond_value) {
                     break;
                 }
@@ -280,13 +311,13 @@ fn execute_stmt(
             ControlFlow::None
         }
         Stmt::Match { expr, cases, default, match_type } => {
-            let val = eval_expr(expr, env);
+            let val = eval_expr(expr, env, fns);
             let mut matched = false;
             
             for (tests, stmts) in cases {
                 // For match any, continue if we already matched
                 if *match_type == MatchType::Any && matched {
-                    let flow = execute_block(stmts, env);
+                    let flow = execute_block(stmts, env, fns);
                     if flow == ControlFlow::Break {
                         return ControlFlow::None;
                     }
@@ -294,10 +325,10 @@ fn execute_stmt(
                 }
                 
                 for test in tests {
-                    let test_val = eval_expr(test, env);
+                    let test_val = eval_expr(test, env, fns);
                     if values_equal(&val, &test_val) {
                         matched = true;
-                        let flow = execute_block(stmts, env);
+                        let flow = execute_block(stmts, env, fns);
                         
                         match (match_type, flow) {
                             (MatchType::One, ControlFlow::Next) => continue,
@@ -312,10 +343,25 @@ fn execute_stmt(
             
             // No match found, execute default if it exists
             if let Some(default_stmts) = default {
-                execute_block(default_stmts, env)
+                execute_block(default_stmts, env, fns)
             } else {
                 ControlFlow::None
             }
+        }
+        Stmt::FnDef { name, params, return_type, body } => {
+            fns.insert(name.clone(), FnDef {
+                params: params.clone(),
+                body: body.clone(),
+                return_type: return_type.clone(),
+            });
+            ControlFlow::None
+        }
+        Stmt::Return(expr_opt) => {
+            let val = match expr_opt {
+                Some(e) => eval_expr(e, env, fns),
+                None => Value::Number(0.0),
+            };
+            ControlFlow::Return(val)
         }
     }
 }
@@ -323,14 +369,13 @@ fn execute_stmt(
 fn execute_block(
     stmts: &[Stmt],
     env: &mut HashMap<String, (AssignKind, Value)>,
+    fns: &mut HashMap<String, FnDef>,
 ) -> ControlFlow {
     for stmt in stmts {
-        let flow = execute_stmt(stmt, env);
-        if flow == ControlFlow::Break {
-            return ControlFlow::Break;
-        }
-        if flow == ControlFlow::Next {
-            return ControlFlow::Next;
+        let flow = execute_stmt(stmt, env, fns);
+        match flow {
+            ControlFlow::Break | ControlFlow::Next | ControlFlow::Return(_) => return flow,
+            ControlFlow::None => {}
         }
     }
     ControlFlow::None
@@ -338,5 +383,17 @@ fn execute_block(
 
 fn run(stmts: &[Stmt]) {
     let mut env: HashMap<String, (AssignKind, Value)> = HashMap::new();
-    execute_block(stmts, &mut env);
+    let mut fns: HashMap<String, FnDef> = HashMap::new();
+
+    for stmt in stmts {
+        if let Stmt::FnDef { name, params, return_type, body } = stmt {
+            fns.insert(name.clone(), FnDef {
+                params: params.clone(),
+                body: body.clone(),
+                return_type: return_type.clone(),
+            });
+        }
+    }
+
+    execute_block(stmts, &mut env, &mut fns);
 }

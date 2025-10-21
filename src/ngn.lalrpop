@@ -26,6 +26,9 @@ extern {
         False => Token::False,
         End => Token::End,
         Newline => Token::Newline,
+        Return => Token::Return,
+        ImplicitReturn => Token::ImplicitReturn,
+        Fn => Token::Fn,
         
         StarStar => Token::StarStar,
         EqEq => Token::EqEq,
@@ -81,6 +84,7 @@ Statement: Stmt = {
     UntilStmt,
     OnceUntilStmt,
     MatchStmt,
+    FnDefStmt,
     SimpleStatement,
 };
 
@@ -98,6 +102,54 @@ EchoStmt: Stmt = {
 
 PrintStmt: Stmt = {
     Print <e:Expr> => Stmt::Print(e),
+};
+
+FnDefStmt: Stmt = {
+    Fn <name:Ident> LParen <params:FnParams?> RParen <return_type:FnReturnType?> <_nl:Newline> <body:StatementLine*> <ret:ReturnStmt> End => {
+        let mut full_body = body;
+        full_body.push(ret);
+        
+        Stmt::FnDef {
+            name,
+            params: params.unwrap_or_default(),
+            return_type,
+            body: full_body,
+        }
+    },
+    Fn <name:Ident> LParen <params:FnParams?> RParen <return_type:FnReturnType?> ImplicitReturn <expr:Expr> <_nl:Newline> => {
+        let ret_stmt = Stmt::Return(Some(expr));
+        Stmt::FnDef {
+            name,
+            params: params.unwrap_or_default(),
+            return_type,
+            body: vec![ret_stmt],
+        }
+    },
+};
+
+FnParams: Vec<(String, Option<Type>)> = {
+    <first:FnParam> <rest:(Comma <FnParam>)*> => {
+        let mut all = vec![first];
+        all.extend(rest);
+        all
+    },
+};
+
+FnParam: (String, Option<Type>) = {
+    <name:Ident> <ty:TypeAnnotation?> => (name, ty),
+};
+
+FnReturnType: Type = {
+    Colon <t:TypeName> => t,
+};
+
+ReturnStmt: Stmt = {
+    Return Newline => Stmt::Return(None),
+    Return <e:ReturnExpr> => Stmt::Return(Some(e)),
+};
+
+ReturnExpr: Expr = {
+    <e:Expr> Newline => e,
 };
 
 IfStmt: Stmt = {
@@ -144,6 +196,7 @@ SimpleStatement: Stmt = {
     PrintStmt,
     AssignStmt,
     ReassignStmt,
+    ReturnStmt,
 };
 
 ElseIfClauseSingleLine: (Expr, Vec<Stmt>) = {
@@ -345,7 +398,7 @@ Comparison: Expr = {
 };
 
 Addition: Expr = {
-    <left:Addition> <op:AddOp> <right:Multiplication> => {
+    <left:Addition> <op:AddOp> <_nl:Newline*> <right:Multiplication> => {
         match op.as_str() {
             "+" => Expr::Add(Box::new(left), Box::new(right)),
             "-" => Expr::Subtract(Box::new(left), Box::new(right)),
@@ -356,7 +409,7 @@ Addition: Expr = {
 };
 
 Multiplication: Expr = {
-    <left:Multiplication> <op:MulOp> <right:Unary> => {
+    <left:Multiplication> <op:MulOp> <_nl:Newline*> <right:Unary> => {
         match op.as_str() {
             "*" => Expr::Multiply(Box::new(left), Box::new(right)),
             "/" => Expr::Divide(Box::new(left), Box::new(right)),
@@ -374,7 +427,7 @@ Unary: Expr = {
 };
 
 Power: Expr = {
-    <base:Factor> PowerOp <exp:Power> => Expr::Power(Box::new(base), Box::new(exp)),
+    <base:Factor> PowerOp <_nl:Newline*> <exp:Power> => Expr::Power(Box::new(base), Box::new(exp)),
     Factor,
 };
 
@@ -383,8 +436,23 @@ Factor: Expr = {
     String,
     Bool,
     Array,
+    <name:Ident> LParen <args:FnCallArgList?> RParen => {
+        Expr::Call { name, args: args.unwrap_or_default() }
+    },
     <i:Ident> => Expr::Var(i),
-    LParen <e:Expr> RParen => e,
+    LParen <_nl:Newline*> <e:Expr> <_nl2:Newline*> RParen => e,
+};
+
+FnCallArgList: Vec<Expr> = {
+    <_nl:Newline*> <first:Expr> <rest:FnCallArg*> => {
+        let mut all = vec![first];
+        all.extend(rest);
+        all
+    },
+};
+
+FnCallArg: Expr = {
+    Comma <_nl:Newline*> <e:Expr> <_nl2:Newline*> => e,
 };
 
 Number: Expr = {

@@ -12,6 +12,7 @@ pub enum Token {
     PlusEq, MinusEq, StarEq, SlashEq, PercentEq, StarStarEq, CaretEq,
     LParen, RParen, LBracket, RBracket, LBrace, RBrace,
     Newline,
+    Fn, Return, ImplicitReturn,
     Ident(String), String(String), Number(f64),
 }
 
@@ -57,7 +58,10 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
             }
             
             '=' => {
-                if chars.peek().map(|(_, c)| *c) == Some('=') {
+                if chars.peek().map(|(_, c)| *c) == Some('>') {
+                    chars.next();
+                    tokens.push((pos, Token::ImplicitReturn, pos + 2));
+                } else if chars.peek().map(|(_, c)| *c) == Some('=') {
                     chars.next();
                     tokens.push((pos, Token::EqEq, pos + 2));
                 } else {
@@ -195,6 +199,8 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
                     "one" => Token::One,
                     "once" => Token::Once,
                     "any" => Token::Any,
+                    "fn" => Token::Fn,
+                    "return" => Token::Return,
                     _ => Token::Ident(ident),
                 };
                 tokens.push((start, token, end));

@@ -9,7 +9,7 @@ pub enum Type {
     Object(HashMap<String, Type>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Number(f64),
     String(String),
@@ -41,6 +41,7 @@ pub enum Expr {
     CompoundAssign { name: String, op: String, value: Box<Expr> },
     Var(String),
     Const(String),
+    Call { name: String, args: Vec<Expr> },
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +67,13 @@ pub enum Stmt {
     OnceUntil { condition: Expr, body: Vec<Stmt> },
     Break,
     Next,
+    FnDef {
+        name: String,
+        params: Vec<(String, Option<Type>)>,
+        return_type: Option<Type>,
+        body: Vec<Stmt>,
+    },
+    Return(Option<Expr>),
 }
 
 #[derive(Debug, Clone)]
@@ -74,15 +82,24 @@ pub enum AssignKind {
     Const,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ControlFlow {
     None,
     Break,
     Next,
+    Return(Value),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MatchType {
     One,
     Any,
+}
+
+#[derive(Clone)]
+pub struct FnDef {
+    pub params: Vec<(String, Option<Type>)>,
+    pub body: Vec<Stmt>,
+    #[allow(dead_code)]
+    pub return_type: Option<Type>,
 }
