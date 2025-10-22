@@ -105,15 +105,12 @@ PrintStmt: Stmt = {
 };
 
 FnDefStmt: Stmt = {
-    Fn <name:Ident> LParen <params:FnParams?> RParen <return_type:FnReturnType?> <_nl:Newline> <body:StatementLine*> <ret:ReturnStmt> End => {
-        let mut full_body = body;
-        full_body.push(ret);
-        
+    Fn <name:Ident> LParen <params:FnParams?> RParen <return_type:FnReturnType?> <_nl:Newline> <body:FnBody> End => {       
         Stmt::FnDef {
             name,
             params: params.unwrap_or_default(),
             return_type,
-            body: full_body,
+            body,
         }
     },
     Fn <name:Ident> LParen <params:FnParams?> RParen <return_type:FnReturnType?> ImplicitReturn <expr:Expr> <_nl:Newline> => {
@@ -125,6 +122,15 @@ FnDefStmt: Stmt = {
             body: vec![ret_stmt],
         }
     },
+};
+
+FnBody: Vec<Stmt> = {
+    <stmts:StatementLine*> <ret:ReturnStmt> => {
+        let mut all = stmts;
+        all.push(ret);
+        all
+    },
+    <stmts:StatementLine*> => stmts,
 };
 
 FnParams: Vec<(String, Option<Type>)> = {
@@ -196,7 +202,7 @@ SimpleStatement: Stmt = {
     PrintStmt,
     AssignStmt,
     ReassignStmt,
-    ReturnStmt,
+    ExprStmt,
 };
 
 ElseIfClauseSingleLine: (Expr, Vec<Stmt>) = {
@@ -232,6 +238,12 @@ ElseClauseMultiLine: Vec<Stmt> = {
 IfBody: Vec<Stmt> = {
     <stmts:Statement+> => stmts,
 }
+
+ExprStmt: Stmt = {
+    <name:Ident> LParen <args:FnCallArgList?> RParen => {
+        Stmt::ExprStmt(Expr::Call { name, args: args.unwrap_or_default() })
+    },
+};
 
 WhileStmt: Stmt = {
     While LParen <cond:Expr> RParen <body:WhileBodySingleLine> <_nl:Newline> => {

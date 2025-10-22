@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     Number,
     String,
@@ -15,9 +15,10 @@ pub enum Value {
     String(String),
     Bool(bool),
     Array(Vec<Value>),
+    Function(FnDef)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Number(f64),
     String(String),
@@ -44,12 +45,13 @@ pub enum Expr {
     Call { name: String, args: Vec<Expr> },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Echo(Expr),
     Print(Expr),
     Assign { kind: AssignKind, declared_type: Option<Type>, name: String, value: Expr },
     Reassign { name: String, value: Expr },
+    ExprStmt(Expr),
     If { 
         condition: Expr, 
         then_block: Vec<Stmt>, 
@@ -76,7 +78,7 @@ pub enum Stmt {
     Return(Option<Expr>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum AssignKind {
     Var,
     Const,
@@ -96,10 +98,9 @@ pub enum MatchType {
     Any,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FnDef {
     pub params: Vec<(String, Option<Type>)>,
     pub body: Vec<Stmt>,
-    #[allow(dead_code)]
     pub return_type: Option<Type>,
 }

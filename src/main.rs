@@ -30,6 +30,7 @@ fn format_value(v: &Value) -> String {
         Value::String(s) => s.clone(),
         Value::Bool(b) => b.to_string(),
         Value::Array(arr) => format!("[{}]", arr.iter().map(format_value).collect::<Vec<_>>().join(", ")),
+        Value::Function(_) => "<function>".to_string(),
     }
 }
 
@@ -39,6 +40,7 @@ fn is_truthy(v: &Value) -> bool {
         Value::Number(n) => *n != 0.0,
         Value::String(s) => !s.is_empty(),
         Value::Array(arr) => !arr.is_empty(),
+        Value::Function(_) => true
     }
 }
 
@@ -154,10 +156,50 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value)>, fns: &mut
             env.insert(name.clone(), (AssignKind::Var, v.clone()));
             v
         }
-        Expr::Var(name) => env.get(name).map(|(_, v)| v.clone()).unwrap_or(Value::Number(0.0)),
-        Expr::Const(name) => env.get(name).map(|(_, v)| v.clone()).unwrap_or(Value::Number(0.0)),
+        Expr::Var(name) => {
+            if let Some((_, v)) = env.get(name) {
+                v.clone()
+            } else if let Some(fn_def) = fns.get(name) {
+                // If it's a function in fns, return it as a Value::Function
+                Value::Function(fn_def.clone())
+            } else {
+                Value::Number(0.0)
+            }
+        }
+        Expr::Const(name) => {
+            if let Some((_, v)) = env.get(name) {
+                v.clone()
+            } else if let Some(fn_def) = fns.get(name) {
+                // If it's a function in fns, return it as a Value::Function
+                Value::Function(fn_def.clone())
+            } else {
+                Value::Number(0.0)
+            }
+        },
         Expr::Call { name, args } => {
-            if let Some(fn_def) = fns.get(name).cloned() {
+            if let Some((_, Value::Function(fn_def))) = env.get(name) {
+                let fn_def = fn_def.clone();
+                
+                // Create new scope for function
+                let mut fn_env = env.clone();
+                
+                // Bind parameters
+                for (i, (param_name, _)) in fn_def.params.iter().enumerate() {
+                    let arg_val = if i < args.len() {
+                        eval_expr(&args[i], env, fns)
+                    } else {
+                        Value::Number(0.0)
+                    };
+                    fn_env.insert(param_name.clone(), (AssignKind::Var, arg_val));
+                }
+                
+                // Execute function body
+                let flow = execute_block(&fn_def.body, &mut fn_env, fns);
+                match flow {
+                    ControlFlow::Return(val) => val,
+                    _ => Value::Number(0.0),
+                }
+            } else if let Some(fn_def) = fns.get(name).cloned() {
                 // Create new scope for function
                 let mut fn_env = env.clone();
                 
@@ -198,6 +240,10 @@ fn execute_stmt(
         Stmt::Print(e) => {
             let v = eval_expr(e, env, fns);
             println!("{}", format_value(&v));
+            ControlFlow::None
+        }
+        Stmt::ExprStmt(e) => {
+            eval_expr(e, env, fns);
             ControlFlow::None
         }
         Stmt::Assign { kind, declared_type: _, name, value } => {
