@@ -63,6 +63,14 @@ fn infer_value_type(v: &Value) -> Type {
                 Type::Array(Box::new(Type::Number))
             } else {
                 let elem_type = infer_value_type(&arr[0]);
+                
+                for elem in arr.iter().skip(1) {
+                    let elem_val_type = infer_value_type(elem);
+                    if !types_compatible(&elem_type, &elem_val_type) {
+                        panic!("Type error: mixed types in array {:?}", arr);
+                    }
+                }
+                
                 Type::Array(Box::new(elem_type))
             }
         }
@@ -222,7 +230,7 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value)>, fns: &mut
                     if let Some(expected_type) = param_type {
                         let actual_type = infer_value_type(&arg_val);
                         if !types_compatible(expected_type, &actual_type) {
-                            panic!("Type error in function {}: expected {:?}, got {:?}", name, expected_type, actual_type);
+                            panic!("Type error: function param {}: expected {:?}, got {:?}", name, expected_type, actual_type);
                         }
                     }
 

@@ -538,6 +538,12 @@ TypeName: Type = {
             _ => panic!("Unknown type: {}", s),
         }
     },
+    <s:"Ident"> Less <inner:TypeName> Greater => {
+        match s.as_str() {
+            "array" => Type::Array(Box::new(inner)),
+            _ => panic!("Unknown parameterized type: {}", s),
+        }
+    },
 };
 
 Ident: String = {
