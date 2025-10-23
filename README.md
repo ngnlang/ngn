@@ -189,3 +189,36 @@ fn doThing()
   print "something"
 end
 ```
+
+### Types
+
+- `string`
+- `number`
+- `boolean`
+- `array` of numbers
+- `array<type>` of type
+
+
+#### explicit
+```ngn
+const thing: string = "one"
+var answer: number = 42
+var truth: boolean = false
+const things: array = [1, 2, 3]
+const stuff: array<string> = ["shirt", "hat", "coat"]
+```
+
+#### implicit
+Currently only supports declarations, not function parameters or return types, nor expression results.
+
+```ngn
+const thing = "one" // inferred to `string`
+const answer = 42 // inferred to `number`
+
+const result = 3 + 2 // `result` not inferred as `number`
+
+// `a`, `b`, and return type are not inferred
+fn add(a, b)
+  return a + b
+end
+```
