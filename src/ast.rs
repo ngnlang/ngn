@@ -7,6 +7,7 @@ pub enum Type {
     Bool,
     Array(Box<Type>),
     Object(HashMap<String, Type>),
+    Function,
 }
 
 #[derive(Debug, Clone, PartialEq)]

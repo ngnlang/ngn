@@ -2,7 +2,7 @@ mod ast;
 mod lexer;
 
 use std::fs;
-use crate::ast::FnDef;
+use crate::ast::{FnDef, Type};
 
 lalrpop_mod!(pub ngn);
 
@@ -49,6 +49,33 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Number(x), Value::Number(y)) => x == y,
         (Value::String(x), Value::String(y)) => x == y,
         (Value::Bool(x), Value::Bool(y)) => x == y,
+        _ => false,
+    }
+}
+
+fn infer_value_type(v: &Value) -> Type {
+    match v {
+        Value::Number(_) => Type::Number,
+        Value::String(_) => Type::String,
+        Value::Bool(_) => Type::Bool,
+        Value::Array(arr) => {
+            if arr.is_empty() {
+                Type::Array(Box::new(Type::Number))
+            } else {
+                let elem_type = infer_value_type(&arr[0]);
+                Type::Array(Box::new(elem_type))
+            }
+        }
+        Value::Function(_) => Type::Function,
+    }
+}
+
+fn types_compatible(expected: &Type, actual: &Type) -> bool {
+    match (expected, actual) {
+        (Type::Number, Type::Number) => true,
+        (Type::String, Type::String) => true,
+        (Type::Bool, Type::Bool) => true,
+        (Type::Array(e1), Type::Array(e2)) => types_compatible(e1, e2),
         _ => false,
     }
 }
@@ -184,17 +211,26 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value)>, fns: &mut
                 let mut fn_env = env.clone();
                 
                 // Bind parameters
-                for (i, (param_name, _)) in fn_def.params.iter().enumerate() {
+                for (i, (param_name, param_type)) in fn_def.params.iter().enumerate() {
                     let arg_val = if i < args.len() {
                         eval_expr(&args[i], env, fns)
                     } else {
                         Value::Number(0.0)
                     };
+
+                    // Validate parameter type
+                    if let Some(expected_type) = param_type {
+                        let actual_type = infer_value_type(&arg_val);
+                        if !types_compatible(expected_type, &actual_type) {
+                            panic!("Type error in function {}: expected {:?}, got {:?}", name, expected_type, actual_type);
+                        }
+                    }
+
                     fn_env.insert(param_name.clone(), (AssignKind::Var, arg_val));
                 }
                 
                 // Execute function body
-                let flow = execute_block(&fn_def.body, &mut fn_env, fns);
+                let flow = execute_block(&fn_def.body, &mut fn_env, fns, fn_def.return_type.as_ref());
                 match flow {
                     ControlFlow::Return(val) => val,
                     _ => Value::Number(0.0),
@@ -214,7 +250,7 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value)>, fns: &mut
                 }
                 
                 // Execute function body
-                let flow = execute_block(&fn_def.body, &mut fn_env, fns);
+                let flow = execute_block(&fn_def.body, &mut fn_env, fns, fn_def.return_type.as_ref());
                 match flow {
                     ControlFlow::Return(val) => val,
                     _ => Value::Number(0.0),
@@ -230,6 +266,7 @@ fn execute_stmt(
     stmt: &Stmt,
     env: &mut HashMap<String, (AssignKind, Value)>,
     fns: &mut HashMap<String, FnDef>,
+    expected_return_type: Option<&Type>,
 ) -> ControlFlow {
     match stmt {
         Stmt::Echo(e) => {
@@ -246,8 +283,16 @@ fn execute_stmt(
             eval_expr(e, env, fns);
             ControlFlow::None
         }
-        Stmt::Assign { kind, declared_type: _, name, value } => {
+        Stmt::Assign { kind, declared_type, name, value } => {
             let v = eval_expr(value, env, fns);
+            let actual_type = infer_value_type(&v);
+
+            if let Some(expected_type) = declared_type {
+                if !types_compatible(expected_type, &actual_type) {
+                    panic!("Type error: expected {:?}, got {:?}", expected_type, actual_type);
+                }
+            }
+
             env.insert(name.clone(), (kind.clone(), v));
             ControlFlow::None
         }
@@ -255,10 +300,20 @@ fn execute_stmt(
             if !env.contains_key(name) {
                 panic!("Variable '{}' not declared", name);
             }
-            let kind = env.get(name).map(|(k, _)| k.clone()).unwrap();
+
+            let (kind, existing_val) = env.get(name).unwrap().clone();
+            let existing_type = infer_value_type(&existing_val);
+
             match kind {
                 AssignKind::Var => {
                     let v = eval_expr(value, env, fns);
+                    let new_type = infer_value_type(&v);
+
+                    // Validate type matches original
+                    if !types_compatible(&existing_type, &new_type) {
+                        panic!("Type error: variable {} is {:?}, cannot assign {:?}", name, existing_type, new_type);
+                    }
+
                     env.insert(name.clone(), (kind.clone(), v));
                     ControlFlow::None
                 }
@@ -276,17 +331,17 @@ fn execute_stmt(
             let cond_value = eval_expr(condition, env, fns);
             
             if is_truthy(&cond_value) {
-                execute_block(then_block, env, fns)
+                execute_block(then_block, env, fns, None)
             } else {
                 for (else_if_cond, else_if_stmts) in else_ifs {
                     let else_if_value = eval_expr(else_if_cond, env, fns);
                     if is_truthy(&else_if_value) {
-                        return execute_block(else_if_stmts, env, fns);
+                        return execute_block(else_if_stmts, env, fns, None);
                     }
                 }
                 
                 if let Some(else_stmts) = else_block {
-                    execute_block(else_stmts, env, fns)
+                    execute_block(else_stmts, env, fns, None)
                 } else {
                     ControlFlow::None
                 }
@@ -299,7 +354,7 @@ fn execute_stmt(
                     break;
                 }
                 
-                match execute_block(body, env, fns) {
+                match execute_block(body, env, fns, None) {
                     ControlFlow::Break => break,
                     ControlFlow::Next => continue,
                     ControlFlow::Return(_) => return ControlFlow::None,
@@ -310,7 +365,7 @@ fn execute_stmt(
         }
         Stmt::OnceWhile { condition, body } => {
             loop {
-                match execute_block(body, env, fns) {
+                match execute_block(body, env, fns, None) {
                     ControlFlow::Break => break,
                     ControlFlow::Next => continue,
                     ControlFlow::Return(_) => return ControlFlow::None,
@@ -331,7 +386,7 @@ fn execute_stmt(
                     break;
                 }
                 
-                match execute_block(body, env, fns) {
+                match execute_block(body, env, fns, None) {
                     ControlFlow::Break => break,
                     ControlFlow::Next => continue,
                     ControlFlow::Return(_) => return ControlFlow::None,
@@ -342,7 +397,7 @@ fn execute_stmt(
         }
         Stmt::OnceUntil { condition, body } => {
             loop {
-                match execute_block(body, env, fns) {
+                match execute_block(body, env, fns, None) {
                     ControlFlow::Break => break,
                     ControlFlow::Next => continue,
                     ControlFlow::Return(_) => return ControlFlow::None,
@@ -363,7 +418,7 @@ fn execute_stmt(
             for (tests, stmts) in cases {
                 // For match any, continue if we already matched
                 if *match_type == MatchType::Any && matched {
-                    let flow = execute_block(stmts, env, fns);
+                    let flow = execute_block(stmts, env, fns, None);
                     if flow == ControlFlow::Break {
                         return ControlFlow::None;
                     }
@@ -374,7 +429,7 @@ fn execute_stmt(
                     let test_val = eval_expr(test, env, fns);
                     if values_equal(&val, &test_val) {
                         matched = true;
-                        let flow = execute_block(stmts, env, fns);
+                        let flow = execute_block(stmts, env, fns, None);
                         
                         match (match_type, flow) {
                             (MatchType::One, ControlFlow::Next) => continue,
@@ -389,7 +444,7 @@ fn execute_stmt(
             
             // No match found, execute default if it exists
             if let Some(default_stmts) = default {
-                execute_block(default_stmts, env, fns)
+                execute_block(default_stmts, env, fns, None)
             } else {
                 ControlFlow::None
             }
@@ -407,6 +462,14 @@ fn execute_stmt(
                 Some(e) => eval_expr(e, env, fns),
                 None => Value::Number(0.0),
             };
+
+            if let Some(expected_type) = expected_return_type {
+                let actual_type = infer_value_type(&val);
+                if !types_compatible(expected_type, &actual_type) {
+                    panic!("Return type error: expected {:?}, got {:?}", expected_type, actual_type);
+                }
+            }
+
             ControlFlow::Return(val)
         }
     }
@@ -416,9 +479,10 @@ fn execute_block(
     stmts: &[Stmt],
     env: &mut HashMap<String, (AssignKind, Value)>,
     fns: &mut HashMap<String, FnDef>,
+    expected_return_type: Option<&Type>,
 ) -> ControlFlow {
     for stmt in stmts {
-        let flow = execute_stmt(stmt, env, fns);
+        let flow = execute_stmt(stmt, env, fns, expected_return_type);
         match flow {
             ControlFlow::Break | ControlFlow::Next | ControlFlow::Return(_) => return flow,
             ControlFlow::None => {}
@@ -441,5 +505,5 @@ fn run(stmts: &[Stmt]) {
         }
     }
 
-    execute_block(stmts, &mut env, &mut fns);
+    execute_block(stmts, &mut env, &mut fns, None);
 }
