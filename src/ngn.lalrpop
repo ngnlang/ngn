@@ -80,9 +80,9 @@ StatementLine: Stmt = {
 Statement: Stmt = {
     IfStmt,
     WhileStmt,
-    OnceWhileStmt,
+    WhileOnceStmt,
     UntilStmt,
-    OnceUntilStmt,
+    UntilOnceStmt,
     MatchStmt,
     FnDefStmt,
     SimpleStatement,
@@ -254,12 +254,12 @@ WhileStmt: Stmt = {
     },
 };
 
-OnceWhileStmt: Stmt = {
-    Once While LParen <cond:Expr> RParen <body:WhileBodySingleLine> <_nl:Newline> => {
-        Stmt::OnceWhile { condition: cond, body }
+WhileOnceStmt: Stmt = {
+    While Once LParen <cond:Expr> RParen <body:WhileBodySingleLine> <_nl:Newline> => {
+        Stmt::WhileOnce { condition: cond, body }
     },
-    Once While LParen <cond:Expr> RParen <_nl:Newline> <body:WhileBodyMultiLine> End => {
-        Stmt::OnceWhile { condition: cond, body }
+    While Once LParen <cond:Expr> RParen <_nl:Newline> <body:WhileBodyMultiLine> End => {
+        Stmt::WhileOnce { condition: cond, body }
     },
 };
 
@@ -280,12 +280,12 @@ UntilStmt: Stmt = {
     },
 };
 
-OnceUntilStmt: Stmt = {
-    Once Until LParen <cond:Expr> RParen <body:UntilBodySingleLine> <_nl:Newline> => {
-        Stmt::OnceUntil { condition: cond, body }
+UntilOnceStmt: Stmt = {
+    Until Once LParen <cond:Expr> RParen <body:UntilBodySingleLine> <_nl:Newline> => {
+        Stmt::UntilOnce { condition: cond, body }
     },
-    Once Until LParen <cond:Expr> RParen <_nl:Newline> <body:UntilBodyMultiLine> End => {
-        Stmt::OnceUntil { condition: cond, body }
+    Until Once LParen <cond:Expr> RParen <_nl:Newline> <body:UntilBodyMultiLine> End => {
+        Stmt::UntilOnce { condition: cond, body }
     },
 };
 

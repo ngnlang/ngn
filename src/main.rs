@@ -371,7 +371,7 @@ fn execute_stmt(
             }
             ControlFlow::None
         }
-        Stmt::OnceWhile { condition, body } => {
+        Stmt::WhileOnce { condition, body } => {
             loop {
                 match execute_block(body, env, fns, None) {
                     ControlFlow::Break => break,
@@ -403,7 +403,7 @@ fn execute_stmt(
             }
             ControlFlow::None
         }
-        Stmt::OnceUntil { condition, body } => {
+        Stmt::UntilOnce { condition, body } => {
             loop {
                 match execute_block(body, env, fns, None) {
                     ControlFlow::Break => break,
