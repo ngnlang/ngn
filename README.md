@@ -64,7 +64,7 @@ while (condition) statement
 #### `once` variant
 To always run the statement block once, before checking the condition.
 ```ngn
-once while (condition)
+while once (condition)
   statement
 end
 ```
@@ -86,7 +86,7 @@ until (condition) statement
 #### `once` variant
 To always run the statement block once, before checking the condition.
 ```ngn
-once until (condition)
+until once (condition)
   statement
 end
 ```
