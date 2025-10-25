@@ -30,19 +30,19 @@ age = 42 ✅
 Log to the console, without formatting.
 ```ngn
 const name = "ngn"
-echo name
+echo(name)
 // ngn
 
-echo "Hello"
-echo "World"
+echo("Hello")
+echo("World")
 // HelloWorld
 ```
 
 ### `print`
 Line logging to the console. Implicit `\n`.
 ```ngn
-print "Hello"
-print "World"
+print("Hello")
+print("World")
 // Hello
 // World
 ```
@@ -113,11 +113,11 @@ If you're concerned about code readability in certain situations, you can use th
 
 So, instead of
 ```ngn
-if (!browser) print "not browser"
+if (!browser) print("not browser")
 ```
 you can do
 ```ngn
-if not (browser) print "not browser"
+if not (browser) print("not browser")
 ```
 
 ### `match one`
@@ -186,7 +186,7 @@ fn add(a, b) => a + b
 #### Side-effects only
 ```ngn
 fn doThing()
-  print "something"
+  print("something")
 end
 ```
 
