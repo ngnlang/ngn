@@ -27,7 +27,6 @@ extern {
         End => Token::End,
         Newline => Token::Newline,
         Return => Token::Return,
-        ImplicitReturn => Token::ImplicitReturn,
         Fn => Token::Fn,
         
         StarStar => Token::StarStar,
@@ -113,7 +112,7 @@ FnDefStmt: Stmt = {
             body,
         }
     },
-    Fn <name:Ident> LParen <params:FnParams?> RParen <return_type:FnReturnType?> ImplicitReturn <expr:Expr> <_nl:Newline> => {
+    Fn <name:Ident> LParen <params:FnParams?> RParen <return_type:FnReturnType?> <expr:Expr> <_nl:Newline> => {
         let ret_stmt = Stmt::Return(Some(expr));
         Stmt::FnDef {
             name,
