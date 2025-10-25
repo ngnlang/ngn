@@ -97,11 +97,11 @@ NextStmt: Stmt = {
 };
 
 EchoStmt: Stmt = {
-    Echo <e:Expr> => Stmt::Echo(e),
+    Echo LParen <e:Expr> RParen => Stmt::Echo(e),
 };
 
 PrintStmt: Stmt = {
-    Print <e:Expr> => Stmt::Print(e),
+    Print LParen <e:Expr> RParen => Stmt::Print(e),
 };
 
 FnDefStmt: Stmt = {
