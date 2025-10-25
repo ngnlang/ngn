@@ -178,9 +178,8 @@ end
 ```
 
 #### Implicit return
-> This may change.
 ```ngn
-fn add(a, b) => a + b
+fn add(a, b) a + b
 ```
 
 #### Side-effects only
