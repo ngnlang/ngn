@@ -8,6 +8,7 @@ pub enum Type {
     Array(Box<Type>),
     Object(HashMap<String, Type>),
     Function,
+    Void,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -16,7 +17,8 @@ pub enum Value {
     String(String),
     Bool(bool),
     Array(Vec<Value>),
-    Function(FnDef)
+    Function(FnDef),
+    Void,
 }
 
 #[derive(Debug, Clone, PartialEq)]

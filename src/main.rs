@@ -31,6 +31,7 @@ fn format_value(v: &Value) -> String {
         Value::Bool(b) => b.to_string(),
         Value::Array(arr) => format!("[{}]", arr.iter().map(format_value).collect::<Vec<_>>().join(", ")),
         Value::Function(_) => "<function>".to_string(),
+        Value::Void => "".to_string(),
     }
 }
 
@@ -40,7 +41,8 @@ fn is_truthy(v: &Value) -> bool {
         Value::Number(n) => *n != 0.0,
         Value::String(s) => !s.is_empty(),
         Value::Array(arr) => !arr.is_empty(),
-        Value::Function(_) => true
+        Value::Function(_) => true,
+        Value::Void => false,
     }
 }
 
@@ -75,6 +77,7 @@ fn infer_value_type(v: &Value) -> Type {
             }
         }
         Value::Function(_) => Type::Function,
+        Value::Void => Type::Void,
     }
 }
 
@@ -167,6 +170,7 @@ fn types_compatible(expected: &Type, actual: &Type) -> bool {
         (Type::String, Type::String) => true,
         (Type::Bool, Type::Bool) => true,
         (Type::Array(e1), Type::Array(e2)) => types_compatible(e1, e2),
+        (Type::Void, Type::Void) => true,
         _ => false,
     }
 }
@@ -338,7 +342,7 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value)>, fns: &mut
                 let flow = execute_block(&fn_def.body, &mut fn_env, fns, fn_def.return_type.as_ref());
                 match flow {
                     ControlFlow::Return(val) => val,
-                    _ => Value::Number(0.0),
+                    _ => Value::Void,
                 }
             } else if let Some(fn_def) = fns.get(name).cloned() {
                 // Create new scope for function
@@ -358,7 +362,7 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value)>, fns: &mut
                 let flow = execute_block(&fn_def.body, &mut fn_env, fns, fn_def.return_type.as_ref());
                 match flow {
                     ControlFlow::Return(val) => val,
-                    _ => Value::Number(0.0),
+                    _ => Value::Void,
                 }
             } else {
                 panic!("Unknown function: {}", name);
@@ -581,7 +585,7 @@ fn execute_stmt(
                     let _type = infer_expr_type(e, env, fns);
                     eval_expr(e, env, fns)
                 }
-                None => Value::Number(0.0),
+                None => Value::Void,
             };
 
             if let Some(expected_type) = expected_return_type {
