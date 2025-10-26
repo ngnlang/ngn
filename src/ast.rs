@@ -43,6 +43,8 @@ pub enum Expr {
     CompoundAssign { name: String, op: String, value: Box<Expr> },
     Var(String),
     Const(String),
+    Lit(String),
+    Static(String),
     Call { name: String, args: Vec<Expr> },
 }
 
@@ -83,6 +85,8 @@ pub enum Stmt {
 pub enum AssignKind {
     Var,
     Const,
+    Lit,
+    Static,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -198,7 +198,7 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value)>, fns: &mut
                 // If it's a function in fns, return it as a Value::Function
                 Value::Function(fn_def.clone())
             } else {
-                Value::Number(0.0)
+                panic!("Undefined variable: {}", name);
             }
         }
         Expr::Const(name) => {
@@ -208,7 +208,21 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value)>, fns: &mut
                 // If it's a function in fns, return it as a Value::Function
                 Value::Function(fn_def.clone())
             } else {
-                Value::Number(0.0)
+                panic!("Undefined constant: {}", name);
+            }
+        },
+        Expr::Lit(name) => {
+            if let Some((_, v)) = env.get(name) {
+                v.clone()
+            } else {
+                panic!("Undefined literal: {}", name);
+            }
+        },
+        Expr::Static(name) => {
+            if let Some((_, v)) = env.get(name) {
+                v.clone()
+            } else {
+                panic!("Undefined static: {}", name);
             }
         },
         Expr::Call { name, args } => {
@@ -325,12 +339,12 @@ fn execute_stmt(
                     env.insert(name.clone(), (kind.clone(), v));
                     ControlFlow::None
                 }
-                AssignKind::Const => {
-                    panic!("Cannot reassign {}", match kind {
-                        AssignKind::Const => "const",
-                        _ => "variable",
-                    });
-                }
+                kind => panic!("Cannot reassign for {}", match kind {
+                    AssignKind::Const => "const",
+                    AssignKind::Lit => "lit",
+                    AssignKind::Static => "static",
+                    _ => "an invalid initializer",
+                })
             }
         }
         Stmt::Break => ControlFlow::Break,
