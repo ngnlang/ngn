@@ -538,6 +538,7 @@ TypeName: Type = {
             "string" => Type::String,
             "bool" => Type::Bool,
             "array" => Type::Array(Box::new(Type::Number)),
+            "void" => Type::Void,
             _ => panic!("Unknown type: {}", s),
         }
     },
