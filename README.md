@@ -2,21 +2,40 @@
 
 An expressive, strongly and statically typed programming language. Built with Rust.
 
-Pronounced "engine"
+Pronounced "engine".
 
 ## Status
 
 Extremely early development.
 
+## Declaring identifiers
+
+| keyword | scope | binding | value | type | example | result type |
+|-------|-------|-------|-------|-------|-------|-------|
+| var | local | mutable | mutable | widened | `var status = "go"` | String |
+| const | local | immutable | immutable | literal | `const engine = "ngn"` | ngn |
+| lit | global | immutable | immutable | literal | `lit VERSION = "2"` | 2 |
+| static | global | immutable | immutable | literal | `static DATA = [1..=1000]` | [<array of numbers from 1 to 1000>] |
+
+> The `static` example uses psuedocode to mimic creating an array of numbers from 1 to 1000, inclusively.
+
+### `lit` vs `static`
+
+- When using either one, you can only assign literals like a number, string, boolean, or array.
+- With `lit`, all instances are replaced with the literal value at compile time.
+- With `static`, all instances are a reference to a single memory address, of the stored data, at runtime.
+
+Therefore, it's best to use `lit` when assigning a small amount of data. If you're declaring a large amount of data - like an array with 1000 entries - then use `static`.
+
+Think about it this way: if you had an array of 1000 numbers defined using `lit`, every single use of it in your code would be replaced with the entire array of data. This would be an inefficient use of memory. Whereas if you define the large array with `static`, ngn stores a single instance of the data in memory and any code references to it are just that, a reference, not the entire data set.
+
+## `main()`
+
+Your entrypoint file must define a `main()` function, which is run automatically; you do not have to call it.
+
 ## Working API
 
-### Identifiers
-All identifiers are locally scoped.
-
-| keyword | binding | value | type | example | result type |
-|------|-------|------|------|-------|-------|
-| const | immutable | immutable | literal | `const engine = "ngn"` | ngn |
-| var | mutable | mutable | widened | `var status = "go"` | String |
+> All code examples assume you're placing them in the correct context within the file.
 
 ```ngn
 const version = 2
@@ -196,6 +215,7 @@ end
 - `boolean`
 - `array` of numbers
 - `array<type>` of type
+- `void`
 
 
 #### explicit
@@ -205,19 +225,22 @@ var answer: number = 42
 var truth: boolean = false
 const things: array = [1, 2, 3]
 const stuff: array<string> = ["shirt", "hat", "coat"]
+
+fn sideEffects(): void
+  // do something
+end
 ```
 
 #### implicit
-Currently only supports declarations, not function parameters or return types, nor expression results.
+Supported for literals and expressions, as well as inside functions (requires explict types for fn params and return).
 
 ```ngn
 const thing = "one" // inferred to `string`
 const answer = 42 // inferred to `number`
 
-const result = 3 + 2 // `result` not inferred as `number`
+const result = 3 + 2 // `result` inferred as `number`
 
-// `a`, `b`, and return type are not inferred
-fn add(a, b)
-  return a + b
+fn add(a: number, b: number): number
+  return a + b // inferred as numbers
 end
 ```
