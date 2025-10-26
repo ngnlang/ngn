@@ -46,6 +46,15 @@ fn is_truthy(v: &Value) -> bool {
     }
 }
 
+fn is_literal(e: &Expr) -> bool {
+    matches!(e, 
+        Expr::Number(_) | 
+        Expr::String(_) | 
+        Expr::Bool(_) |
+        Expr::Array(_)
+    )
+}
+
 fn values_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Number(x), Value::Number(y)) => x == y,
@@ -398,6 +407,31 @@ fn execute_stmt(
             ControlFlow::None
         }
         Stmt::Assign { kind, declared_type, name, value } => {
+            // Disallow function assignments for all variable types
+            if let AssignKind::Var | AssignKind::Const = kind {
+                if let Expr::Var(fn_name) | Expr::Const(fn_name) = value {
+                    if fns.contains_key(fn_name) {
+                        panic!("Cannot assign function '{}' to variable. Use 'fn' to define functions.", fn_name);
+                    }
+                }
+            }
+
+            // For lit and static, only allow literals
+            match kind {
+                AssignKind::Lit | AssignKind::Static => {
+                    if !is_literal(value) {
+                        panic!("'{}' can only be used to assign literal values, not expressions or function calls", 
+                            match kind {
+                                AssignKind::Lit => "lit",
+                                AssignKind::Static => "static",
+                                _ => "<Illegal initializer>",
+                            }
+                        );
+                    }
+                }
+                _ => {}
+            }
+
             let _type = infer_expr_type(value, env, fns);
             let v = eval_expr(value, env, fns);
             let actual_type = infer_value_type(&v);
