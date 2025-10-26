@@ -78,6 +78,89 @@ fn infer_value_type(v: &Value) -> Type {
     }
 }
 
+fn infer_expr_type(e: &Expr, env: &HashMap<String, (AssignKind, Value)>, fns: &HashMap<String, FnDef>) -> Type {
+    match e {
+        Expr::Number(_) => Type::Number,
+        Expr::String(_) => Type::String,
+        Expr::Bool(_) => Type::Bool,
+        Expr::Array(exprs) => {
+            if exprs.is_empty() {
+                Type::Array(Box::new(Type::Number))
+            } else {
+                let elem_type = infer_expr_type(&exprs[0], env, fns);
+                for expr in exprs.iter().skip(1) {
+                    let other_type = infer_expr_type(expr, env, fns);
+                    if !types_compatible(&elem_type, &other_type) {
+                        panic!("Array type error: mixed types");
+                    }
+                }
+                Type::Array(Box::new(elem_type))
+            }
+        }
+        Expr::Add(a, b) => {
+            let left = infer_expr_type(a, env, fns);
+            let right = infer_expr_type(b, env, fns);
+            if types_compatible(&left, &Type::Number) && types_compatible(&right, &Type::Number) {
+                Type::Number
+            } else if types_compatible(&left, &Type::String) && types_compatible(&right, &Type::String) {
+                Type::String
+            } else {
+                panic!("Type error: cannot add {:?} and {:?}", left, right);
+            }
+        }
+        Expr::Subtract(a, b) | Expr::Multiply(a, b) | Expr::Divide(a, b) | Expr::Modulo(a, b) => {
+            let left = infer_expr_type(a, env, fns);
+            let right = infer_expr_type(b, env, fns);
+            if !types_compatible(&left, &Type::Number) || !types_compatible(&right, &Type::Number) {
+                panic!("Type error: arithmetic requires numbers");
+            }
+            Type::Number
+        }
+        Expr::Power(a, b) => {
+            let left = infer_expr_type(a, env, fns);
+            let right = infer_expr_type(b, env, fns);
+            if !types_compatible(&left, &Type::Number) || !types_compatible(&right, &Type::Number) {
+                panic!("Type error: power requires numbers");
+            }
+            Type::Number
+        }
+        Expr::Negative(e) => {
+            let t = infer_expr_type(e, env, fns);
+            if !types_compatible(&t, &Type::Number) {
+                panic!("Type error: cannot negate non-number");
+            }
+            Type::Number
+        }
+        Expr::Equal(_, _) | Expr::NotEqual(_, _) | Expr::LessThan(_, _) | 
+        Expr::LessThanOrEqual(_, _) | Expr::GreaterThan(_, _) | Expr::GreaterThanOrEqual(_, _) => {
+            Type::Bool
+        }
+        Expr::Not(_) => Type::Bool,
+        Expr::Var(name) | Expr::Const(name) | Expr::Lit(name) | Expr::Static(name) => {
+            if let Some((_, v)) = env.get(name) {
+                infer_value_type(v)
+            } else if fns.contains_key(name) {
+                Type::Function
+            } else {
+                panic!("Unknown variable: {}", name);
+            }
+        }
+        Expr::Call { name, .. } => {
+            // Check if it's a function value in the environment
+            if let Some((_, Value::Function(fn_def))) = env.get(name) {
+                fn_def.return_type.clone().unwrap_or(Type::Number)
+            } else if let Some(fn_def) = fns.get(name) {
+                // Check if it's a global function
+                fn_def.return_type.clone().unwrap_or(Type::Number)
+            } else {
+                panic!("Unknown function: {}", name);
+            }
+        }
+        Expr::Assign { value, .. } => infer_expr_type(value, env, fns),
+        Expr::CompoundAssign { value, .. } => infer_expr_type(value, env, fns),
+    }
+}
+
 fn types_compatible(expected: &Type, actual: &Type) -> bool {
     match (expected, actual) {
         (Type::Number, Type::Number) => true,
@@ -292,20 +375,24 @@ fn execute_stmt(
 ) -> ControlFlow {
     match stmt {
         Stmt::Echo(e) => {
+            let _type = infer_expr_type(e, env, fns);
             let v = eval_expr(e, env, fns);
             print!("{}", format_value(&v));
             ControlFlow::None
         }
         Stmt::Print(e) => {
+            let _type = infer_expr_type(e, env, fns);
             let v = eval_expr(e, env, fns);
             println!("{}", format_value(&v));
             ControlFlow::None
         }
         Stmt::ExprStmt(e) => {
+            let _type = infer_expr_type(e, env, fns);
             eval_expr(e, env, fns);
             ControlFlow::None
         }
         Stmt::Assign { kind, declared_type, name, value } => {
+            let _type = infer_expr_type(value, env, fns);
             let v = eval_expr(value, env, fns);
             let actual_type = infer_value_type(&v);
 
@@ -319,6 +406,7 @@ fn execute_stmt(
             ControlFlow::None
         }
         Stmt::Reassign { name, value } => {
+            let _type = infer_expr_type(value, env, fns);
             if !env.contains_key(name) {
                 panic!("Variable '{}' not declared", name);
             }
@@ -350,12 +438,14 @@ fn execute_stmt(
         Stmt::Break => ControlFlow::Break,
         Stmt::Next => ControlFlow::Next,
         Stmt::If { condition, then_block, else_ifs, else_block } => {
+            let _cond_type = infer_expr_type(condition, env, fns);
             let cond_value = eval_expr(condition, env, fns);
             
             if is_truthy(&cond_value) {
                 execute_block(then_block, env, fns, None)
             } else {
                 for (else_if_cond, else_if_stmts) in else_ifs {
+                    let _type = infer_expr_type(else_if_cond, env, fns);
                     let else_if_value = eval_expr(else_if_cond, env, fns);
                     if is_truthy(&else_if_value) {
                         return execute_block(else_if_stmts, env, fns, None);
@@ -371,6 +461,7 @@ fn execute_stmt(
         }
         Stmt::While { condition, body } => {
             loop {
+                let _cond_type = infer_expr_type(condition, env, fns);
                 let cond_value = eval_expr(condition, env, fns);
                 if !is_truthy(&cond_value) {
                     break;
@@ -394,6 +485,7 @@ fn execute_stmt(
                     ControlFlow::None => {}
                 }
 
+                let _cond_type = infer_expr_type(condition, env, fns);
                 let cond_value = eval_expr(condition, env, fns);
                 if !is_truthy(&cond_value) {
                     break;
@@ -403,6 +495,7 @@ fn execute_stmt(
         }
         Stmt::Until { condition, body } => {
             loop {
+                let _cond_type = infer_expr_type(condition, env, fns);
                 let cond_value = eval_expr(condition, env, fns);
                 if is_truthy(&cond_value) {
                     break;
@@ -426,6 +519,7 @@ fn execute_stmt(
                     ControlFlow::None => {}
                 }
 
+                let _cond_type = infer_expr_type(condition, env, fns);
                 let cond_value = eval_expr(condition, env, fns);
                 if is_truthy(&cond_value) {
                     break;
@@ -434,6 +528,7 @@ fn execute_stmt(
             ControlFlow::None
         }
         Stmt::Match { expr, cases, default, match_type } => {
+            let _expr_type = infer_expr_type(expr, env, fns);
             let val = eval_expr(expr, env, fns);
             let mut matched = false;
             
@@ -448,6 +543,7 @@ fn execute_stmt(
                 }
                 
                 for test in tests {
+                    let _test_type = infer_expr_type(test, env, fns);
                     let test_val = eval_expr(test, env, fns);
                     if values_equal(&val, &test_val) {
                         matched = true;
@@ -481,7 +577,10 @@ fn execute_stmt(
         }
         Stmt::Return(expr_opt) => {
             let val = match expr_opt {
-                Some(e) => eval_expr(e, env, fns),
+                Some(e) => {
+                    let _type = infer_expr_type(e, env, fns);
+                    eval_expr(e, env, fns)
+                }
                 None => Value::Number(0.0),
             };
 
