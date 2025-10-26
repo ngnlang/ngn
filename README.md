@@ -9,6 +9,7 @@ Pronounced "engine".
 Extremely early development.
 
 ## Declaring identifiers
+You cannot assign functions using this syntax. Use `fn` instead.
 
 | keyword | scope | binding | value | type | example | result type |
 |-------|-------|-------|-------|-------|-------|-------|
@@ -21,7 +22,6 @@ Extremely early development.
 
 ### `lit` vs `static`
 
-- When using either one, you can only assign literals like a number, string, boolean, or array.
 - With `lit`, all instances are replaced with the literal value at compile time.
 - With `static`, all instances are a reference to a single memory address, of the stored data, at runtime.
 
@@ -213,7 +213,7 @@ end
 - `string`
 - `number`
 - `boolean`
-- `array` of numbers
+- `array`
 - `array<type>` of type
 - `void`
 
