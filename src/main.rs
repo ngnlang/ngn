@@ -657,14 +657,32 @@ fn run(stmts: &[Stmt]) {
     let mut fns: HashMap<String, FnDef> = HashMap::new();
 
     for stmt in stmts {
-        if let Stmt::FnDef { name, params, return_type, body } = stmt {
-            fns.insert(name.clone(), FnDef {
-                params: params.clone(),
-                body: body.clone(),
-                return_type: return_type.clone(),
-            });
+        match stmt {
+            Stmt::FnDef { name, params, return_type, body } => {
+                fns.insert(name.clone(), FnDef {
+                    params: params.clone(),
+                    body: body.clone(),
+                    return_type: return_type.clone(),
+                });
+            }
+            Stmt::Assign { kind: AssignKind::Lit | AssignKind::Static, .. } => {
+                // Execute top-level lit/static
+                execute_stmt(stmt, &mut env, &mut fns, None);
+            }
+            _ => {
+                panic!("Top-level statements must be function definitions or lit/static assignments");
+            }
         }
     }
 
-    execute_block(stmts, &mut env, &mut fns, None);
+    if let Some(main_fn) = fns.get("main").cloned() {
+        if !main_fn.params.is_empty() {
+            panic!("main() must have no parameters");
+        }
+        
+        let mut main_env = env.clone();
+        execute_block(&main_fn.body, &mut main_env, &mut fns, main_fn.return_type.as_ref());
+    } else {
+        panic!("No main() function found. Entrypoint files must define main()");
+    }
 }

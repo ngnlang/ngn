@@ -71,7 +71,7 @@ extern {
 }
 
 pub Program: Vec<Stmt> = {
-    <stmts:StatementLine*> => stmts,
+    Newline* <stmts:StatementLine*> => stmts,
 };
 
 StatementLine: Stmt = {
