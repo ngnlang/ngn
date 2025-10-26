@@ -318,13 +318,14 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value)>, fns: &mut
                 
                 // Create new scope for function
                 let mut fn_env = env.clone();
+                let fn_arg_count = fn_def.params.len();
                 
                 // Bind parameters
                 for (i, (param_name, param_type)) in fn_def.params.iter().enumerate() {
                     let arg_val = if i < args.len() {
                         eval_expr(&args[i], env, fns)
                     } else {
-                        Value::Number(0.0)
+                        panic!("Function {} expects {} arguments, got {}", name, fn_arg_count, args.len())
                     };
 
                     // Validate parameter type
@@ -347,13 +348,14 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value)>, fns: &mut
             } else if let Some(fn_def) = fns.get(name).cloned() {
                 // Create new scope for function
                 let mut fn_env = env.clone();
+                let fn_arg_count = fn_def.params.len();
                 
                 // Bind parameters
                 for (i, (param_name, _)) in fn_def.params.iter().enumerate() {
                     let arg_val = if i < args.len() {
                         eval_expr(&args[i], env, fns)
                     } else {
-                        Value::Number(0.0)
+                        panic!("Function {} expects {} arguments, got {}", name, fn_arg_count, args.len())
                     };
                     fn_env.insert(param_name.clone(), (AssignKind::Var, arg_val));
                 }
