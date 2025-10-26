@@ -326,7 +326,7 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value)>, fns: &mut
                 let fn_def = fn_def.clone();
                 
                 // Create new scope for function
-                let mut fn_env = env.clone();
+                let mut fn_env: HashMap<String, (AssignKind, Value)> = HashMap::new();
                 let fn_arg_count = fn_def.params.len();
                 
                 // Bind parameters
@@ -356,16 +356,25 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value)>, fns: &mut
                 }
             } else if let Some(fn_def) = fns.get(name).cloned() {
                 // Create new scope for function
-                let mut fn_env = env.clone();
+                let mut fn_env: HashMap<String, (AssignKind, Value)> = HashMap::new();
                 let fn_arg_count = fn_def.params.len();
                 
                 // Bind parameters
-                for (i, (param_name, _)) in fn_def.params.iter().enumerate() {
+                for (i, (param_name, param_type)) in fn_def.params.iter().enumerate() {
                     let arg_val = if i < args.len() {
                         eval_expr(&args[i], env, fns)
                     } else {
                         panic!("Function {} expects {} arguments, got {}", name, fn_arg_count, args.len())
                     };
+
+                    // Validate parameter type
+                    if let Some(expected_type) = param_type {
+                        let actual_type = infer_value_type(&arg_val);
+                        if !types_compatible(expected_type, &actual_type) {
+                            panic!("Type error: function param {}: expected {:?}, got {:?}", name, expected_type, actual_type);
+                        }
+                    }
+
                     fn_env.insert(param_name.clone(), (AssignKind::Var, arg_val));
                 }
                 
