@@ -9,16 +9,83 @@ Pronounced "engine".
 Extremely early development.
 
 ## Declaring identifiers
-You cannot assign functions using this syntax. Use `fn` instead.
+> You cannot assign functions using this syntax. Use `fn` instead.
 
-| keyword | scope | binding | value | type | example | result type |
+ngn follows in the footsteps of Rust's ownership model, but tries to make it easier to use and reason about.
+
+| keyword | scope | binding | value | ownership | example | type |
 |-------|-------|-------|-------|-------|-------|-------|
-| var | local | mutable | mutable | widened | `var status = "go"` | String |
-| const | local | immutable | immutable | literal | `const engine = "ngn"` | ngn |
-| lit | global | immutable | immutable | literal | `lit VERSION = "2"` | 2 |
-| static | global | immutable | immutable | literal | `static DATA = [1..=1000]` | [<array of numbers from 1 to 1000>] |
+| var | local | mutable | immutable | borrowed | `var x = "hello"` | &string |
+| var | local | mutable | mutable | owned | `var z <- "world"` | string |
+| const | local | immutable | immutable | borrowed | `const status = "go"` | &string |
+| lit | global | immutable | immutable | borrowed | `lit VERSION = "2"` | &string |
+| static | global | immutable | immutable | borrowed | `static DATA = [1..=1000]` | &[i32] |
 
 > The `static` example uses psuedocode to mimic creating an array of numbers from 1 to 1000, inclusively.
+
+### `var`
+
+```ngn
+var x = "hello" // declares `x` as a borrowed `&string`
+x = "hello!" ❌ // value is immutable since it's borrowed
+rebind x = "goodbye" ✅ // is rebindable, which allows you to change the value
+```
+```ngn
+var x <- "hello" // declares `x` as an owned `string`
+x = "hello!!" ✅ // value is mutable since it's owned
+rebind x = "goodbye" ✅ // is rebindable
+```
+```ngn
+var x = "hello" // borrowed `&string`
+
+fn doThing(thing: string) // requires owned string
+  // consume thing
+end
+
+doThing(<-x) // use `<-` to convert and pass to doThing as an owned `string`
+
+print(x) ❌ // can no longer use `x` in this context
+```
+```ngn
+model User {
+  name: string,
+  role: string
+}
+
+// use `<-` to ensure all relevant properties are owned, per types in the model
+var user <- User {
+  name: "Sam",
+  role: "Developer"
+}
+
+fn readUser(u: &User)
+  // only read u, cannot consume
+end
+
+// Pass `user` as borrowed with `&`
+readUser(&user)
+
+// can still do things with `user` here
+```
+
+### `const`
+
+```ngn
+const x = "hello" // declare x as a borrowed `&string`
+x = "hello!!" ❌ // value is immutable since it's borrowed
+rebind x = "goodbye" ❌ // is not rebindable since it's a constant
+```
+```ngn
+const x = "hello" // borrowed `&string`
+
+fn doThing(thing: string) // requires owned string
+  // consume thing
+end
+
+doThing(<-x) // use `<-` to convert and pass to doThing as an owned `string`
+
+print(x) ❌ // can no longer use `x` in this context
+```
 
 ### `lit` vs `static`
 
