@@ -9,7 +9,7 @@ pub enum Token {
     Any, Var, Const, Lit, Static, If, Not, While, Until, Match, Echo, Print, Break, Next, True, False, End,
     StarStar, EqEq, NotEq, LessEq, GreaterEq, OrOr,
     Plus, Minus, One, Once, Star, Slash, Percent, Caret, Eq, Less, Greater, Colon, Comma,
-    PlusEq, MinusEq, StarEq, SlashEq, PercentEq, StarStarEq, CaretEq,
+    PlusEq, MinusEq, StarEq, SlashEq, PercentEq, StarStarEq, CaretEq, LArrow,
     LParen, RParen, LBracket, RBracket, LBrace, RBrace,
     Newline,
     Fn, Return,
@@ -79,6 +79,9 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
                 if chars.peek().map(|(_, c)| *c) == Some('=') {
                     chars.next();
                     tokens.push((pos, Token::LessEq, pos + 2));
+                } else if chars.peek().map(|(_, c)| *c) == Some('-') {
+                    chars.next();
+                    tokens.push((pos, Token::LArrow, pos + 2));
                 } else {
                     tokens.push((pos, Token::Less, pos + 1));
                 }

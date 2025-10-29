@@ -63,6 +63,7 @@ extern {
         RBracket => Token::RBracket,
         LBrace => Token::LBrace,
         RBrace => Token::RBrace,
+        LArrow => Token::LArrow,
         
         "Ident" => Token::Ident(<String>),
         "String" => Token::String(<String>),
@@ -349,12 +350,13 @@ MatchDefault: Vec<Stmt> = {
 };
 
 AssignStmt: Stmt = {
-    <kind:AssignKind> <name:Ident> <ty:TypeAnnotation?> Eq <value:Expr> => {
+    <kind:AssignKind> <name:Ident> <ty:TypeAnnotation?> <ownership:AssignOp> <value:Expr> => {
         Stmt::Assign {
             kind,
             declared_type: ty,
             name,
             value,
+            ownership
         }
     },
 };
@@ -371,6 +373,11 @@ ReassignStmt: Stmt = {
         Stmt::Reassign { name, value }
     },
 };
+
+AssignOp: Ownership = {
+    Eq => Ownership::Borrowed,
+    LArrow => Ownership::Owned,
+}
 
 Expr: Expr = {
     <name:Ident> <op:CompoundOp> <value:Expr> => {
@@ -535,7 +542,7 @@ TypeName: Type = {
     <s:"Ident"> => {
         match s.as_str() {
             "number" => Type::Number,
-            "string" => Type::String,
+            "string" => Type::Str,
             "bool" => Type::Bool,
             "array" => Type::Array(Box::new(Type::Number)),
             "void" => Type::Void,

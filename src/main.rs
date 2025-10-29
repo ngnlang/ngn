@@ -2,7 +2,7 @@ mod ast;
 mod lexer;
 
 use std::fs;
-use crate::ast::{FnDef, Type};
+use crate::ast::{FnDef, Ownership, Type};
 
 lalrpop_mod!(pub ngn);
 
@@ -67,7 +67,7 @@ fn values_equal(a: &Value, b: &Value) -> bool {
 fn infer_value_type(v: &Value) -> Type {
     match v {
         Value::Number(_) => Type::Number,
-        Value::String(_) => Type::String,
+        Value::String(_) => Type::Str,
         Value::Bool(_) => Type::Bool,
         Value::Array(arr) => {
             if arr.is_empty() {
@@ -90,10 +90,10 @@ fn infer_value_type(v: &Value) -> Type {
     }
 }
 
-fn infer_expr_type(e: &Expr, env: &HashMap<String, (AssignKind, Value)>, fns: &HashMap<String, FnDef>) -> Type {
+fn infer_expr_type(e: &Expr, env: &HashMap<String, (AssignKind, Value, Ownership)>, fns: &HashMap<String, FnDef>) -> Type {
     match e {
         Expr::Number(_) => Type::Number,
-        Expr::String(_) => Type::String,
+        Expr::String(_) => Type::Str,
         Expr::Bool(_) => Type::Bool,
         Expr::Array(exprs) => {
             if exprs.is_empty() {
@@ -149,7 +149,7 @@ fn infer_expr_type(e: &Expr, env: &HashMap<String, (AssignKind, Value)>, fns: &H
         }
         Expr::Not(_) => Type::Bool,
         Expr::Var(name) | Expr::Const(name) | Expr::Lit(name) | Expr::Static(name) => {
-            if let Some((_, v)) = env.get(name) {
+            if let Some((_, v, _ownership)) = env.get(name) {
                 infer_value_type(v)
             } else if fns.contains_key(name) {
                 Type::Function
@@ -159,7 +159,7 @@ fn infer_expr_type(e: &Expr, env: &HashMap<String, (AssignKind, Value)>, fns: &H
         }
         Expr::Call { name, .. } => {
             // Check if it's a function value in the environment
-            if let Some((_, Value::Function(fn_def))) = env.get(name) {
+            if let Some((_, Value::Function(fn_def), _ownership)) = env.get(name) {
                 fn_def.return_type.clone().unwrap_or(Type::Number)
             } else if let Some(fn_def) = fns.get(name) {
                 // Check if it's a global function
@@ -176,6 +176,7 @@ fn infer_expr_type(e: &Expr, env: &HashMap<String, (AssignKind, Value)>, fns: &H
 fn types_compatible(expected: &Type, actual: &Type) -> bool {
     match (expected, actual) {
         (Type::Number, Type::Number) => true,
+        (Type::Str, Type::Str) => true,
         (Type::String, Type::String) => true,
         (Type::Bool, Type::Bool) => true,
         (Type::Array(e1), Type::Array(e2)) => types_compatible(e1, e2),
@@ -184,7 +185,26 @@ fn types_compatible(expected: &Type, actual: &Type) -> bool {
     }
 }
 
-fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value)>, fns: &mut HashMap<String, FnDef>) -> Value {
+fn convert_ownership(t: Type) -> Type {
+    match t {
+        Type::Str => Type::String,
+        Type::Array(inner) => Type::Array(Box::new(convert_ownership(*inner))),
+        Type::Object(map) => {
+            Type::Object(
+                map.into_iter()
+                    .map(|(k, v)| (k, convert_ownership(v)))
+                    .collect()
+            )
+        }
+        other => other,
+    }
+}
+
+fn is_copy_type(t: &Type) -> bool {
+    matches!(t, Type::Number | Type::Bool)
+}
+
+fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value, Ownership)>, fns: &mut HashMap<String, FnDef>) -> Value {
     match e {
         Expr::Number(n) => Value::Number(*n),
         Expr::String(s) => Value::String(s.clone()),
@@ -279,16 +299,16 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value)>, fns: &mut
         }
         Expr::Assign { name, value } => {
             let v = eval_expr(value, env, fns);
-            env.insert(name.clone(), (AssignKind::Var, v.clone()));
+            env.insert(name.clone(), (AssignKind::Var, v.clone(), Ownership::Borrowed));
             v
         }
         Expr::CompoundAssign { name, op: _, value } => {
             let v = eval_expr(value, env, fns);
-            env.insert(name.clone(), (AssignKind::Var, v.clone()));
+            env.insert(name.clone(), (AssignKind::Var, v.clone(), Ownership::Borrowed));
             v
         }
         Expr::Var(name) => {
-            if let Some((_, v)) = env.get(name) {
+            if let Some((_, v, _ownership)) = env.get(name) {
                 v.clone()
             } else if let Some(fn_def) = fns.get(name) {
                 // If it's a function in fns, return it as a Value::Function
@@ -298,7 +318,7 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value)>, fns: &mut
             }
         }
         Expr::Const(name) => {
-            if let Some((_, v)) = env.get(name) {
+            if let Some((_, v, _ownership)) = env.get(name) {
                 v.clone()
             } else if let Some(fn_def) = fns.get(name) {
                 // If it's a function in fns, return it as a Value::Function
@@ -308,84 +328,56 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value)>, fns: &mut
             }
         },
         Expr::Lit(name) => {
-            if let Some((_, v)) = env.get(name) {
+            if let Some((_, v, _ownership)) = env.get(name) {
                 v.clone()
             } else {
                 panic!("Undefined literal: {}", name);
             }
         },
         Expr::Static(name) => {
-            if let Some((_, v)) = env.get(name) {
+            if let Some((_, v, _ownership)) = env.get(name) {
                 v.clone()
             } else {
                 panic!("Undefined static: {}", name);
             }
         },
         Expr::Call { name, args } => {
-            if let Some((_, Value::Function(fn_def))) = env.get(name) {
-                let fn_def = fn_def.clone();
-                
-                // Create new scope for function
-                let mut fn_env: HashMap<String, (AssignKind, Value)> = HashMap::new();
-                let fn_arg_count = fn_def.params.len();
-                
-                // Bind parameters
-                for (i, (param_name, param_type)) in fn_def.params.iter().enumerate() {
-                    let arg_val = if i < args.len() {
-                        eval_expr(&args[i], env, fns)
-                    } else {
-                        panic!("Function {} expects {} arguments, got {}", name, fn_arg_count, args.len())
-                    };
-
-                    // Validate parameter type
-                    if let Some(expected_type) = param_type {
-                        let actual_type = infer_value_type(&arg_val);
-                        if !types_compatible(expected_type, &actual_type) {
-                            panic!("Type error: function param {}: expected {:?}, got {:?}", name, expected_type, actual_type);
-                        }
-                    }
-
-                    fn_env.insert(param_name.clone(), (AssignKind::Var, arg_val));
-                }
-                
-                // Execute function body
-                let flow = execute_block(&fn_def.body, &mut fn_env, fns, fn_def.return_type.as_ref());
-                match flow {
-                    ControlFlow::Return(val) => val,
-                    _ => Value::Void,
-                }
-            } else if let Some(fn_def) = fns.get(name).cloned() {
-                // Create new scope for function
-                let mut fn_env: HashMap<String, (AssignKind, Value)> = HashMap::new();
-                let fn_arg_count = fn_def.params.len();
-                
-                // Bind parameters
-                for (i, (param_name, param_type)) in fn_def.params.iter().enumerate() {
-                    let arg_val = if i < args.len() {
-                        eval_expr(&args[i], env, fns)
-                    } else {
-                        panic!("Function {} expects {} arguments, got {}", name, fn_arg_count, args.len())
-                    };
-
-                    // Validate parameter type
-                    if let Some(expected_type) = param_type {
-                        let actual_type = infer_value_type(&arg_val);
-                        if !types_compatible(expected_type, &actual_type) {
-                            panic!("Type error: function param {}: expected {:?}, got {:?}", name, expected_type, actual_type);
-                        }
-                    }
-
-                    fn_env.insert(param_name.clone(), (AssignKind::Var, arg_val));
-                }
-                
-                // Execute function body
-                let flow = execute_block(&fn_def.body, &mut fn_env, fns, fn_def.return_type.as_ref());
-                match flow {
-                    ControlFlow::Return(val) => val,
-                    _ => Value::Void,
-                }
+            let fn_def = if let Some((_, Value::Function(fn_def), _ownership)) = env.get(name) {
+                fn_def.clone()
+            } else if let Some(fn_def) = fns.get(name) {
+                fn_def.clone()
             } else {
                 panic!("Unknown function: {}", name);
+            };
+
+            // Create new scope for function
+            let mut fn_env: HashMap<String, (AssignKind, Value, Ownership)> = HashMap::new();
+            let fn_arg_count = fn_def.params.len();
+            
+            // Bind parameters
+            for (i, (param_name, param_type)) in fn_def.params.iter().enumerate() {
+                let arg_val = if i < args.len() {
+                    eval_expr(&args[i], env, fns)
+                } else {
+                    panic!("Function {} expects {} arguments, got {}", name, fn_arg_count, args.len())
+                };
+
+                // Validate parameter type
+                if let Some(expected_type) = param_type {
+                    let actual_type = infer_value_type(&arg_val);
+                    if !types_compatible(expected_type, &actual_type) {
+                        panic!("Type error: function param {}: expected {:?}, got {:?}", name, expected_type, actual_type);
+                    }
+                }
+
+                fn_env.insert(param_name.clone(), (AssignKind::Var, arg_val, Ownership::Borrowed));
+            }
+            
+            // Execute function body
+            let flow = execute_block(&fn_def.body, &mut fn_env, fns, fn_def.return_type.as_ref());
+            match flow {
+                ControlFlow::Return(val) => val,
+                _ => Value::Void,
             }
         }
     }
@@ -393,7 +385,7 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value)>, fns: &mut
 
 fn execute_stmt(
     stmt: &Stmt,
-    env: &mut HashMap<String, (AssignKind, Value)>,
+    env: &mut HashMap<String, (AssignKind, Value, Ownership)>,
     fns: &mut HashMap<String, FnDef>,
     expected_return_type: Option<&Type>,
 ) -> ControlFlow {
@@ -415,7 +407,7 @@ fn execute_stmt(
             eval_expr(e, env, fns);
             ControlFlow::None
         }
-        Stmt::Assign { kind, declared_type, name, value } => {
+        Stmt::Assign { kind, declared_type, name, value, ownership} => {
             // Disallow function assignments for all variable types
             if let AssignKind::Var | AssignKind::Const = kind {
                 if let Expr::Var(fn_name) | Expr::Const(fn_name) = value {
@@ -443,15 +435,35 @@ fn execute_stmt(
 
             let _type = infer_expr_type(value, env, fns);
             let v = eval_expr(value, env, fns);
-            let actual_type = infer_value_type(&v);
+            let mut actual_type = infer_value_type(&v);
+            let mut normalized_declared_type = declared_type.clone();
 
-            if let Some(expected_type) = declared_type {
-                if !types_compatible(expected_type, &actual_type) {
+            normalized_declared_type = normalized_declared_type.map(|t| {
+                match ownership {
+                    Ownership::Owned => convert_ownership(t),
+                    Ownership::Borrowed => t,
+                }
+            });
+
+            match ownership {
+                Ownership::Borrowed => {
+                    // Value must be borrowable (&str, &[T], etc.)
+                    if *kind == AssignKind::Var && actual_type == Type::String {
+                        panic!("Cannot use '=' with String; use '<-' for owned assignment");
+                    }
+                }
+                Ownership::Owned => {
+                    actual_type = convert_ownership(actual_type);
+                }
+            }
+
+            if let Some(expected_type) = normalized_declared_type {
+                if !types_compatible(&expected_type, &actual_type) {
                     panic!("Type error: expected {:?}, got {:?}", expected_type, actual_type);
                 }
             }
 
-            env.insert(name.clone(), (kind.clone(), v));
+            env.insert(name.clone(), (kind.clone(), v, ownership.clone()));
             ControlFlow::None
         }
         Stmt::Reassign { name, value } => {
@@ -460,20 +472,25 @@ fn execute_stmt(
                 panic!("Variable '{}' not declared", name);
             }
 
-            let (kind, existing_val) = env.get(name).unwrap().clone();
+            let (kind, existing_val, ownership) = env.get(name).unwrap().clone();
             let existing_type = infer_value_type(&existing_val);
 
             match kind {
                 AssignKind::Var => {
                     let v = eval_expr(value, env, fns);
-                    let new_type = infer_value_type(&v);
+                    let actual_type = infer_value_type(&v);
 
-                    // Validate type matches original
-                    if !types_compatible(&existing_type, &new_type) {
-                        panic!("Type error: variable {} is {:?}, cannot assign {:?}", name, existing_type, new_type);
+                    // Only allow reassignment if value is mutable (owned)
+                    if ownership == Ownership::Borrowed && !is_copy_type(&actual_type) {
+                        panic!("Cannot reassign immutable borrowed value '{}'", name);
                     }
 
-                    env.insert(name.clone(), (kind.clone(), v));
+                    // Validate type matches original
+                    if !types_compatible(&existing_type, &actual_type) {
+                        panic!("Type error: variable {} is {:?}, cannot assign {:?}", name, existing_type, actual_type);
+                    }
+
+                    env.insert(name.clone(), (kind.clone(), v, ownership));
                     ControlFlow::None
                 }
                 kind => panic!("Cannot reassign for {}", match kind {
@@ -647,7 +664,7 @@ fn execute_stmt(
 
 fn execute_block(
     stmts: &[Stmt],
-    env: &mut HashMap<String, (AssignKind, Value)>,
+    env: &mut HashMap<String, (AssignKind, Value, Ownership)>,
     fns: &mut HashMap<String, FnDef>,
     expected_return_type: Option<&Type>,
 ) -> ControlFlow {
@@ -662,7 +679,7 @@ fn execute_block(
 }
 
 fn run(stmts: &[Stmt]) {
-    let mut env: HashMap<String, (AssignKind, Value)> = HashMap::new();
+    let mut env: HashMap<String, (AssignKind, Value, Ownership)> = HashMap::new();
     let mut fns: HashMap<String, FnDef> = HashMap::new();
 
     for stmt in stmts {

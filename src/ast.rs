@@ -3,7 +3,8 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     Number,
-    String,
+    String, // owned
+    Str, // borrowed
     Bool,
     Array(Box<Type>),
     Object(HashMap<String, Type>),
@@ -54,7 +55,7 @@ pub enum Expr {
 pub enum Stmt {
     Echo(Expr),
     Print(Expr),
-    Assign { kind: AssignKind, declared_type: Option<Type>, name: String, value: Expr },
+    Assign { kind: AssignKind, declared_type: Option<Type>, name: String, value: Expr, ownership: Ownership },
     Reassign { name: String, value: Expr },
     ExprStmt(Expr),
     If { 
@@ -89,6 +90,12 @@ pub enum AssignKind {
     Const,
     Lit,
     Static,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Ownership {
+    Borrowed,
+    Owned,
 }
 
 #[derive(Debug, Clone, PartialEq)]
