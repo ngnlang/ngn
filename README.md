@@ -275,6 +275,22 @@ fn doThing()
 end
 ```
 
+By default, function parameters are borrowed. If you want to transfer a borrowed variable to owned, use the `<` syntax.
+
+```ngn
+fn doThing(v: <string) // param must be owned.
+  print(v)
+end
+
+var thing = "hello" // create borrowed variable.
+
+doThing(thing) ❌ // cannot pass a borrowed variable to a function that expects one that's owned.
+
+doThing(<thing) ✅ // move borrowed variable to owned.
+
+print(thing) ❌ // can no longer access `thing` after moving it.
+```
+
 ### Types
 
 - `string`
