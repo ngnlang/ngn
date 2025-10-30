@@ -23,6 +23,12 @@ pub enum Value {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum CallArg {
+    Normal(Box<Expr>),
+    Owned(Box<Expr>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Number(f64),
     String(String),
@@ -48,7 +54,7 @@ pub enum Expr {
     Const(String),
     Lit(String),
     Static(String),
-    Call { name: String, args: Vec<Expr> },
+    Call { name: String, args: Vec<CallArg> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -77,7 +83,7 @@ pub enum Stmt {
     Next,
     FnDef {
         name: String,
-        params: Vec<(String, Option<Type>)>,
+        params: Vec<(String, Option<Type>, Ownership)>,
         return_type: Option<Type>,
         body: Vec<Stmt>,
     },
@@ -114,7 +120,7 @@ pub enum MatchType {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FnDef {
-    pub params: Vec<(String, Option<Type>)>,
+    pub params: Vec<(String, Option<Type>, Ownership)>,
     pub body: Vec<Stmt>,
     pub return_type: Option<Type>,
 }

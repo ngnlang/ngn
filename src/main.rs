@@ -2,7 +2,7 @@ mod ast;
 mod lexer;
 
 use std::fs;
-use crate::ast::{FnDef, Ownership, Type};
+use crate::ast::{CallArg, FnDef, Ownership, Type};
 
 lalrpop_mod!(pub ngn);
 
@@ -200,6 +200,14 @@ fn convert_ownership(t: Type) -> Type {
     }
 }
 
+fn convert_value_ownership(v: Value) -> Value {
+    match v {
+        Value::String(s) => Value::String(s),
+        Value::Array(arr) => Value::Array(arr),
+        other => other,
+    }
+}
+
 fn is_copy_type(t: &Type) -> bool {
     matches!(t, Type::Number | Type::Bool)
 }
@@ -355,9 +363,37 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value, Ownership)>
             let fn_arg_count = fn_def.params.len();
             
             // Bind parameters
-            for (i, (param_name, param_type)) in fn_def.params.iter().enumerate() {
+            for (i, (param_name, param_type, param_ownership)) in fn_def.params.iter().enumerate() {
+                let call_arg = &args[i];
+                let call_ownership = match call_arg {
+                    CallArg::Normal(e) => {
+                        // Check if the expression is a variable we know about
+                        if let Expr::Var(var_name) = e.as_ref() {
+                            if let Some((_, _, var_ownership)) = env.get(var_name) {
+                                var_ownership.clone()
+                            } else {
+                                Ownership::Borrowed
+                            }
+                        } else {
+                            Ownership::Borrowed
+                        }
+                    },
+                    CallArg::Owned(_) => Ownership::Owned,
+                };
+
+                // Can not upgrade from Borrowed to Owned
+                if *param_ownership == Ownership::Owned && call_ownership == Ownership::Borrowed {
+                    panic!("Function {} param '{}' expects owned, but got borrowed", name, param_name);
+                }
+                
                 let arg_val = if i < args.len() {
-                    eval_expr(&args[i], env, fns)
+                    match &args[i] {
+                        CallArg::Normal(e) => eval_expr(e, env, fns),
+                        CallArg::Owned(e) => {
+                            let v = eval_expr(e, env, fns);
+                            convert_value_ownership(v)
+                        }
+                    }
                 } else {
                     panic!("Function {} expects {} arguments, got {}", name, fn_arg_count, args.len())
                 };
@@ -370,7 +406,12 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value, Ownership)>
                     }
                 }
 
-                fn_env.insert(param_name.clone(), (AssignKind::Var, arg_val, Ownership::Borrowed));
+                let ownership = match &args[i] {
+                    CallArg::Normal(_) => Ownership::Borrowed,
+                    CallArg::Owned(_) => Ownership::Owned,
+                };
+
+                fn_env.insert(param_name.clone(), (AssignKind::Var, arg_val, ownership));
             }
             
             // Execute function body

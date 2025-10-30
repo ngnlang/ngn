@@ -135,7 +135,7 @@ FnBody: Vec<Stmt> = {
     <stmts:StatementLine*> => stmts,
 };
 
-FnParams: Vec<(String, Option<Type>)> = {
+FnParams: Vec<(String, Option<Type>, Ownership)> = {
     <first:FnParam> <rest:(Comma <FnParam>)*> => {
         let mut all = vec![first];
         all.extend(rest);
@@ -143,12 +143,17 @@ FnParams: Vec<(String, Option<Type>)> = {
     },
 };
 
-FnParam: (String, Option<Type>) = {
-    <name:Ident> <ty:TypeAnnotation?> => (name, ty),
+FnParam: (String, Option<Type>, Ownership) = {
+    <name:Ident> <ty:TypeAnnotation?> => {
+        match ty {
+            Some((t, ownership)) => (name, Some(t), ownership),
+            None => (name, None, Ownership::Borrowed),  // Default to borrowed if no type
+        }
+    },
 };
 
 FnReturnType: Type = {
-    Colon <t:TypeName> => t,
+    Colon <t:TypeName> => t.0,  // Extract just the type, ignore ownership
 };
 
 ReturnStmt: Stmt = {
@@ -351,9 +356,10 @@ MatchDefault: Vec<Stmt> = {
 
 AssignStmt: Stmt = {
     <kind:AssignKind> <name:Ident> <ty:TypeAnnotation?> <ownership:AssignOp> <value:Expr> => {
+        let declared_type = ty.map(|(t, _)| t);  // Extract just the type
         Stmt::Assign {
             kind,
-            declared_type: ty,
+            declared_type,
             name,
             value,
             ownership
@@ -465,16 +471,21 @@ Factor: Expr = {
     LParen <_nl:Newline*> <e:Expr> <_nl2:Newline*> RParen => e,
 };
 
-FnCallArgList: Vec<Expr> = {
-    <_nl:Newline*> <first:Expr> <rest:FnCallArg*> => {
+FnCallArgList: Vec<CallArg> = {
+    <_nl:Newline*> <first:FnCallArgItem> <rest:FnCallArg*> => {
         let mut all = vec![first];
         all.extend(rest);
         all
     },
 };
 
-FnCallArg: Expr = {
-    Comma <_nl:Newline*> <e:Expr> <_nl2:Newline*> => e,
+FnCallArg: CallArg = {
+    Comma <item:FnCallArgItem> => item,
+};
+
+FnCallArgItem: CallArg = {
+    Less <e:Expr> <_nl2:Newline*> => CallArg::Owned(Box::new(e)),
+    <e:Expr> <_nl2:Newline*> => CallArg::Normal(Box::new(e)),
 };
 
 Number: Expr = {
@@ -534,26 +545,31 @@ PowerOp: String = {
     Caret => "^".to_string(),
 };
 
-TypeAnnotation: Type = {
+TypeAnnotation: (Type, Ownership) = {
     Colon <t:TypeName> => t,
 };
 
-TypeName: Type = {
-    <s:"Ident"> => {
-        match s.as_str() {
+TypeName: (Type, Ownership) = {
+    <owned:Less?> <s:"Ident"> => {
+        let base_type = match s.as_str() {
             "number" => Type::Number,
             "string" => Type::Str,
             "bool" => Type::Bool,
             "array" => Type::Array(Box::new(Type::Number)),
             "void" => Type::Void,
             _ => panic!("Unknown type: {}", s),
-        }
+        };
+        let ownership = if owned.is_some() { Ownership::Owned } else { Ownership::Borrowed };
+        (base_type, ownership)
     },
-    <s:"Ident"> Less <inner:TypeName> Greater => {
-        match s.as_str() {
-            "array" => Type::Array(Box::new(inner)),
+    <owned:Less?> <s:"Ident"> Less <inner:TypeName> Greater => {
+        let inner_type = inner.0;  // Extract type from tuple
+        let base_type = match s.as_str() {
+            "array" => Type::Array(Box::new(inner_type)),
             _ => panic!("Unknown parameterized type: {}", s),
-        }
+        };
+        let ownership = if owned.is_some() { Ownership::Owned } else { Ownership::Borrowed };
+        (base_type, ownership)
     },
 };
 
