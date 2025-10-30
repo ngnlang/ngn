@@ -23,12 +23,6 @@ pub enum Value {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum CallArg {
-    Normal(Box<Expr>),
-    Owned(Box<Expr>),
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Number(f64),
     String(String),
@@ -54,7 +48,7 @@ pub enum Expr {
     Const(String),
     Lit(String),
     Static(String),
-    Call { name: String, args: Vec<CallArg> },
+    Call { name: String, args: Vec<Expr> },
 }
 
 #[derive(Debug, Clone, PartialEq)]

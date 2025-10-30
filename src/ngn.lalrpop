@@ -471,21 +471,16 @@ Factor: Expr = {
     LParen <_nl:Newline*> <e:Expr> <_nl2:Newline*> RParen => e,
 };
 
-FnCallArgList: Vec<CallArg> = {
-    <_nl:Newline*> <first:FnCallArgItem> <rest:FnCallArg*> => {
+FnCallArgList: Vec<Expr> = {
+    <_nl:Newline*> <first:Expr> <rest:FnCallArg*> => {
         let mut all = vec![first];
         all.extend(rest);
         all
     },
 };
 
-FnCallArg: CallArg = {
-    Comma <item:FnCallArgItem> => item,
-};
-
-FnCallArgItem: CallArg = {
-    Less <e:Expr> <_nl2:Newline*> => CallArg::Owned(Box::new(e)),
-    <e:Expr> <_nl2:Newline*> => CallArg::Normal(Box::new(e)),
+FnCallArg: Expr = {
+    Comma <_nl:Newline*> <e:Expr> <_nl2:Newline*> => e,
 };
 
 Number: Expr = {
