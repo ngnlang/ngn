@@ -15,18 +15,18 @@ ngn follows in the footsteps of Rust's ownership model, but tries to make it eas
 
 | keyword | scope | binding | value | ownership | example | type |
 |-------|-------|-------|-------|-------|-------|-------|
-| var | local | mutable | immutable | borrowed | `var x = "hello"` | &string |
+| var | local | mutable | immutable | borrowed | `var x = "hello"` | string |
 | var | local | mutable | mutable | owned | `var z <- "world"` | string |
-| const | local | immutable | immutable | borrowed | `const status = "go"` | &string |
-| lit | global | immutable | immutable | borrowed | `lit VERSION = "2"` | &string |
-| static | global | immutable | immutable | borrowed | `static DATA = [1..=1000]` | &[i32] |
+| const | local | immutable | immutable | borrowed | `const status = "go"` | string |
+| lit | global | immutable | immutable | borrowed | `lit VERSION = "2"` | string |
+| static | global | immutable | immutable | borrowed | `static DATA = [1..=1000]` | [i32] |
 
 > The `static` example uses psuedocode to mimic creating an array of numbers from 1 to 1000, inclusively.
 
 ### `var`
 
 ```ngn
-var x = "hello" // declares `x` as a borrowed `&string`
+var x = "hello" // declares `x` as a borrowed `string`
 x = "hello!" ❌ // value is immutable since it's borrowed
 rebind x = "goodbye" ✅ // is rebindable, which allows you to change the value
 ```
@@ -36,15 +36,13 @@ x = "hello!!" ✅ // value is mutable since it's owned
 rebind x = "goodbye" ✅ // is rebindable
 ```
 ```ngn
-var x = "hello" // borrowed `&string`
+var x = "hello" // borrowed `string`
 
 fn doThing(thing: string) // requires owned string
   // consume thing
 end
 
-doThing(<-x) // use `<-` to convert and pass to doThing as an owned `string`
-
-print(x) ❌ // can no longer use `x` in this context
+doThing(x) ❌ // cannot use a borrowed arg for a function that expects an owned param
 ```
 ```ngn
 model User {
@@ -58,12 +56,12 @@ var user <- User {
   role: "Developer"
 }
 
-fn readUser(u: &User)
+fn readUser(u: User)
   // only read u, cannot consume
 end
 
-// Pass `user` as borrowed with `&`
-readUser(&user)
+// Pass `user` as borrowed
+readUser(user)
 
 // can still do things with `user` here
 ```
@@ -76,13 +74,13 @@ x = "hello!!" ❌ // value is immutable since it's borrowed
 rebind x = "goodbye" ❌ // is not rebindable since it's a constant
 ```
 ```ngn
-const x = "hello" // borrowed `&string`
+const x <- "hello" // owned `string`
 
-fn doThing(thing: string) // requires owned string
+fn doThing(thing: <string) // requires owned string, using `<` syntax
   // consume thing
 end
 
-doThing(<-x) // use `<-` to convert and pass to doThing as an owned `string`
+doThing(x) ✅
 
 print(x) ❌ // can no longer use `x` in this context
 ```
@@ -273,22 +271,6 @@ fn add(a, b) a + b
 fn doThing()
   print("something")
 end
-```
-
-By default, function parameters are borrowed. If you want to transfer a borrowed variable to owned, use the `<` syntax.
-
-```ngn
-fn doThing(v: <string) // param must be owned.
-  print(v)
-end
-
-var thing = "hello" // create borrowed variable.
-
-doThing(thing) ❌ // cannot pass a borrowed variable to a function that expects one that's owned.
-
-doThing(<thing) ✅ // move borrowed variable to owned.
-
-print(thing) ❌ // can no longer access `thing` after moving it.
 ```
 
 ### Types
