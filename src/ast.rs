@@ -57,6 +57,7 @@ pub enum Stmt {
     Print(Expr),
     Assign { kind: AssignKind, declared_type: Option<Type>, name: String, value: Expr, ownership: Ownership },
     Reassign { name: String, value: Expr },
+    Rebind { name: String, value: Expr },
     ExprStmt(Expr),
     If { 
         condition: Expr, 

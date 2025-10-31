@@ -537,6 +537,23 @@ fn execute_stmt(
                 })
             }
         }
+        Stmt::Rebind { name, value } => {
+            let (kind, ownership) = if let Some((k, _, o, moved)) = env.get(name) {
+                if *k != AssignKind::Var {
+                    panic!("Can only rebind var, not {:?}", k);
+                }
+                if *moved {
+                    panic!("Cannot rebind moved variable '{}'", name);
+                }
+                (k.clone(), o.clone())
+            } else {
+                panic!("Cannot rebind undefined variable '{}'", name);
+            };
+            
+            let v = eval_expr(value, env, fns);
+            env.insert(name.clone(), (kind, v, ownership, false));
+            ControlFlow::None
+        }
         Stmt::Break => ControlFlow::Break,
         Stmt::Next => ControlFlow::Next,
         Stmt::If { condition, then_block, else_ifs, else_block } => {

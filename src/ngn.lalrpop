@@ -12,6 +12,7 @@ extern {
         Const => Token::Const,
         Lit => Token::Lit,
         Static => Token::Static,
+        Rebind => Token::Rebind,
         If => Token::If,
         Not => Token::Not,
         While => Token::While,
@@ -209,6 +210,7 @@ SimpleStatement: Stmt = {
     PrintStmt,
     AssignStmt,
     ReassignStmt,
+    RebindStmt,
     ExprStmt,
 };
 
@@ -385,6 +387,12 @@ AssignOp: Ownership = {
     Eq => Ownership::Borrowed,
     LArrow => Ownership::Owned,
 }
+
+RebindStmt: Stmt = {
+    Rebind <name:Ident> Eq <value:Expr> => {
+        Stmt::Rebind { name, value }
+    },
+};
 
 Expr: Expr = {
     <name:Ident> <op:CompoundOp> <value:Expr> => {
