@@ -204,7 +204,7 @@ you can do
 if not (browser) print("not browser")
 ```
 
-### `match one`
+### `match`
 Match a value (Number, String, Boolean) against one test case. Optionally provide a default case.
 
 If a match is found:
@@ -213,13 +213,10 @@ If a match is found:
 
 ```
 const value = 3
-match one (value)
-  : 1
-    statement
-  : 2 || 3
-    statement
-  : 
-    statement
+match (value)
+  1 => statement
+  2 || 3 => statement
+  => statement
 end
 ```
 
@@ -232,12 +229,11 @@ If a match is found:
 
 ```
 match any (value)
-  : test
+  test => statement
+  test1 || test2 =>
     statement
-  : test1 || test2
     statement
-  : 
-    statement
+  => statement
 end
 ```
 
