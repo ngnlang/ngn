@@ -38,7 +38,7 @@ rebind x = "goodbye" ✅ // is rebindable
 ```ngn
 var x = "hello" // borrowed `string`
 
-fn doThing(thing: string) // requires owned string
+fn doThing(thing: <string) // requires owned string via `<` prefix
   // consume thing
 end
 
