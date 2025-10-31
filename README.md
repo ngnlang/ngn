@@ -28,7 +28,7 @@ ngn follows in the footsteps of Rust's ownership model, but tries to make it eas
 ```ngn
 var x = "hello" // declares `x` as a borrowed `string`
 x = "hello!" ❌ // value is immutable since it's borrowed
-rebind x = "goodbye" ✅ // is rebindable, which allows you to change the value
+rebind x = 0 ✅ // is rebindable, which allows you to change the value and type
 ```
 ```ngn
 var x <- "hello" // declares `x` as an owned `string`
@@ -57,7 +57,7 @@ var user <- User {
 }
 
 fn readUser(u: User)
-  // only read u, cannot consume
+  // only read u, not consume
 end
 
 // Pass `user` as borrowed
