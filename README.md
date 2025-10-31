@@ -60,7 +60,8 @@ fn readUser(u: User)
   // only read u, not consume
 end
 
-// Pass `user` as borrowed
+// Can pass an owned variable to a function that expects a borrowed param
+// ngn handles this for you
 readUser(user)
 
 // can still do things with `user` here
@@ -69,14 +70,14 @@ readUser(user)
 ### `const`
 
 ```ngn
-const x = "hello" // declare x as a borrowed `&string`
+const x = "hello" // declare x as a borrowed `string`
 x = "hello!!" ❌ // value is immutable since it's borrowed
 rebind x = "goodbye" ❌ // is not rebindable since it's a constant
 ```
 ```ngn
 const x <- "hello" // owned `string`
 
-fn doThing(thing: <string) // requires owned string, using `<` syntax
+fn doThing(thing: <string) // requires an owned string, using `<` syntax
   // consume thing
 end
 
