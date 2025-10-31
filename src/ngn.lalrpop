@@ -17,7 +17,6 @@ extern {
         While => Token::While,
         Until => Token::Until,
         Match => Token::Match,
-        One => Token::One,
         Any => Token::Any,
         Once => Token::Once,
         Echo => Token::Echo,
@@ -29,6 +28,7 @@ extern {
         End => Token::End,
         Newline => Token::Newline,
         Return => Token::Return,
+        ShortReturn => Token::ShortReturn,
         Fn => Token::Fn,
         
         StarStar => Token::StarStar,
@@ -310,7 +310,7 @@ MatchStmt: Stmt = {
 };
 
 MatchOne: Stmt = {
-    Match One LParen <expr:Expr> RParen Newline <cases:MatchCase*> <default:MatchDefault?> End => {
+    Match LParen <expr:Expr> RParen Newline <cases:MatchCase*> <default:MatchDefault?> End => {
         Stmt::Match {
             expr,
             cases,
@@ -332,7 +332,8 @@ MatchAny: Stmt = {
 };
 
 MatchCase: (Vec<Expr>, Vec<Stmt>) = {
-    Colon <tests:MatchTest> Newline <body:StatementLine+> => (tests, body),
+    <tests:MatchTest> ShortReturn Newline <body:StatementLine+> => (tests, body),
+    <tests:MatchTest> ShortReturn <body:StatementLine> => (tests, vec![body]),
 };
 
 MatchTest: Vec<Expr> = {
@@ -351,7 +352,7 @@ MatchLiteral: Expr = {
 };
 
 MatchDefault: Vec<Stmt> = {
-    Colon Newline? <body:IfBody> Newline => body,
+    ShortReturn Newline? <body:IfBody> Newline => body,
 };
 
 AssignStmt: Stmt = {

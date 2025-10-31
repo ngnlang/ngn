@@ -635,18 +635,10 @@ fn execute_stmt(
             let mut matched = false;
             
             for (tests, stmts) in cases {
-                // For match any, continue if we already matched
-                if *match_type == MatchType::Any && matched {
-                    let flow = execute_block(stmts, env, fns, None);
-                    if flow == ControlFlow::Break {
-                        return ControlFlow::None;
-                    }
-                    continue;
-                }
-                
                 for test in tests {
                     let _test_type = infer_expr_type(test, env, fns);
                     let test_val = eval_expr(test, env, fns);
+
                     if values_equal(&val, &test_val) {
                         matched = true;
                         let flow = execute_block(stmts, env, fns, None);
@@ -663,8 +655,12 @@ fn execute_stmt(
             }
             
             // No match found, execute default if it exists
-            if let Some(default_stmts) = default {
-                execute_block(default_stmts, env, fns, None)
+            if !matched || *match_type == MatchType::Any {
+                if let Some(default_stmts) = default {
+                    execute_block(default_stmts, env, fns, None)
+                } else {
+                    ControlFlow::None
+                }
             } else {
                 ControlFlow::None
             }
