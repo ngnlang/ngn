@@ -132,6 +132,15 @@ print("World")
 // World
 ```
 
+### String Interpolation
+```ngn
+const x = 5
+print("x plus 1 is {x + 1}")
+
+const greeting = "world"
+print("Hello, {greeting}!")
+```
+
 ### `while`
 Run the statement block while the condition is true. Not guaranteed to run at all.
 ```ngn
