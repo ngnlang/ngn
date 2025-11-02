@@ -166,8 +166,22 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
                         chars.next();
                         break;
                     }
-                    string.push(*c);
-                    chars.next();
+                    if *c == '\\' {
+                        chars.next();  // consume backslash
+                        if let Some((_, next_c)) = chars.peek() {
+                            match *next_c {
+                                'n' => { string.push('\n'); chars.next(); }
+                                't' => { string.push('\t'); chars.next(); }
+                                'r' => { string.push('\r'); chars.next(); }
+                                '\\' => { string.push('\\'); chars.next(); }
+                                '"' => { string.push('"'); chars.next(); }
+                                _ => string.push(*next_c),
+                            }
+                        }
+                    } else {
+                        string.push(*c);
+                        chars.next();
+                    }
                 }
                 let end = chars.peek().map(|(i, _)| *i).unwrap_or(input.len());
                 tokens.push((start, Token::String(string), end));
