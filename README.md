@@ -38,9 +38,9 @@ rebind x = "goodbye" ✅ // is rebindable
 ```ngn
 var x = "hello" // borrowed `string`
 
-fn doThing(thing: <string) // requires owned string via `<` prefix
+fn doThing(thing: <string) { // requires owned string via `<` prefix
   // consume thing
-end
+}
 
 doThing(x) ❌ // cannot use a borrowed arg for a function that expects an owned param
 ```
@@ -56,9 +56,9 @@ var user <- User {
   role: "Developer"
 }
 
-fn readUser(u: User)
+fn readUser(u: User) {
   // only read u, not consume
-end
+}
 
 // Can pass an owned variable to a function that expects a borrowed param
 // ngn handles this for you
@@ -77,9 +77,9 @@ rebind x = "goodbye" ❌ // is not rebindable since it's a constant
 ```ngn
 const x <- "hello" // owned `string`
 
-fn doThing(thing: <string) // requires an owned string, using `<` syntax
+fn doThing(thing: <string) { // requires an owned string, using `<` syntax
   // consume thing
-end
+}
 
 doThing(x) ✅
 
@@ -135,10 +135,10 @@ print("World")
 ### `while`
 Run the statement block while the condition is true. Not guaranteed to run at all.
 ```ngn
-while (condition)
+while (condition) {
   statement
   statement
-end
+}
 ```
 
 Can be inlined if only using a single statement.
@@ -149,18 +149,18 @@ while (condition) statement
 #### `once` variant
 To always run the statement block once, before checking the condition.
 ```ngn
-while once (condition)
+while once (condition) {
   statement
-end
+}
 ```
 
 ### `until`
 Run the statement block until the condition is true. Not guaranteed to run at all.
 ```ngn
-until (condition)
+until (condition) {
   statement
   statement
-end
+}
 ```
 
 Can be inlined if only using a single statement.
@@ -171,21 +171,22 @@ until (condition) statement
 #### `once` variant
 To always run the statement block once, before checking the condition.
 ```ngn
-until once (condition)
+until once (condition) {
   statement
-end
+}
 ```
 
 ### `if`
 ```ngn
-if (condition)
-  statement
-  statement
-: (condition)
-  statement
-:
-  statement
-end
+if {
+  (condition)
+    statement
+    statement
+  : (condition)
+    statement
+  :
+    statement
+}
 ```
 
 Can also be inlined:
@@ -214,11 +215,11 @@ If a match is found:
 
 ```
 const value = 3
-match (value)
+match (value) {
   1 => statement
   2 || 3 => statement
   => statement
-end
+}
 ```
 
 ### `match any`
@@ -229,13 +230,13 @@ If a match is found:
 - other cases are also checked, including default, unless a matched statement block contains the `break` keyword.
 
 ```
-match any (value)
+match any (value) {
   test => statement
   test1 || test2 =>
     statement
     statement
   => statement
-end
+}
 ```
 
 ### `fn`
@@ -243,19 +244,19 @@ You can write functions in various ways; along with passing them as arguments to
 
 #### Traditional block, explicit return
 ```ngn
-fn add(a, b)
+fn add(a, b) {
   return a + b
-end
+}
 ```
 
 #### Traditional block, explicit multiline return
 ```ngn
-fn add(a, b)
+fn add(a, b) {
   return (
     a + 
     b
   )
-end
+}
 ```
 
 #### Implicit return
@@ -265,9 +266,9 @@ fn add(a, b) a + b
 
 #### Side-effects only
 ```ngn
-fn doThing()
+fn doThing() {
   print("something")
-end
+}
 ```
 
 ### Types
@@ -288,9 +289,9 @@ var truth: boolean = false
 const things: array = [1, 2, 3]
 const stuff: array<string> = ["shirt", "hat", "coat"]
 
-fn sideEffects(): void
+fn sideEffects(): void {
   // do something
-end
+}
 ```
 
 #### implicit
@@ -302,7 +303,7 @@ const answer = 42 // inferred to `number`
 
 const result = 3 + 2 // `result` inferred as `number`
 
-fn add(a: number, b: number): number
+fn add(a: number, b: number): number {
   return a + b // inferred as numbers
-end
+}
 ```
