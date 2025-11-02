@@ -60,6 +60,7 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Number(x), Value::Number(y)) => x == y,
         (Value::String(x), Value::String(y)) => x == y,
         (Value::Bool(x), Value::Bool(y)) => x == y,
+        (Value::Array(x), Value::Array(y)) => x == y,
         _ => false,
     }
 }
