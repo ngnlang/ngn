@@ -26,7 +26,6 @@ extern {
         Next => Token::Next,
         True => Token::True,
         False => Token::False,
-        End => Token::End,
         Newline => Token::Newline,
         Return => Token::Return,
         ShortReturn => Token::ShortReturn,
@@ -108,7 +107,7 @@ PrintStmt: Stmt = {
 };
 
 FnDefStmt: Stmt = {
-    Fn <name:Ident> LParen <params:FnParams?> RParen <return_type:FnReturnType?> <_nl:Newline> <body:FnBody> End => {       
+    Fn <name:Ident> LParen <params:FnParams?> RParen <return_type:FnReturnType?> LBrace <_nl:Newline> <body:FnBody> RBrace => {       
         Stmt::FnDef {
             name,
             params: params.unwrap_or_default(),
@@ -180,7 +179,7 @@ IfStmt: Stmt = {
             else_block: else_clause,
         }
     },
-    If <negated:Not?> LParen <cond:Expr> RParen <_nl:Newline> <then_body:IfBodyMultiLine> <else_ifs:ElseIfClauseMultiLine*> <else_clause:ElseClauseMultiLine?> End => {
+    If LBrace <_nl:Newline> <negated:Not?> LParen <cond:Expr> RParen <_nl2:Newline*> <then_body:IfBodyMultiLine> <else_ifs:ElseIfClauseMultiLine*> <else_clause:ElseClauseMultiLine?> RBrace => {
         let condition = if negated.is_some() {
             crate::ast::Expr::Not(Box::new(cond))
         } else {
@@ -214,6 +213,10 @@ SimpleStatement: Stmt = {
     ExprStmt,
 };
 
+IfElseClauses: (Vec<(Expr, Vec<Stmt>)>, Option<Vec<Stmt>>) = {
+    <else_ifs:ElseIfClauseSingleLine*> <else_clause:ElseClauseSingleLine?> => (else_ifs, else_clause)
+};
+
 ElseIfClauseSingleLine: (Expr, Vec<Stmt>) = {
     Colon <negated:Not?> LParen <cond:Expr> RParen <body:IfBodySingleLine> => {
         let condition = if negated.is_some() {
@@ -237,7 +240,7 @@ ElseIfClauseMultiLine: (Expr, Vec<Stmt>) = {
 };
 
 ElseClauseSingleLine: Vec<Stmt> = {
-    Colon <body:IfBodySingleLine> => body,
+   Colon <_nl:Newline*> <body:IfBodySingleLine> => body,
 };
 
 ElseClauseMultiLine: Vec<Stmt> = {
@@ -258,7 +261,7 @@ WhileStmt: Stmt = {
     While LParen <cond:Expr> RParen <body:WhileBodySingleLine> <_nl:Newline> => {
         Stmt::While { condition: cond, body }
     },
-    While LParen <cond:Expr> RParen <_nl:Newline> <body:WhileBodyMultiLine> End => {
+    While LParen <cond:Expr> RParen LBrace <_nl:Newline> <body:WhileBodyMultiLine> RBrace => {
         Stmt::While { condition: cond, body }
     },
 };
@@ -267,7 +270,7 @@ WhileOnceStmt: Stmt = {
     While Once LParen <cond:Expr> RParen <body:WhileBodySingleLine> <_nl:Newline> => {
         Stmt::WhileOnce { condition: cond, body }
     },
-    While Once LParen <cond:Expr> RParen <_nl:Newline> <body:WhileBodyMultiLine> End => {
+    While Once LParen <cond:Expr> RParen LBrace <_nl:Newline> <body:WhileBodyMultiLine> RBrace => {
         Stmt::WhileOnce { condition: cond, body }
     },
 };
@@ -284,7 +287,7 @@ UntilStmt: Stmt = {
     Until LParen <cond:Expr> RParen <body:UntilBodySingleLine> <_nl:Newline> => {
         Stmt::Until { condition: cond, body }
     },
-    Until LParen <cond:Expr> RParen <_nl:Newline> <body:UntilBodyMultiLine> End => {
+    Until LParen <cond:Expr> RParen LBrace <_nl:Newline> <body:UntilBodyMultiLine> RBrace => {
         Stmt::Until { condition: cond, body }
     },
 };
@@ -293,7 +296,7 @@ UntilOnceStmt: Stmt = {
     Until Once LParen <cond:Expr> RParen <body:UntilBodySingleLine> <_nl:Newline> => {
         Stmt::UntilOnce { condition: cond, body }
     },
-    Until Once LParen <cond:Expr> RParen <_nl:Newline> <body:UntilBodyMultiLine> End => {
+    Until Once LParen <cond:Expr> RParen LBrace <_nl:Newline> <body:UntilBodyMultiLine> RBrace => {
         Stmt::UntilOnce { condition: cond, body }
     },
 };
@@ -312,7 +315,7 @@ MatchStmt: Stmt = {
 };
 
 MatchOne: Stmt = {
-    Match LParen <expr:Expr> RParen Newline <cases:MatchCase*> <default:MatchDefault?> End => {
+    Match LParen <expr:Expr> RParen LBrace Newline <cases:MatchCase*> <default:MatchDefault?> RBrace => {
         Stmt::Match {
             expr,
             cases,
@@ -323,7 +326,7 @@ MatchOne: Stmt = {
 };
 
 MatchAny: Stmt = {
-    Match Any LParen <expr:Expr> RParen Newline <cases:MatchCase*> <default:MatchDefault?> End => {
+    Match Any LParen <expr:Expr> RParen LBrace Newline <cases:MatchCase*> <default:MatchDefault?> RBrace => {
         Stmt::Match {
             expr,
             cases,
