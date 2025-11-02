@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::lexer::Token;
+use crate::parse_interpolated_string;
 
 grammar;
 
@@ -397,7 +398,7 @@ RebindStmt: Stmt = {
     },
 };
 
-Expr: Expr = {
+pub Expr: Expr = {
     <name:Ident> <op:CompoundOp> <value:Expr> => {
         let expanded = match op.as_str() {
             "+=" => Expr::Add(Box::new(Expr::Var(name.clone())), Box::new(value)),
@@ -500,7 +501,14 @@ Number: Expr = {
 };
 
 String: Expr = {
-    <s:"String"> => crate::ast::Expr::String(s),
+    <s:"String"> => {
+        if s.contains('{') {
+            let parts = parse_interpolated_string(&s).unwrap();
+            crate::ast::Expr::InterpolatedString(parts)
+        } else {
+            crate::ast::Expr::String(s)
+        }
+    }
 };
 
 Bool: Expr = {

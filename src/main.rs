@@ -2,7 +2,7 @@ mod ast;
 mod lexer;
 
 use std::fs;
-use crate::ast::{FnDef, Ownership, Type};
+use crate::ast::{FnDef, InterpolationPart, Ownership, Type};
 
 lalrpop_mod!(pub ngn);
 
@@ -33,6 +33,68 @@ fn format_value(v: &Value) -> String {
         Value::Function(_) => "<function>".to_string(),
         Value::Void => "".to_string(),
     }
+}
+
+fn parse_expression_from_string(expr_str: &str) -> Result<Expr, String> {
+    let tokens = crate::lexer::tokenize(expr_str);
+    // tokens is already Vec<(usize, Token, usize)>, so just pass it directly
+    
+    ngn::ExprParser::new()
+        .parse(tokens.into_iter())
+        .map_err(|e| format!("Failed to parse interpolated expression: {}", e))
+}
+
+fn parse_interpolated_string(s: &str) -> Result<Vec<InterpolationPart>, String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut chars = s.chars().peekable();
+    
+    while let Some(c) = chars.next() {
+        if c == '{' {
+            if !current.is_empty() {
+                parts.push(InterpolationPart::Literal(current.clone()));
+                current.clear();
+            }
+            
+            let mut expr_str = String::new();
+            let mut brace_depth = 1;
+            while let Some(c) = chars.next() {
+                if c == '{' {
+                    brace_depth += 1;
+                    expr_str.push(c);
+                } else if c == '}' {
+                    brace_depth -= 1;
+                    if brace_depth == 0 { break; }
+                    expr_str.push(c);
+                } else {
+                    expr_str.push(c);
+                }
+            }
+            
+            // Parse the expression!
+            let expr = parse_expression_from_string(&expr_str)?;
+            parts.push(InterpolationPart::Expression(Box::new(expr)));
+        } else if c == '\\' {
+            if let Some(next) = chars.next() {
+                match next {
+                    'n' => current.push('\n'),
+                    't' => current.push('\t'),
+                    'r' => current.push('\r'),
+                    '\\' => current.push('\\'),
+                    '"' => current.push('"'),
+                    _ => current.push(next),
+                }
+            }
+        } else {
+            current.push(c);
+        }
+    }
+    
+    if !current.is_empty() {
+        parts.push(InterpolationPart::Literal(current));
+    }
+    
+    Ok(parts)
 }
 
 fn is_truthy(v: &Value) -> bool {
@@ -95,6 +157,7 @@ fn infer_expr_type(e: &Expr, env: &HashMap<String, (AssignKind, Value, Ownership
     match e {
         Expr::Number(_) => Type::Number,
         Expr::String(_) => Type::Str,
+        Expr::InterpolatedString(_) => Type::String,
         Expr::Bool(_) => Type::Bool,
         Expr::Array(exprs) => {
             if exprs.is_empty() {
@@ -221,6 +284,24 @@ fn is_copy_type(t: &Type) -> bool {
 fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value, Ownership, bool)>, fns: &mut HashMap<String, FnDef>) -> Value {
     match e {
         Expr::Number(n) => Value::Number(*n),
+        Expr::InterpolatedString(parts) => {
+            let mut result = String::new();
+            for part in parts {
+                match part {
+                    InterpolationPart::Literal(s) => result.push_str(s),
+                    InterpolationPart::Expression(expr) => {
+                        let val = eval_expr(expr, env, fns);
+                        match val {
+                            Value::String(s) => result.push_str(&s),
+                            Value::Number(n) => result.push_str(&n.to_string()),
+                            Value::Bool(b) => result.push_str(&b.to_string()),
+                            _ => result.push_str(&format!("{:?}", val)),
+                        }
+                    }
+                }
+            }
+            Value::String(result)
+        },
         Expr::String(s) => Value::String(s.clone()),
         Expr::Bool(b) => Value::Bool(*b),
         Expr::Array(exprs) => {

@@ -49,6 +49,7 @@ pub enum Expr {
     Lit(String),
     Static(String),
     Call { name: String, args: Vec<Expr> },
+    InterpolatedString(Vec<InterpolationPart>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -118,4 +119,10 @@ pub struct FnDef {
     pub params: Vec<(String, Option<Type>, Ownership)>,
     pub body: Vec<Stmt>,
     pub return_type: Option<Type>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum InterpolationPart {
+    Literal(String),
+    Expression(Box<Expr>),
 }
