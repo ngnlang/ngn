@@ -31,6 +31,8 @@ extern {
         Return => Token::Return,
         ShortReturn => Token::ShortReturn,
         Fn => Token::Fn,
+
+        Model => Token::Model,
         
         StarStar => Token::StarStar,
         EqEq => Token::EqEq,
@@ -88,6 +90,7 @@ Statement: Stmt = {
     UntilOnceStmt,
     MatchStmt,
     FnDefStmt,
+    ModelDefStmt,
     SimpleStatement,
 };
 
@@ -105,6 +108,24 @@ EchoStmt: Stmt = {
 
 PrintStmt: Stmt = {
     Print LParen <e:Expr> RParen => Stmt::Print(e),
+};
+
+ModelDefStmt: Stmt = {
+    Model <name:Ident> LBrace <_nl:Newline*> <fields:ModelFields> RBrace => {
+        Stmt::ModelDef(ModelDef { name, fields })
+    },
+};
+
+ModelFields: Vec<(String, Type)> = {
+    <first:ModelField> <rest:(<ModelField>)*> => {
+        let mut all = vec![first];
+        all.extend(rest);
+        all
+    },
+};
+
+ModelField: (String, Type) = {
+    <name:Ident> Colon <ty:TypeName> Comma? Newline* => (name, ty.0),
 };
 
 FnDefStmt: Stmt = {
@@ -398,6 +419,10 @@ RebindStmt: Stmt = {
     },
 };
 
+ModelInstanceField: (String, Expr) = {
+    <name:Ident> Colon <e:Expr> Comma? Newline* => (name, e),
+};
+
 pub Expr: Expr = {
     <name:Ident> <op:CompoundOp> <value:Expr> => {
         let expanded = match op.as_str() {
@@ -415,6 +440,7 @@ pub Expr: Expr = {
     <name:Ident> Eq <value:Expr> => {
         Expr::Assign { name, value: Box::new(value) }
     },
+    <name:Ident> LBrace Newline* <fields:ModelInstanceField+> RBrace => Expr::ModelInstance { name, fields },
     Comparison,
 };
 

@@ -15,6 +15,7 @@ pub enum Token {
     Newline,
     Fn, Return, ShortReturn,
     Ident(String), String(String), Number(f64),
+    Model,
 }
 
 pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
@@ -221,6 +222,7 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
                     "any" => Token::Any,
                     "fn" => Token::Fn,
                     "return" => Token::Return,
+                    "model" => Token::Model,
                     _ => Token::Ident(ident),
                 };
                 tokens.push((start, token, end));

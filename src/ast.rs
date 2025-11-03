@@ -10,6 +10,7 @@ pub enum Type {
     Object(HashMap<String, Type>),
     Function,
     Void,
+    Model(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -19,6 +20,7 @@ pub enum Value {
     Bool(bool),
     Array(Vec<Value>),
     Function(FnDef),
+    Object(String, HashMap<String, Value>),
     Void,
 }
 
@@ -50,6 +52,7 @@ pub enum Expr {
     Static(String),
     Call { name: String, args: Vec<Expr> },
     InterpolatedString(Vec<InterpolationPart>),
+    ModelInstance { name: String, fields: Vec<(String, Expr)> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -64,7 +67,8 @@ pub enum Stmt {
         condition: Expr, 
         then_block: Vec<Stmt>, 
         else_ifs: Vec<(Expr, Vec<Stmt>)>, 
-        else_block: Option<Vec<Stmt>> },
+        else_block: Option<Vec<Stmt>> 
+    },
     Match { 
         expr: Expr, 
         cases: Vec<(Vec<Expr>, Vec<Stmt>)>, 
@@ -84,6 +88,7 @@ pub enum Stmt {
         body: Vec<Stmt>,
     },
     Return(Option<Expr>),
+    ModelDef(ModelDef),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -125,4 +130,10 @@ pub struct FnDef {
 pub enum InterpolationPart {
     Literal(String),
     Expression(Box<Expr>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelDef {
+    pub name: String,
+    pub fields: Vec<(String, Type)>,
 }
