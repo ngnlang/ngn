@@ -2,7 +2,7 @@ mod ast;
 mod lexer;
 
 use std::fs;
-use crate::ast::{FnDef, InterpolationPart, ModelDef, Moved, Ownership, Type};
+use crate::ast::{FnDef, InterpolationPart, ModelDef, Moved, Ownership, RoleDef, Type};
 
 lalrpop_mod!(pub ngn);
 
@@ -293,7 +293,7 @@ fn is_copy_type(t: &Type) -> bool {
     matches!(t, Type::Number | Type::Bool)
 }
 
-fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value, Ownership, Moved)>, fns: &mut HashMap<String, FnDef>, models: &mut HashMap<String, ModelDef>,) -> Value {
+fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value, Ownership, Moved)>, fns: &mut HashMap<String, FnDef>, models: &mut HashMap<String, ModelDef>, roles: &mut HashMap<String, RoleDef>) -> Value {
     match e {
         Expr::Number(n) => Value::Number(*n),
         Expr::InterpolatedString(parts) => {
@@ -302,7 +302,7 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value, Ownership, 
                 match part {
                     InterpolationPart::Literal(s) => result.push_str(s),
                     InterpolationPart::Expression(expr) => {
-                        let val = eval_expr(expr, env, fns, models);
+                        let val = eval_expr(expr, env, fns, models, roles);
                         match val {
                             Value::String(s) => result.push_str(&s),
                             Value::Number(n) => result.push_str(&n.to_string()),
@@ -319,98 +319,98 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value, Ownership, 
         Expr::Array(exprs) => {
             let mut values: Vec<Value> = Vec::new();
             for e in exprs {
-                values.push(eval_expr(e, env, fns, models));
+                values.push(eval_expr(e, env, fns, models, roles));
             }
             Value::Array(values)
         },
         Expr::Not(e) => {
-            let val = eval_expr(e, env, fns, models);
+            let val = eval_expr(e, env, fns, models, roles);
             Value::Bool(!is_truthy(&val))
         },
         Expr::Add(a, b) => {
-            match (eval_expr(a, env, fns, models), eval_expr(b, env, fns, models)) {
+            match (eval_expr(a, env, fns, models, roles), eval_expr(b, env, fns, models, roles)) {
                 (Value::Number(x), Value::Number(y)) => Value::Number(x + y),
                 (Value::String(x), Value::String(y)) => Value::String(format!("{}{}", x, y)),
                 _ => panic!("Type error: cannot add these types"),
             }
         }
         Expr::Subtract(a, b) => {
-            match (eval_expr(a, env, fns, models), eval_expr(b, env, fns, models)) {
+            match (eval_expr(a, env, fns, models, roles), eval_expr(b, env, fns, models, roles)) {
                 (Value::Number(x), Value::Number(y)) => Value::Number(x - y),
                 _ => panic!("Type error: cannot subtract non-numbers"),
             }
         }
         Expr::Multiply(a, b) => {
-            match (eval_expr(a, env, fns, models), eval_expr(b, env, fns, models)) {
+            match (eval_expr(a, env, fns, models, roles), eval_expr(b, env, fns, models, roles)) {
                 (Value::Number(x), Value::Number(y)) => Value::Number(x * y),
                 _ => panic!("Type error: cannot multiply non-numbers"),
             }
         }
         Expr::Divide(a, b) => {
-            match (eval_expr(a, env, fns, models), eval_expr(b, env, fns, models)) {
+            match (eval_expr(a, env, fns, models, roles), eval_expr(b, env, fns, models, roles)) {
                 (Value::Number(x), Value::Number(y)) => Value::Number(x / y),
                 _ => panic!("Type error: cannot divide non-numbers"),
             }
         }
         Expr::Negative(e) => {
-            match eval_expr(e, env, fns, models) {
+            match eval_expr(e, env, fns, models, roles) {
                 Value::Number(x) => Value::Number(-x),
                 _ => panic!("Type error: cannot negate non-number"),
             }
         }
         Expr::Power(a, b) => {
-            match (eval_expr(a, env, fns, models), eval_expr(b, env, fns, models)) {
+            match (eval_expr(a, env, fns, models, roles), eval_expr(b, env, fns, models, roles)) {
                 (Value::Number(x), Value::Number(y)) => Value::Number(x.powf(y)),
                 _ => panic!("Type error: cannot exponentiate non-numbers"),
             }
         }
         Expr::Modulo(a, b) => {
-            match (eval_expr(a, env, fns, models), eval_expr(b, env, fns, models)) {
+            match (eval_expr(a, env, fns, models, roles), eval_expr(b, env, fns, models, roles)) {
                 (Value::Number(x), Value::Number(y)) => Value::Number(x % y),
                 _ => panic!("Type error: cannot modulo non-numbers"),
             }
         }
         Expr::Equal(a, b) => {
-            let av = eval_expr(a, env, fns, models);
-            let bv = eval_expr(b, env, fns, models);
+            let av = eval_expr(a, env, fns, models, roles);
+            let bv = eval_expr(b, env, fns, models, roles);
             Value::Bool(values_equal(&av, &bv))
         }
         Expr::NotEqual(a, b) => {
-            let av = eval_expr(a, env, fns, models);
-            let bv = eval_expr(b, env, fns, models);
+            let av = eval_expr(a, env, fns, models, roles);
+            let bv = eval_expr(b, env, fns, models, roles);
             Value::Bool(!values_equal(&av, &bv))
         }
         Expr::LessThan(a, b) => {
-            match (eval_expr(a, env, fns, models), eval_expr(b, env, fns, models)) {
+            match (eval_expr(a, env, fns, models, roles), eval_expr(b, env, fns, models, roles)) {
                 (Value::Number(x), Value::Number(y)) => Value::Bool(x < y),
                 _ => panic!("Type error: cannot compare non-numbers"),
             }
         }
         Expr::LessThanOrEqual(a, b) => {
-            match (eval_expr(a, env, fns, models), eval_expr(b, env, fns, models)) {
+            match (eval_expr(a, env, fns, models, roles), eval_expr(b, env, fns, models, roles)) {
                 (Value::Number(x), Value::Number(y)) => Value::Bool(x <= y),
                 _ => panic!("Type error: cannot compare non-numbers"),
             }
         }
         Expr::GreaterThan(a, b) => {
-            match (eval_expr(a, env, fns, models), eval_expr(b, env, fns, models)) {
+            match (eval_expr(a, env, fns, models, roles), eval_expr(b, env, fns, models, roles)) {
                 (Value::Number(x), Value::Number(y)) => Value::Bool(x > y),
                 _ => panic!("Type error: cannot compare non-numbers"),
             }
         }
         Expr::GreaterThanOrEqual(a, b) => {
-            match (eval_expr(a, env, fns, models), eval_expr(b, env, fns, models)) {
+            match (eval_expr(a, env, fns, models, roles), eval_expr(b, env, fns, models, roles)) {
                 (Value::Number(x), Value::Number(y)) => Value::Bool(x >= y),
                 _ => panic!("Type error: cannot compare non-numbers"),
             }
         }
         Expr::Assign { name, value } => {
-            let v = eval_expr(value, env, fns, models);
+            let v = eval_expr(value, env, fns, models, roles);
             env.insert(name.clone(), (AssignKind::Var, v.clone(), Ownership::Borrowed, Moved::False));
             v
         }
         Expr::CompoundAssign { name, op: _, value } => {
-            let v = eval_expr(value, env, fns, models);
+            let v = eval_expr(value, env, fns, models, roles);
             env.insert(name.clone(), (AssignKind::Var, v.clone(), Ownership::Borrowed, Moved::False));
             v
         }
@@ -473,7 +473,7 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value, Ownership, 
                 let ownership = get_arg_ownership(arg_expr, env);  // Helper function
 
                 let arg_val = if i < args.len() {
-                    eval_expr(arg_expr, env, fns, models)
+                    eval_expr(arg_expr, env, fns, models, roles)
                 } else {
                     panic!("Function {} expects {} arguments, got {}", name, fn_arg_count, args.len())
                 };
@@ -504,11 +504,16 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value, Ownership, 
             }
             
             // Execute function body
-            let flow = execute_block(&fn_def.body, &mut fn_env, fns, models, fn_def.return_type.as_ref());
-            match flow {
-                ControlFlow::Return(val) => val,
-                _ => Value::Void,
+            if let Some(body) = &fn_def.body {
+                let flow = execute_block(body, &mut fn_env, fns, models, roles, fn_def.return_type.as_ref());
+                match flow {
+                    ControlFlow::Return(val) => val,
+                    _ => Value::Void,
+                }
+            } else {
+                panic!("Cannot call function '{}' as it has not body.", name);
             }
+            
         }
         Expr::ModelInstance { name, fields } => {
             // Lookup model definition
@@ -517,7 +522,7 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value, Ownership, 
                 
                 // Evaluate all field expressions
                 for (field_name, field_expr) in fields {
-                    let field_val = eval_expr(field_expr, env, fns, models);
+                    let field_val = eval_expr(field_expr, env, fns, models, roles);
                     field_values.insert(field_name.clone(), field_val);
                 }
                 
@@ -534,24 +539,25 @@ fn execute_stmt(
     env: &mut HashMap<String, (AssignKind, Value, Ownership, Moved)>,
     fns: &mut HashMap<String, FnDef>,
     models: &mut HashMap<String, ModelDef>,
+    roles: &mut HashMap<String, RoleDef>,
     expected_return_type: Option<&Type>,
 ) -> ControlFlow {
     match stmt {
         Stmt::Echo(e) => {
             let _type = infer_expr_type(e, env, fns);
-            let v = eval_expr(e, env, fns, models);
+            let v = eval_expr(e, env, fns, models, roles);
             print!("{}", format_value(&v));
             ControlFlow::None
         }
         Stmt::Print(e) => {
             let _type = infer_expr_type(e, env, fns);
-            let v = eval_expr(e, env, fns, models);
+            let v = eval_expr(e, env, fns, models, roles);
             println!("{}", format_value(&v));
             ControlFlow::None
         }
         Stmt::ExprStmt(e) => {
             let _type = infer_expr_type(e, env, fns);
-            eval_expr(e, env, fns, models);
+            eval_expr(e, env, fns, models, roles);
             ControlFlow::None
         }
         Stmt::Assign { kind, declared_type, name, value, ownership} => {
@@ -581,7 +587,7 @@ fn execute_stmt(
             }
 
             let _type = infer_expr_type(value, env, fns);
-            let v = eval_expr(value, env, fns, models);
+            let v = eval_expr(value, env, fns, models, roles);
             let mut actual_type = infer_value_type(&v);
             let mut normalized_declared_type = declared_type.clone();
 
@@ -624,7 +630,7 @@ fn execute_stmt(
 
             match kind {
                 AssignKind::Var => {
-                    let v = eval_expr(value, env, fns, models);
+                    let v = eval_expr(value, env, fns, models, roles);
                     let actual_type = infer_value_type(&v);
 
                     // Only allow reassignment if value is mutable (owned)
@@ -661,7 +667,7 @@ fn execute_stmt(
                 panic!("Cannot rebind undefined variable '{}'", name);
             };
             
-            let v = eval_expr(value, env, fns, models);
+            let v = eval_expr(value, env, fns, models, roles);
             env.insert(name.clone(), (kind, v, ownership, Moved::False));
             ControlFlow::None
         }
@@ -669,21 +675,21 @@ fn execute_stmt(
         Stmt::Next => ControlFlow::Next,
         Stmt::If { condition, then_block, else_ifs, else_block } => {
             let _cond_type = infer_expr_type(condition, env, fns);
-            let cond_value = eval_expr(condition, env, fns, models);
+            let cond_value = eval_expr(condition, env, fns, models, roles);
             
             if is_truthy(&cond_value) {
-                execute_block(then_block, env, fns, models, None)
+                execute_block(then_block, env, fns, models, roles, None)
             } else {
                 for (else_if_cond, else_if_stmts) in else_ifs {
                     let _type = infer_expr_type(else_if_cond, env, fns);
-                    let else_if_value = eval_expr(else_if_cond, env, fns, models);
+                    let else_if_value = eval_expr(else_if_cond, env, fns, models, roles);
                     if is_truthy(&else_if_value) {
-                        return execute_block(else_if_stmts, env, fns, models, None);
+                        return execute_block(else_if_stmts, env, fns, models, roles, None);
                     }
                 }
                 
                 if let Some(else_stmts) = else_block {
-                    execute_block(else_stmts, env, fns, models, None)
+                    execute_block(else_stmts, env, fns, models, roles, None)
                 } else {
                     ControlFlow::None
                 }
@@ -692,12 +698,12 @@ fn execute_stmt(
         Stmt::While { condition, body } => {
             loop {
                 let _cond_type = infer_expr_type(condition, env, fns);
-                let cond_value = eval_expr(condition, env, fns, models);
+                let cond_value = eval_expr(condition, env, fns, models, roles);
                 if !is_truthy(&cond_value) {
                     break;
                 }
                 
-                match execute_block(body, env, fns, models, None) {
+                match execute_block(body, env, fns, models, roles, None) {
                     ControlFlow::Break => break,
                     ControlFlow::Next => continue,
                     ControlFlow::Return(_) => return ControlFlow::None,
@@ -708,7 +714,7 @@ fn execute_stmt(
         }
         Stmt::WhileOnce { condition, body } => {
             loop {
-                match execute_block(body, env, fns, models, None) {
+                match execute_block(body, env, fns, models, roles, None) {
                     ControlFlow::Break => break,
                     ControlFlow::Next => continue,
                     ControlFlow::Return(_) => return ControlFlow::None,
@@ -716,7 +722,7 @@ fn execute_stmt(
                 }
 
                 let _cond_type = infer_expr_type(condition, env, fns);
-                let cond_value = eval_expr(condition, env, fns, models);
+                let cond_value = eval_expr(condition, env, fns, models, roles);
                 if !is_truthy(&cond_value) {
                     break;
                 }
@@ -726,12 +732,12 @@ fn execute_stmt(
         Stmt::Until { condition, body } => {
             loop {
                 let _cond_type = infer_expr_type(condition, env, fns);
-                let cond_value = eval_expr(condition, env, fns, models);
+                let cond_value = eval_expr(condition, env, fns, models, roles);
                 if is_truthy(&cond_value) {
                     break;
                 }
                 
-                match execute_block(body, env, fns, models, None) {
+                match execute_block(body, env, fns, models, roles, None) {
                     ControlFlow::Break => break,
                     ControlFlow::Next => continue,
                     ControlFlow::Return(_) => return ControlFlow::None,
@@ -742,7 +748,7 @@ fn execute_stmt(
         }
         Stmt::UntilOnce { condition, body } => {
             loop {
-                match execute_block(body, env, fns, models, None) {
+                match execute_block(body, env, fns, models, roles, None) {
                     ControlFlow::Break => break,
                     ControlFlow::Next => continue,
                     ControlFlow::Return(_) => return ControlFlow::None,
@@ -750,7 +756,7 @@ fn execute_stmt(
                 }
 
                 let _cond_type = infer_expr_type(condition, env, fns);
-                let cond_value = eval_expr(condition, env, fns, models);
+                let cond_value = eval_expr(condition, env, fns, models, roles);
                 if is_truthy(&cond_value) {
                     break;
                 }
@@ -759,17 +765,17 @@ fn execute_stmt(
         }
         Stmt::Match { expr, cases, default, match_type } => {
             let _expr_type = infer_expr_type(expr, env, fns);
-            let val = eval_expr(expr, env, fns, models);
+            let val = eval_expr(expr, env, fns, models, roles);
             let mut matched = false;
             
             for (tests, stmts) in cases {
                 for test in tests {
                     let _test_type = infer_expr_type(test, env, fns);
-                    let test_val = eval_expr(test, env, fns, models);
+                    let test_val = eval_expr(test, env, fns, models, roles);
 
                     if values_equal(&val, &test_val) {
                         matched = true;
-                        let flow = execute_block(stmts, env, fns, models, None);
+                        let flow = execute_block(stmts, env, fns, models, roles, None);
                         
                         match (match_type, flow) {
                             (MatchType::One, ControlFlow::Next) => continue,
@@ -785,7 +791,7 @@ fn execute_stmt(
             // No match found, execute default if it exists
             if !matched || *match_type == MatchType::Any {
                 if let Some(default_stmts) = default {
-                    execute_block(default_stmts, env, fns, models, None)
+                    execute_block(default_stmts, env, fns, models, roles, None)
                 } else {
                     ControlFlow::None
                 }
@@ -793,11 +799,12 @@ fn execute_stmt(
                 ControlFlow::None
             }
         }
-        Stmt::FnDef { name, params, return_type, body } => {
-            fns.insert(name.clone(), FnDef {
-                params: params.clone(),
-                body: body.clone(),
-                return_type: return_type.clone(),
+        Stmt::FnDef(fn_def) => {
+            fns.insert(fn_def.name.clone(), FnDef {
+                name: fn_def.name.clone(),
+                params: fn_def.params.clone(),
+                body: fn_def.body.clone(),
+                return_type: fn_def.return_type.clone(),
             });
             ControlFlow::None
         }
@@ -805,11 +812,15 @@ fn execute_stmt(
             models.insert(model_def.name.clone(), model_def.clone());
             ControlFlow::None
         }
+        Stmt::RoleDef(role_def) => {
+            roles.insert(role_def.name.clone(), role_def.clone());
+            ControlFlow::None
+        }
         Stmt::Return(expr_opt) => {
             let val = match expr_opt {
                 Some(e) => {
                     let _type = infer_expr_type(e, env, fns);
-                    eval_expr(e, env, fns, models)
+                    eval_expr(e, env, fns, models, roles)
                 }
                 None => Value::Void,
             };
@@ -831,10 +842,11 @@ fn execute_block(
     env: &mut HashMap<String, (AssignKind, Value, Ownership, Moved)>,
     fns: &mut HashMap<String, FnDef>,
     models: &mut HashMap<String, ModelDef>,
+    roles: &mut HashMap<String, RoleDef>,
     expected_return_type: Option<&Type>,
 ) -> ControlFlow {
     for stmt in stmts {
-        let flow = execute_stmt(stmt, env, fns, models, expected_return_type);
+        let flow = execute_stmt(stmt, env, fns, models, roles, expected_return_type);
         match flow {
             ControlFlow::Break | ControlFlow::Next | ControlFlow::Return(_) => return flow,
             ControlFlow::None => {}
@@ -847,21 +859,26 @@ fn run(stmts: &[Stmt]) {
     let mut env: HashMap<String, (AssignKind, Value, Ownership, Moved)> = HashMap::new();
     let mut fns: HashMap<String, FnDef> = HashMap::new();
     let mut models: HashMap<String, ModelDef> = HashMap::new();
+    let mut roles: HashMap<String, RoleDef> = HashMap::new();
 
     for stmt in stmts {
         match stmt {
-            Stmt::FnDef { name, params, return_type, body } => {
-                fns.insert(name.clone(), FnDef {
-                    params: params.clone(),
-                    body: body.clone(),
-                    return_type: return_type.clone(),
+            Stmt::FnDef(fn_def) => {
+                fns.insert(fn_def.name.clone(), FnDef {
+                    name: fn_def.name.clone(),
+                    params: fn_def.params.clone(),
+                    body: fn_def.body.clone(),
+                    return_type: fn_def.return_type.clone(),
                 });
             }
             Stmt::ModelDef(model_def) => {
                 models.insert(model_def.name.clone(), model_def.clone());
             }
+            Stmt::RoleDef(role_def) => {
+                roles.insert(role_def.name.clone(), role_def.clone());
+            }
             Stmt::Assign { kind: AssignKind::Lit | AssignKind::Static, .. } => {
-                execute_stmt(stmt, &mut env, &mut fns, &mut models, None);
+                execute_stmt(stmt, &mut env, &mut fns, &mut models, &mut roles, None);
             }
             _ => {
                 panic!("Top-level statements must be model/function definitions or lit/static assignments");
@@ -874,8 +891,13 @@ fn run(stmts: &[Stmt]) {
             panic!("main() must have no parameters");
         }
         
-        let mut main_env = env.clone();
-        execute_block(&main_fn.body, &mut main_env, &mut fns, &mut models, main_fn.return_type.as_ref());
+        if let Some(body) = &main_fn.body {
+            let mut main_env = env.clone();
+            execute_block(body, &mut main_env, &mut fns, &mut models, &mut roles, main_fn.return_type.as_ref());
+        } else {
+            panic!("The main() function must have a body.");
+        }
+        
     } else {
         panic!("No main() function found. Entrypoint files must define main()");
     }

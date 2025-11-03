@@ -33,6 +33,7 @@ extern {
         Fn => Token::Fn,
 
         Model => Token::Model,
+        Role => Token::Role,
         
         StarStar => Token::StarStar,
         EqEq => Token::EqEq,
@@ -90,6 +91,7 @@ Statement: Stmt = {
     UntilOnceStmt,
     MatchStmt,
     FnDefStmt,
+    RoleDefStmt,
     ModelDefStmt,
     SimpleStatement,
 };
@@ -128,26 +130,43 @@ ModelField: (String, Type) = {
     <name:Ident> Colon <ty:TypeName> Comma? Newline* => (name, ty.0),
 };
 
+RoleDefStmt: Stmt = {
+    Role <name:Ident> LBrace <_nl:Newline*> <methods:RoleMethods> RBrace => {
+        Stmt::RoleDef(RoleDef { name, methods })
+    },
+};
+
+RoleMethods: Vec<FnDef> = {
+    <stmts:FnDefStmt*> => {
+        stmts.into_iter().map(|s| match s {
+            Stmt::FnDef(def) => def,
+            _ => unreachable!(),
+        }).collect()
+    }
+};
+
 FnDefStmt: Stmt = {
-    Fn <name:Ident> LParen <params:FnParams?> RParen <return_type:FnReturnType?> LBrace <_nl:Newline> <body:FnBody> RBrace => {       
-        Stmt::FnDef {
+    Fn <name:Ident> LParen <params:FnParams?> RParen <return_type:FnReturnType?> <body:FnBodyOrSignature> =>
+        Stmt::FnDef(FnDef {
             name,
             params: params.unwrap_or_default(),
             return_type,
             body,
-        }
-    },
-    Fn <name:Ident> LParen <params:FnParams?> RParen <return_type:FnReturnType?> <expr:Expr> <_nl:Newline> => {
-        let ret_stmt = Stmt::Return(Some(expr));
-        Stmt::FnDef {
-            name,
-            params: params.unwrap_or_default(),
-            return_type,
-            body: vec![ret_stmt],
-        }
-    },
+        })
 };
 
+FnBodyOrSignature: Option<Vec<Stmt>> = {
+    // Case 1: A single expression with an implicit return.
+    <expr:Expr> <_nl:Newline> => Some(vec![Stmt::Return(Some(expr))]),
+
+    // Case 2: A block body (which can be empty).
+    LBrace <_nl:Newline> <body:FnBody> RBrace => Some(body),
+
+    // Case 3: Just a newline. This is the signature.
+    <_nl:Newline> => None,
+};
+
+// Make sure FnBody can be empty
 FnBody: Vec<Stmt> = {
     <stmts:StatementLine*> <ret:ReturnStmt> => {
         let mut all = stmts;

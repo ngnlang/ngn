@@ -81,14 +81,10 @@ pub enum Stmt {
     UntilOnce { condition: Expr, body: Vec<Stmt> },
     Break,
     Next,
-    FnDef {
-        name: String,
-        params: Vec<(String, Option<Type>, Ownership)>,
-        return_type: Option<Type>,
-        body: Vec<Stmt>,
-    },
+    FnDef(FnDef),
     Return(Option<Expr>),
     ModelDef(ModelDef),
+    RoleDef(RoleDef),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -127,8 +123,9 @@ pub enum MatchType {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FnDef {
+    pub name: String,
     pub params: Vec<(String, Option<Type>, Ownership)>,
-    pub body: Vec<Stmt>,
+    pub body: Option<Vec<Stmt>>,
     pub return_type: Option<Type>,
 }
 
@@ -142,4 +139,10 @@ pub enum InterpolationPart {
 pub struct ModelDef {
     pub name: String,
     pub fields: Vec<(String, Type)>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoleDef {
+    pub name: String,
+    pub methods: Vec<FnDef>,
 }
