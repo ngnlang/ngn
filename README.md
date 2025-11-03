@@ -280,6 +280,25 @@ fn doThing() {
 }
 ```
 
+### `model`
+Create object structures.
+
+```ngn
+model User {
+  name: string,
+  age: number
+}
+```
+
+#### Instantiate a model
+```ngn
+const user = User {
+  name: "Jason",
+  age: 46
+}
+print(user) // { name: Jason, age: 46 }
+```
+
 ### Types
 
 - `string`
