@@ -861,11 +861,10 @@ fn run(stmts: &[Stmt]) {
                 models.insert(model_def.name.clone(), model_def.clone());
             }
             Stmt::Assign { kind: AssignKind::Lit | AssignKind::Static, .. } => {
-                // Execute top-level lit/static
                 execute_stmt(stmt, &mut env, &mut fns, &mut models, None);
             }
             _ => {
-                panic!("Top-level statements must be function definitions or lit/static assignments");
+                panic!("Top-level statements must be model/function definitions or lit/static assignments");
             }
         }
     }
