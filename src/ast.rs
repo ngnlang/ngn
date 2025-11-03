@@ -106,6 +106,12 @@ pub enum Ownership {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum Moved {
+    True,
+    False
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum ControlFlow {
     None,
     Break,

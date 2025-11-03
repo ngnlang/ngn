@@ -2,7 +2,7 @@ mod ast;
 mod lexer;
 
 use std::fs;
-use crate::ast::{FnDef, InterpolationPart, ModelDef, Ownership, Type};
+use crate::ast::{FnDef, InterpolationPart, ModelDef, Moved, Ownership, Type};
 
 lalrpop_mod!(pub ngn);
 
@@ -163,7 +163,7 @@ fn infer_value_type(v: &Value) -> Type {
     }
 }
 
-fn infer_expr_type(e: &Expr, env: &HashMap<String, (AssignKind, Value, Ownership, bool)>, fns: &HashMap<String, FnDef>) -> Type {
+fn infer_expr_type(e: &Expr, env: &HashMap<String, (AssignKind, Value, Ownership, Moved)>, fns: &HashMap<String, FnDef>) -> Type {
     match e {
         Expr::Number(_) => Type::Number,
         Expr::String(_) => Type::Str,
@@ -276,7 +276,7 @@ fn convert_ownership(t: Type) -> Type {
     }
 }
 
-fn get_arg_ownership(e: &Expr, env: &HashMap<String, (AssignKind, Value, Ownership, bool)>) -> Ownership {
+fn get_arg_ownership(e: &Expr, env: &HashMap<String, (AssignKind, Value, Ownership, Moved)>) -> Ownership {
     match e {
         Expr::Var(name) => {
             env.get(name).map(|(_, _, o, _)| o.clone()).unwrap_or(Ownership::Borrowed)
@@ -293,7 +293,7 @@ fn is_copy_type(t: &Type) -> bool {
     matches!(t, Type::Number | Type::Bool)
 }
 
-fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value, Ownership, bool)>, fns: &mut HashMap<String, FnDef>, models: &mut HashMap<String, ModelDef>,) -> Value {
+fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value, Ownership, Moved)>, fns: &mut HashMap<String, FnDef>, models: &mut HashMap<String, ModelDef>,) -> Value {
     match e {
         Expr::Number(n) => Value::Number(*n),
         Expr::InterpolatedString(parts) => {
@@ -406,17 +406,17 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value, Ownership, 
         }
         Expr::Assign { name, value } => {
             let v = eval_expr(value, env, fns, models);
-            env.insert(name.clone(), (AssignKind::Var, v.clone(), Ownership::Borrowed, false));
+            env.insert(name.clone(), (AssignKind::Var, v.clone(), Ownership::Borrowed, Moved::False));
             v
         }
         Expr::CompoundAssign { name, op: _, value } => {
             let v = eval_expr(value, env, fns, models);
-            env.insert(name.clone(), (AssignKind::Var, v.clone(), Ownership::Borrowed, false));
+            env.insert(name.clone(), (AssignKind::Var, v.clone(), Ownership::Borrowed, Moved::False));
             v
         }
         Expr::Var(name) => {
             if let Some((_, v, _ownership, moved)) = env.get(name) {
-                if *moved {
+                if let Moved::True = *moved {
                     panic!("Variable '{}' has been moved", name);
                 }
                 v.clone()
@@ -429,7 +429,7 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value, Ownership, 
         }
         Expr::Const(name) => {
             if let Some((_, v, _ownership, moved)) = env.get(name) {
-                if *moved {
+                if let Moved::True = *moved {
                     panic!("Constant '{}' has been moved", name);
                 }
                 v.clone()
@@ -464,7 +464,7 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value, Ownership, 
             };
 
             // Create new scope for function
-            let mut fn_env: HashMap<String, (AssignKind, Value, Ownership, bool)> = HashMap::new();
+            let mut fn_env: HashMap<String, (AssignKind, Value, Ownership, Moved)> = HashMap::new();
             let fn_arg_count = fn_def.params.len();
             
             // Bind parameters
@@ -487,7 +487,7 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value, Ownership, 
                 if *param_ownership == Ownership::Owned {
                     if let Expr::Var(var_name) = arg_expr {
                         if let Some((k, v, o, _)) = env.get(var_name) {
-                            env.insert(var_name.clone(), (k.clone(), v.clone(), o.clone(), true));
+                            env.insert(var_name.clone(), (k.clone(), v.clone(), o.clone(), Moved::True));
                         }
                     }
                 }
@@ -500,7 +500,7 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value, Ownership, 
                     }
                 }
 
-                fn_env.insert(param_name.clone(), (AssignKind::Var, arg_val, ownership, false));
+                fn_env.insert(param_name.clone(), (AssignKind::Var, arg_val, ownership, Moved::False));
             }
             
             // Execute function body
@@ -531,7 +531,7 @@ fn eval_expr(e: &Expr, env: &mut HashMap<String, (AssignKind, Value, Ownership, 
 
 fn execute_stmt(
     stmt: &Stmt,
-    env: &mut HashMap<String, (AssignKind, Value, Ownership, bool)>,
+    env: &mut HashMap<String, (AssignKind, Value, Ownership, Moved)>,
     fns: &mut HashMap<String, FnDef>,
     models: &mut HashMap<String, ModelDef>,
     expected_return_type: Option<&Type>,
@@ -610,7 +610,7 @@ fn execute_stmt(
                 }
             }
 
-            env.insert(name.clone(), (kind.clone(), v, ownership.clone(), false));
+            env.insert(name.clone(), (kind.clone(), v, ownership.clone(), Moved::False));
             ControlFlow::None
         }
         Stmt::Reassign { name, value } => {
@@ -653,7 +653,7 @@ fn execute_stmt(
                 if *k != AssignKind::Var {
                     panic!("Can only rebind var, not {:?}", k);
                 }
-                if *moved {
+                if let Moved::True = *moved {
                     panic!("Cannot rebind moved variable '{}'", name);
                 }
                 (k.clone(), o.clone())
@@ -662,7 +662,7 @@ fn execute_stmt(
             };
             
             let v = eval_expr(value, env, fns, models);
-            env.insert(name.clone(), (kind, v, ownership, false));
+            env.insert(name.clone(), (kind, v, ownership, Moved::False));
             ControlFlow::None
         }
         Stmt::Break => ControlFlow::Break,
@@ -828,7 +828,7 @@ fn execute_stmt(
 
 fn execute_block(
     stmts: &[Stmt],
-    env: &mut HashMap<String, (AssignKind, Value, Ownership, bool)>,
+    env: &mut HashMap<String, (AssignKind, Value, Ownership, Moved)>,
     fns: &mut HashMap<String, FnDef>,
     models: &mut HashMap<String, ModelDef>,
     expected_return_type: Option<&Type>,
@@ -844,7 +844,7 @@ fn execute_block(
 }
 
 fn run(stmts: &[Stmt]) {
-    let mut env: HashMap<String, (AssignKind, Value, Ownership, bool)> = HashMap::new();
+    let mut env: HashMap<String, (AssignKind, Value, Ownership, Moved)> = HashMap::new();
     let mut fns: HashMap<String, FnDef> = HashMap::new();
     let mut models: HashMap<String, ModelDef> = HashMap::new();
 
