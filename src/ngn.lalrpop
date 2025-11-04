@@ -34,6 +34,8 @@ extern {
 
         Model => Token::Model,
         Role => Token::Role,
+        Extend => Token::Extend,
+        With => Token::With,
         
         StarStar => Token::StarStar,
         EqEq => Token::EqEq,
@@ -61,6 +63,7 @@ extern {
         Greater => Token::Greater,
         Colon => Token::Colon,
         Comma => Token::Comma,
+        Period => Token::Period,
         LParen => Token::LParen,
         RParen => Token::RParen,
         LBracket => Token::LBracket,
@@ -93,6 +96,7 @@ Statement: Stmt = {
     FnDefStmt,
     RoleDefStmt,
     ModelDefStmt,
+    ExtendStmt,
     SimpleStatement,
 };
 
@@ -137,10 +141,42 @@ RoleDefStmt: Stmt = {
 };
 
 RoleMethods: Vec<FnDef> = {
-    <stmts:FnDefStmt*> => {
-        stmts.into_iter().map(|s| match s {
-            Stmt::FnDef(def) => def,
-            _ => unreachable!(),
+    <defs:(FnDefStmt Newline*)*> => {
+        defs.into_iter().map(|(stmt, _nl)| {
+            match stmt {
+                Stmt::FnDef(def) => def,
+                _ => unreachable!(),
+            }
+        }).collect()
+    }
+};
+
+ExtendStmt: Stmt = {
+    Extend <model:Ident> With <role:Ident> LBrace Newline* 
+        <methods:ExtendMethods> RBrace Newline => {
+        Stmt::ExtendModel {
+            model_name: model,
+            role_name: Some(role),
+            methods,
+        }
+    },
+    Extend <model:Ident> With LBrace Newline*
+        <methods:ExtendMethods> RBrace Newline => {
+        Stmt::ExtendModel {
+            model_name: model,
+            role_name: None,
+            methods,
+        }
+    },
+};
+
+ExtendMethods: Vec<FnDef> = {
+    <defs:(FnDefStmt Newline*)*> => {
+        defs.into_iter().map(|(stmt, _nl)| {
+            match stmt {
+                Stmt::FnDef(def) => def,
+                _ => unreachable!(),
+            }
         }).collect()
     }
 };
@@ -443,27 +479,6 @@ ModelInstanceField: (String, Expr) = {
 };
 
 pub Expr: Expr = {
-    <name:Ident> <op:CompoundOp> <value:Expr> => {
-        let expanded = match op.as_str() {
-            "+=" => Expr::Add(Box::new(Expr::Var(name.clone())), Box::new(value)),
-            "-=" => Expr::Subtract(Box::new(Expr::Var(name.clone())), Box::new(value)),
-            "*=" => Expr::Multiply(Box::new(Expr::Var(name.clone())), Box::new(value)),
-            "/=" => Expr::Divide(Box::new(Expr::Var(name.clone())), Box::new(value)),
-            "%=" => Expr::Modulo(Box::new(Expr::Var(name.clone())), Box::new(value)),
-            "**=" => Expr::Power(Box::new(Expr::Var(name.clone())), Box::new(value)),
-            "^=" => Expr::Power(Box::new(Expr::Var(name.clone())), Box::new(value)),
-            _ => unreachable!(),
-        };
-        Expr::CompoundAssign { name, op, value: Box::new(expanded) }
-    },
-    <name:Ident> Eq <value:Expr> => {
-        Expr::Assign { name, value: Box::new(value) }
-    },
-    <name:Ident> LBrace Newline* <fields:ModelInstanceField+> RBrace => Expr::ModelInstance { name, fields },
-    Comparison,
-};
-
-AndExpr: Expr = {
     Comparison,
 };
 
@@ -518,7 +533,49 @@ Power: Expr = {
 };
 
 Factor: Expr = {
-    Number,
+    <expr:Postfix> => expr,
+};
+
+Postfix: Expr = {
+    <obj:Postfix> Period <method:Ident> LParen <args:FnCallArgList?> RParen => {
+        Expr::MethodCall {
+            object: Box::new(obj),
+            method,
+            args: args.unwrap_or_default(),
+        }
+    },
+    <obj:Postfix> Period <field:Ident> => {
+        Expr::FieldAccess {
+            object: Box::new(obj),
+            field,
+        }
+    },
+    Assignment,
+};
+
+Assignment: Expr = {
+    <name:Ident> <op:CompoundOp> <value:Assignment> => {
+        let expanded = match op.as_str() {
+            "+=" => Expr::Add(Box::new(Expr::Var(name.clone())), Box::new(value)),
+            "-=" => Expr::Subtract(Box::new(Expr::Var(name.clone())), Box::new(value)),
+            "*=" => Expr::Multiply(Box::new(Expr::Var(name.clone())), Box::new(value)),
+            "/=" => Expr::Divide(Box::new(Expr::Var(name.clone())), Box::new(value)),
+            "%=" => Expr::Modulo(Box::new(Expr::Var(name.clone())), Box::new(value)),
+            "**=" => Expr::Power(Box::new(Expr::Var(name.clone())), Box::new(value)),
+            "^=" => Expr::Power(Box::new(Expr::Var(name.clone())), Box::new(value)),
+            _ => unreachable!(),
+        };
+        Expr::CompoundAssign { name, op, value: Box::new(expanded) }
+    },
+    <name:Ident> Eq <value:Assignment> => {
+        Expr::Assign { name, value: Box::new(value) }
+    },
+    <name:Ident> LBrace Newline* <fields:ModelInstanceField+> RBrace => Expr::ModelInstance { name, fields },
+    Primary,
+};
+
+Primary: Expr = {
+    "Number" => Expr::Number(<>),
     String,
     Bool,
     Array,

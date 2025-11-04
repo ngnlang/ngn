@@ -9,13 +9,14 @@ pub enum Token {
     Any, Var, Const, Lit, Static, Rebind,
     If, Not, While, Until, Match, Echo, Print, Break, Next, True, False,
     StarStar, EqEq, NotEq, LessEq, GreaterEq, OrOr,
-    Plus, Minus, One, Once, Star, Slash, Percent, Caret, Eq, Less, Greater, Colon, Comma,
+    Plus, Minus, One, Once, Star, Slash, Percent, Caret, Eq, Less, Greater,
+    Colon, Comma, Period,
     PlusEq, MinusEq, StarEq, SlashEq, PercentEq, StarStarEq, CaretEq, LArrow,
     LParen, RParen, LBracket, RBracket, LBrace, RBrace,
     Newline,
     Fn, Return, ShortReturn,
     Ident(String), String(String), Number(f64),
-    Model, Role,
+    Model, Role, Extend, With,
 }
 
 pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
@@ -152,6 +153,7 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
             },
             ':' => tokens.push((pos, Token::Colon, pos + 1)),
             ',' => tokens.push((pos, Token::Comma, pos + 1)),
+            '.' => tokens.push((pos, Token::Period, pos + 1)),
             '(' => tokens.push((pos, Token::LParen, pos + 1)),
             ')' => tokens.push((pos, Token::RParen, pos + 1)),
             '[' => tokens.push((pos, Token::LBracket, pos + 1)),
@@ -224,6 +226,8 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
                     "return" => Token::Return,
                     "model" => Token::Model,
                     "role" => Token::Role,
+                    "extend" => Token::Extend,
+                    "with" => Token::With,
                     _ => Token::Ident(ident),
                 };
                 tokens.push((start, token, end));

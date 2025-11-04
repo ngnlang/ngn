@@ -53,6 +53,8 @@ pub enum Expr {
     Call { name: String, args: Vec<Expr> },
     InterpolatedString(Vec<InterpolationPart>),
     ModelInstance { name: String, fields: Vec<(String, Expr)> },
+    FieldAccess { object: Box<Expr>, field: String },
+    MethodCall { object: Box<Expr>, method: String, args: Vec<Expr> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -85,6 +87,11 @@ pub enum Stmt {
     Return(Option<Expr>),
     ModelDef(ModelDef),
     RoleDef(RoleDef),
+    ExtendModel {
+        model_name: String,
+        role_name: Option<String>,
+        methods: Vec<FnDef>,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
