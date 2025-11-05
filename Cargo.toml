@@ -2,9 +2,3 @@
 name = "ngn"
 version = "0.1.0"
 edition = "2024"
-
-[dependencies]
-lalrpop-util = { version = "0.20", features = ["lexer"]}
-
-[build-dependencies]
-lalrpop = "0.20"

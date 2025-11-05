@@ -1,21 +1,23 @@
 mod ast;
 mod lexer;
+mod parser;
+mod expr_parser;
+
+use parser::Parser;
+use expr_parser::ExprParser;
 
 use std::fs;
 use std::collections::HashSet;
-use crate::ast::{FnDef, InterpolationPart, ModelDef, Moved, Ownership, RoleDef, Type};
-
-lalrpop_mod!(pub ngn);
-
-use lalrpop_util::lalrpop_mod;
+use crate::{ast::{FnDef, InterpolationPart, ModelDef, Moved, Ownership, RoleDef, Type}};
 
 fn main() {
     let source = fs::read_to_string("main.ngn")
         .expect("Failed to read ngn file");
 
     let tokens = lexer::tokenize(&source);
+    let mut parser = Parser::new(tokens);
 
-    match ngn::ProgramParser::new().parse(tokens.into_iter()) {
+    match parser.parse_program() {
         Ok(ast) => run(&ast),
         Err(e) => eprintln!("Parse error: {}", e),
     }
@@ -45,11 +47,12 @@ fn format_value(v: &Value) -> String {
 }
 
 fn parse_expression_from_string(expr_str: &str) -> Result<Expr, String> {
+    eprintln!("Parsing interpolated expression: '{}'", expr_str);
     let tokens = crate::lexer::tokenize(expr_str);
-    // tokens is already Vec<(usize, Token, usize)>, so just pass it directly
+    eprintln!("Tokens: {:?}", tokens);
     
-    ngn::ExprParser::new()
-        .parse(tokens.into_iter())
+    let mut parser = ExprParser::new(tokens);
+    parser.parse()
         .map_err(|e| format!("Failed to parse interpolated expression: {}", e))
 }
 
@@ -269,10 +272,10 @@ fn infer_expr_type(
                 _ => panic!("Cannot access field on type {:?}", obj_type),
             }
         }
-        Expr::MethodCall { object, method, args } => {
+        Expr::MethodCall { object, method: _, args: _ } => {
             let obj_type = infer_expr_type(object, env, fns, models);
             match obj_type {
-                Type::Model(model_name) => {
+                Type::Model(_model_name) => {
                     // For now, assume method returns what we'll determine at runtime
                     // In a full implementation, you'd look up the method signature
                     Type::Void  // TODO: look up actual return type from implementations

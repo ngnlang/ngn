@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub enum Type {
     Number,
     String, // owned
     Str, // borrowed
     Bool,
     Array(Box<Type>),
-    Object(HashMap<String, Type>),
+    Object(HashMap<String, Type>), // dead code
     Function,
     Void,
     Model(String),
@@ -25,6 +26,7 @@ pub enum Value {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub enum Expr {
     Number(f64),
     String(String),
@@ -47,9 +49,9 @@ pub enum Expr {
     Assign { name: String, value: Box<Expr> },
     CompoundAssign { name: String, op: String, value: Box<Expr> },
     Var(String),
-    Const(String),
-    Lit(String),
-    Static(String),
+    Const(String), // dead code
+    Lit(String), // dead code
+    Static(String), // dead code
     Call { name: String, args: Vec<Expr> },
     InterpolatedString(Vec<InterpolationPart>),
     ModelInstance { name: String, fields: Vec<(String, Expr)> },
