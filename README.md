@@ -8,6 +8,12 @@ Pronounced "engine".
 
 Extremely early development.
 
+## `main()`
+
+Your entrypoint file must define a `main()` function, which is run automatically; you do not have to call it.
+
+Most of your code will live inside of this function, but things like `model`s, `role`s, `extend`s, and global delcarations will not.
+
 ## Declaring identifiers
 > You cannot assign functions using this syntax. Use `fn` instead.
 
@@ -88,16 +94,24 @@ print(x) ❌ // can no longer use `x` in this context
 
 ### `lit` vs `static`
 
+Used for global declarations. Must be delcared at the top-level of a file, not inside `main()`.
+
+```ngn
+lit VERSION = "v3"
+static DATA = [1..=1000] // pseudocode to create an array of numbers from 1 to 1000
+
+fn main() {
+  print(VERSION) // v3
+  print(DATA) // (I'll spare you; you get it.)
+}
+```
+
 - With `lit`, all instances are replaced with the literal value at compile time.
 - With `static`, all instances are a reference to a single memory address, of the stored data, at runtime.
 
 Therefore, it's best to use `lit` when assigning a small amount of data. If you're declaring a large amount of data - like an array with 1000 entries - then use `static`.
 
 Think about it this way: if you had an array of 1000 numbers defined using `lit`, every single use of it in your code would be replaced with the entire array of data. This would be an inefficient use of memory. Whereas if you define the large array with `static`, ngn stores a single instance of the data in memory and any code references to it are just that, a reference, not the entire data set.
-
-## `main()`
-
-Your entrypoint file must define a `main()` function, which is run automatically; you do not have to call it.
 
 ## Working API
 
@@ -139,6 +153,15 @@ print("x plus 1 is {x + 1}")
 
 const greeting = "world"
 print("Hello, {greeting}!")
+```
+
+### Arrays
+```ngn
+var stuff = ["hat", "coat", "gloves"]
+const ages = [3, 8, 15, 23]
+
+// cannot mix types
+const stuff = ["hat", true, 3] ❌
 ```
 
 ### `while`
@@ -225,25 +248,26 @@ If a match is found:
 ```
 const value = 3
 match (value) {
-  1 => statement
-  2 || 3 => statement
+  1 => statement,
+  2 || 3 => statement,
+  4 => {
+    statement
+    statement
+  },
   => statement
 }
 ```
 
-### `match any`
-Match a value (Number, String, Boolean) against one or more test cases. Optionally provide a default case.
-
-If a match is found:
-- that branch's statement block is run.
-- other cases are also checked, including default, unless a matched statement block contains the `break` keyword.
+#### `any` variant
+Even if a match is found, continue checking cases unless a matched statement block contains the `break` keyword.
 
 ```
 match any (value) {
-  test => statement
-  test1 || test2 =>
+  test => statement,
+  test1 || test2 => {
     statement
     statement
+  },
   => statement
 }
 ```
@@ -284,19 +308,58 @@ fn doThing() {
 Create object structures.
 
 ```ngn
-model User {
+model Dog {
   name: string,
-  age: number
+  breed: string
 }
 ```
 
 #### Instantiate a model
 ```ngn
-const user = User {
-  name: "Jason",
-  age: 46
+const dog = Dog {
+  name: "Apollo",
+  breed: "Labrador"
 }
-print(user) // { name: Jason, age: 46 }
+print(user) // { name: Apollo, breed: Labrador }
+print(user.name) // Apollo
+```
+
+### `role`
+Declare one or more method signatures and/or method implementations. Create roles in order to later implement their functionality for models.
+
+```ngn
+role Animal {
+  fn speak(): void
+}
+```
+
+See below on how to use roles.
+
+### `extend`
+Extend a model's functionality with methods. You can implement custom methods or base them off of a role.
+
+```ngn
+extend Dog with {
+  fn fetch(thing: string): bool {
+    return attemptToFetch(thing)
+  }
+}
+```
+
+```ngn
+extend Dog with Animal {
+  fn speak(): void {
+    print("Woof, woof!")
+  }
+}
+```
+
+Now, putting it all together:
+```ngn
+const fetched = dog.fetch("stick")
+print(fetched) // either true or false
+
+dog.speak() // Woof, woof!
 ```
 
 ### Types
@@ -305,7 +368,7 @@ print(user) // { name: Jason, age: 46 }
 - `number`
 - `boolean`
 - `array`
-- `array<type>` of type
+- `array<type>`
 - `void`
 
 
