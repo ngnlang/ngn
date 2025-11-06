@@ -48,8 +48,6 @@ impl Parser {
 
     fn parse_statement(&mut self) -> Result<Stmt, String> {
         self.skip_newlines();
-
-        eprintln!("parse_statement: current token = {:?}", self.current_token());
         
         match self.current_token() {
             Some(Token::Break) => {
@@ -103,23 +101,25 @@ impl Parser {
         
         let declared_type = if matches!(self.current_token(), Some(Token::Colon)) {
             self.advance();
-            Some(self.parse_type()?)
+            let (ty, _ownership) = self.parse_type()?;  // Ignore ownership from type
+            Some(ty)
         } else {
             None
         };
-        
+
         let ownership = match self.current_token() {
             Some(Token::Eq) => {
                 self.advance();
                 Ownership::Borrowed
-            }
+            },
             Some(Token::LArrow) => {
                 self.advance();
                 Ownership::Owned
-            }
+            },
             _ => return Err("Expected '=' or '<-' in assignment".to_string()),
         };
-        
+
+        self.skip_newlines();        
         let value = self.parse_expr()?;
         
         Ok(Stmt::Assign {
@@ -502,32 +502,27 @@ impl Parser {
         let params = self.parse_fn_params()?;
         self.expect(Token::RParen)?;
         
-        let return_type = if matches!(self.current_token(), Some(Token::Colon)) {
+        let (return_type, _ownership_type) = if matches!(self.current_token(), Some(Token::Colon)) {
             self.advance();
-            Some(self.parse_type()?)
+            let (ty, own) = self.parse_type()?;
+            (Some(ty), own)
         } else {
-            None
+            (None, Ownership::Borrowed)
         };
         
         let body = if matches!(self.current_token(), Some(Token::LBrace)) {
-            eprintln!("parse_fn_def: entering block");
             self.advance();
             self.skip_newlines();
             let block = self.parse_block()?;
-            eprintln!("parse_fn_def: after parse_block, current token: {:?}", self.current_token());
             self.expect(Token::RBrace)?;
-            eprintln!("parse_fn_def: after expect RBrace, current token: {:?}", self.current_token());
             Some(block)
         } else if matches!(self.current_token(), Some(Token::Newline)) {
-            eprintln!("parse_fn_def: signature only");
             None // Just a signature
         } else {
-            eprintln!("parse_fn_def: implicit return");
             // Single expression implicit return
             let expr = self.parse_expr()?;
             Some(vec![Stmt::Return(Some(expr))])
         };
-        eprintln!("parse_fn_def: body done, current token: {:?}", self.current_token());
         
         Ok(Stmt::FnDef(FnDef {
             name,
@@ -544,18 +539,12 @@ impl Parser {
             loop {
                 let name = self.expect_ident()?;
                 
-                let ty = if matches!(self.current_token(), Some(Token::Colon)) {
+                let (ty, ownership) = if matches!(self.current_token(), Some(Token::Colon)) {
                     self.advance();
-                    Some(self.parse_type()?)
+                    let (ty, own) = self.parse_type()?;
+                    (Some(ty), own)
                 } else {
-                    None
-                };
-                
-                let ownership = if matches!(self.current_token(), Some(Token::Less)) {
-                    self.advance();
-                    Ownership::Owned
-                } else {
-                    Ownership::Borrowed
+                    (None, Ownership:: Borrowed)
                 };
                 
                 params.push((name, ty, ownership));
@@ -582,7 +571,7 @@ impl Parser {
         while !matches!(self.current_token(), Some(Token::RBrace)) {
             let field_name = self.expect_ident()?;
             self.expect(Token::Colon)?;
-            let field_type = self.parse_type()?;
+            let (field_type, _field_ownership) = self.parse_type()?;
             
             fields.push((field_name, field_type));
             
@@ -611,7 +600,7 @@ impl Parser {
             }
             self.skip_newlines();
         }
-        
+
         self.expect(Token::RBrace)?;
         
         Ok(Stmt::RoleDef(RoleDef { name, methods }))
@@ -634,10 +623,8 @@ impl Parser {
         
         let mut methods = Vec::new();
         while !matches!(self.current_token(), Some(Token::RBrace)) {
-            eprintln!("In extend loop, current token: {:?}", self.current_token());
             if let Stmt::FnDef(fn_def) = self.parse_fn_def()? {
                 methods.push(fn_def);
-                eprintln!("After parse_fn_def, current token: {:?}", self.current_token());
             }
             self.skip_newlines();
         }
@@ -676,8 +663,8 @@ impl Parser {
         Ok(stmts)
     }
 
-    fn parse_type(&mut self) -> Result<Type, String> {
-        let _owned = if matches!(self.current_token(), Some(Token::Less)) {
+    fn parse_type(&mut self) -> Result<(Type, Ownership), String> {
+        let owned = if matches!(self.current_token(), Some(Token::Less)) {
             self.advance();
             true
         } else {
@@ -693,9 +680,9 @@ impl Parser {
             "array" => {
                 if matches!(self.current_token(), Some(Token::Less)) {
                     self.advance();
-                    let inner = Box::new(self.parse_type()?);
+                    let (inner_type, _inner_ownership) = self.parse_type()?;
                     self.expect(Token::Greater)?;
-                    Type::Array(inner)
+                    Type::Array(Box::new(inner_type))
                 } else {
                     Type::Array(Box::new(Type::Number))
                 }
@@ -704,7 +691,8 @@ impl Parser {
             model_name => Type::Model(model_name.to_string()),
         };
         
-        Ok(base_type)
+        let ownership = if owned { Ownership::Owned } else { Ownership::Borrowed };
+        Ok((base_type, ownership))
     }
 
     fn expect(&mut self, expected: Token) -> Result<(), String> {

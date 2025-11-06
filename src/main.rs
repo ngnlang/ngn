@@ -47,9 +47,7 @@ fn format_value(v: &Value) -> String {
 }
 
 fn parse_expression_from_string(expr_str: &str) -> Result<Expr, String> {
-    eprintln!("Parsing interpolated expression: '{}'", expr_str);
     let tokens = crate::lexer::tokenize(expr_str);
-    eprintln!("Tokens: {:?}", tokens);
     
     let mut parser = ExprParser::new(tokens);
     parser.parse()
@@ -761,6 +759,7 @@ fn execute_stmt(
             }
 
             let (kind, existing_val, ownership, _moved) = env.get(name).unwrap().clone();
+            eprintln!("Reassign {}: ownership = {:?}", name, ownership);
             let existing_type = infer_value_type(&existing_val);
 
             match kind {
