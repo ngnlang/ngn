@@ -21,6 +21,7 @@ pub enum Value {
     Bool(bool),
     Array(Vec<Value>),
     Function(FnDef),
+    Closure(ClosureValue),
     Object(String, HashMap<String, Value>),
     Void,
 }
@@ -57,6 +58,7 @@ pub enum Expr {
     ModelInstance { name: String, fields: Vec<(String, Expr)> },
     FieldAccess { object: Box<Expr>, field: String },
     MethodCall { object: Box<Expr>, method: String, args: Vec<Expr> },
+    Closure(Box<ClosureDef>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -154,4 +156,17 @@ pub struct ModelDef {
 pub struct RoleDef {
     pub name: String,
     pub methods: Vec<FnDef>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClosureDef {
+    pub params: Vec<(String, Option<Type>)>,
+    pub body: Vec<Stmt>,
+    pub return_type: Option<Type>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClosureValue {
+    pub def: Box<ClosureDef>,
+    pub captured_env: HashMap<String, (AssignKind, Value, Ownership, Moved)>,
 }

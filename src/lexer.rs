@@ -12,7 +12,7 @@ pub enum Token {
     Plus, Minus, One, Once, Star, Slash, Percent, Caret, Eq, Less, Greater,
     Colon, Comma, Period,
     PlusEq, MinusEq, StarEq, SlashEq, PercentEq, StarStarEq, CaretEq, LArrow,
-    LParen, RParen, LBracket, RBracket, LBrace, RBrace,
+    LParen, RParen, LBracket, RBracket, LBrace, RBrace, Pipe,
     Newline,
     Fn, Return, ShortReturn,
     Ident(String), String(String), Number(f64),
@@ -107,7 +107,7 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
                     chars.next();
                     tokens.push((pos, Token::OrOr, pos + 2));
                 } else {
-                    panic!("Unexpected character: |");
+                    tokens.push((pos, Token::Pipe, pos + 1));
                 }
             }
             

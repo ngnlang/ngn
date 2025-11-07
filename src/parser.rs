@@ -717,6 +717,11 @@ impl Parser {
 
     // Expression parsing (delegate to expr_parser)
     fn parse_expr(&mut self) -> Result<Expr, String> {
+        // Closures have special syntax (|params|), so handle them directly
+        if matches!(self.current_token(), Some(Token::Pipe)) {
+            return self.parse_closure_expr();
+        }
+
         let mut expr_tokens = Vec::new();
         let mut paren_depth = 0;
         let mut bracket_depth = 0;
@@ -812,5 +817,67 @@ impl Parser {
         }
         
         Ok(args)
+    }
+
+    fn parse_closure_expr(&mut self) -> Result<Expr, String> {
+        self.expect(Token::Pipe)?;  // consume opening |
+        
+        // Parse parameters
+        let mut params = Vec::new();
+        
+        while !matches!(self.current_token(), Some(Token::Pipe)) {
+            let name = self.expect_ident()?;
+            
+            let param_type = if matches!(self.current_token(), Some(Token::Colon)) {
+                self.advance();
+                let (ty, _ownership) = self.parse_type()?;
+                Some(ty)
+            } else {
+                None
+            };
+            
+            params.push((name, param_type));
+            
+            if matches!(self.current_token(), Some(Token::Comma)) {
+                self.advance();
+                self.skip_newlines();
+            } else {
+                break;
+            }
+        }
+        
+        self.expect(Token::Pipe)?;  // consume closing |
+        self.skip_newlines();
+        
+        // Parse optional return type
+        let return_type = if matches!(self.current_token(), Some(Token::Colon)) {
+            self.advance();
+            let (ty, _ownership) = self.parse_type()?;
+            Some(ty)
+        } else {
+            None
+        };
+        
+        self.skip_newlines();
+        
+        // Parse body
+        let body = if matches!(self.current_token(), Some(Token::LBrace)) {
+            // Block body - requires explicit return
+            self.advance();
+            self.skip_newlines();
+            let block = self.parse_block()?;
+            self.expect(Token::RBrace)?;
+            block
+        } else {
+            // Inline body - single expression with implicit return
+            let expr = self.parse_expr()?;
+            vec![Stmt::Return(Some(expr))]
+        };
+        
+        Ok(Expr::Closure(Box::new(ClosureDef {
+            params,
+            return_type,
+            body,
+        })))
     }
 }

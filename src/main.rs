@@ -8,7 +8,7 @@ use expr_parser::ExprParser;
 
 use std::fs;
 use std::collections::HashSet;
-use crate::{ast::{FnDef, InterpolationPart, ModelDef, Moved, Ownership, RoleDef, Type}};
+use crate::ast::{ClosureValue, FnDef, InterpolationPart, ModelDef, Moved, Ownership, RoleDef, Type};
 
 fn main() {
     let source = fs::read_to_string("main.ngn")
@@ -35,6 +35,7 @@ fn format_value(v: &Value) -> String {
         Value::Bool(b) => b.to_string(),
         Value::Array(arr) => format!("[{}]", arr.iter().map(format_value).collect::<Vec<_>>().join(", ")),
         Value::Function(_) => "<function>".to_string(),
+        Value::Closure(_) => "<closure>".to_string(),
         Value::Void => "".to_string(),
         Value::Object(_model_name, fields) => {
             let field_strs: Vec<String> = fields
@@ -116,6 +117,7 @@ fn is_truthy(v: &Value) -> bool {
         Value::Function(_) => true,
         Value::Void => false,
         Value::Object(_, _) => true,
+        Value::Closure(_) => true,
     }
 }
 
@@ -161,6 +163,7 @@ fn infer_value_type(v: &Value) -> Type {
             }
         }
         Value::Function(_) => Type::Function,
+        Value::Closure(_) => Type::Function,
         Value::Void => Type::Void,
         Value::Object(model_name, _) => Type::Model(model_name.clone()),
     }
@@ -243,6 +246,9 @@ fn infer_expr_type(
             // Check if it's a function value in the environment
             if let Some((_, Value::Function(fn_def), _ownership, _moved)) = env.get(name) {
                 fn_def.return_type.clone().unwrap_or(Type::Number)
+            } else if let Some((_, Value::Closure(closure), _ownership, _moved)) = env.get(name) {
+                // Closure return type
+                closure.def.return_type.clone().unwrap_or(Type::Number)
             } else if let Some(fn_def) = fns.get(name) {
                 // Check if it's a global function
                 fn_def.return_type.clone().unwrap_or(Type::Number)
@@ -281,6 +287,7 @@ fn infer_expr_type(
                 _ => panic!("Cannot call method on type {:?}", obj_type),
             }
         }
+        Expr::Closure(_) => Type::Function,
     }
 }
 
@@ -361,6 +368,48 @@ fn validate_role_compliance(
         }
         
         // TODO: Add return type validation
+    }
+}
+
+fn call_closure(
+    closure: &ClosureValue,
+    args: &[Expr],
+    env: &mut HashMap<String, (AssignKind, Value, Ownership, Moved)>,
+    fns: &mut HashMap<String, FnDef>,
+    models: &mut HashMap<String, ModelDef>,
+    roles: &mut HashMap<String, RoleDef>,
+    model_methods: &mut HashMap<(String, String), FnDef>,
+) -> Value {
+    // Create new scope starting with captured environment
+    let mut closure_env = closure.captured_env.clone();
+    
+    // Bind parameters
+    for (i, (param_name, _param_type)) in closure.def.params.iter().enumerate() {
+        if i < args.len() {
+            let arg_val = eval_expr(&args[i], env, fns, models, roles, model_methods);
+            closure_env.insert(
+                param_name.clone(),
+                (AssignKind::Var, arg_val, Ownership::Borrowed, Moved::False),
+            );
+        } else {
+            panic!("Closure expects {} arguments, got {}", closure.def.params.len(), args.len());
+        }
+    }
+    
+    // Execute closure body
+    let flow = execute_block(
+        &closure.def.body,
+        &mut closure_env,
+        fns,
+        models,
+        roles,
+        model_methods,
+        closure.def.return_type.as_ref(),
+    );
+    
+    match flow {
+        ControlFlow::Return(val) => val,
+        _ => Value::Void,
     }
 }
 
@@ -533,6 +582,19 @@ fn eval_expr(
             }
         },
         Expr::Call { name, args } => {
+            if let Some((_, Value::Closure(closure), _ownership, _moved)) = env.get(name) {
+                let closure = closure.clone();
+                return call_closure(
+                    &closure,
+                    args,
+                    env,
+                    fns,
+                    models,
+                    roles,
+                    model_methods,
+                );
+            }
+
             let fn_def = if let Some((_, Value::Function(fn_def), _ownership, _moved)) = env.get(name) {
                 fn_def.clone()
             } else if let Some(fn_def) = fns.get(name) {
@@ -662,6 +724,12 @@ fn eval_expr(
                 }
                 _ => panic!("Cannot call method on non-object"),
             }
+        }
+        Expr::Closure(closure_def) => {
+            Value::Closure(ClosureValue {
+                def: Box::new(closure_def.as_ref().clone()),
+                captured_env: env.clone(),
+            })
         }
     }
 }
