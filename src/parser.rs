@@ -46,6 +46,32 @@ impl Parser {
         }
     }
 
+    fn is_compound_op(&self, token: &Token) -> bool {
+        matches!(
+            token,
+            Token::PlusEq
+                | Token::MinusEq
+                | Token::StarEq
+                | Token::SlashEq
+                | Token::PercentEq
+                | Token::StarStarEq
+                | Token::CaretEq
+        )
+    }
+
+    fn token_to_compound_op(&self, token: &Token) -> Result<String, String> {
+        match token {
+            Token::PlusEq => Ok("+=".to_string()),
+            Token::MinusEq => Ok("-=".to_string()),
+            Token::StarEq => Ok("*=".to_string()),
+            Token::SlashEq => Ok("/=".to_string()),
+            Token::PercentEq => Ok("%=".to_string()),
+            Token::StarStarEq => Ok("**=".to_string()),
+            Token::CaretEq => Ok("^=".to_string()),
+            _ => Err("Not a compound operator".to_string()),
+        }
+    }
+
     fn parse_statement(&mut self) -> Result<Stmt, String> {
         self.skip_newlines();
         
@@ -148,6 +174,28 @@ impl Parser {
                 self.advance();
                 let value = self.parse_expr()?;
                 Ok(Stmt::Reassign { name, value })
+            }
+            Some(op_token) if self.is_compound_op(&op_token) => {
+                // Compound assignment (+=, -=, etc.)
+                let op = self.token_to_compound_op(&op_token)?;
+                self.advance();
+                let value = self.parse_expr()?;
+                
+                // Create the expanded expression
+                let expanded = match op.as_str() {
+                    "+=" => Expr::Add(Box::new(Expr::Var(name.clone())), Box::new(value)),
+                    "-=" => Expr::Subtract(Box::new(Expr::Var(name.clone())), Box::new(value)),
+                    "*=" => Expr::Multiply(Box::new(Expr::Var(name.clone())), Box::new(value)),
+                    "/=" => Expr::Divide(Box::new(Expr::Var(name.clone())), Box::new(value)),
+                    "%=" => Expr::Modulo(Box::new(Expr::Var(name.clone())), Box::new(value)),
+                    "**=" | "^=" => Expr::Power(Box::new(Expr::Var(name.clone())), Box::new(value)),
+                    _ => unreachable!(),
+                };
+                
+                Ok(Stmt::Reassign { 
+                    name, 
+                    value: expanded 
+                })
             }
             Some(Token::LParen) => {
                 // Function call
