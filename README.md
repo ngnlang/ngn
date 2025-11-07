@@ -22,7 +22,7 @@ ngn follows in the footsteps of Rust's ownership model, but tries to make it eas
 | keyword | scope | binding | value | ownership | example | type |
 |-------|-------|-------|-------|-------|-------|-------|
 | var | local | mutable | immutable | borrowed | `var x = "hello"` | string |
-| var | local | mutable | mutable | owned | `var z <- "world"` | string |
+| var | local | mutable | mutable | owned | `var z =< "world"` | string |
 | const | local | immutable | immutable | borrowed | `const status = "go"` | string |
 | lit | global | immutable | immutable | borrowed | `lit VERSION = "2"` | string |
 | static | global | immutable | immutable | borrowed | `static DATA = [1..=1000]` | [i32] |
@@ -37,7 +37,7 @@ x = "hello!" ❌ // value is immutable since it's borrowed
 rebind x = 0 ✅ // is rebindable, which allows you to change the value and type
 ```
 ```ngn
-var x <- "hello" // declares `x` as an owned `string`
+var x =< "hello" // declares `x` as an owned `string`
 x = "hello!!" ✅ // value is mutable since it's owned
 rebind x = "goodbye" ✅ // is rebindable
 ```
@@ -56,8 +56,8 @@ model User {
   role: string
 }
 
-// use `<-` to ensure all relevant properties are owned, per types in the model
-var user <- User {
+// use `=<` to ensure all relevant properties are owned, per types in the model
+var user =< User {
   name: "Sam",
   role: "Developer"
 }
@@ -81,9 +81,10 @@ x = "hello!!" ❌ // value is immutable since it's borrowed
 rebind x = "goodbye" ❌ // is not rebindable since it's a constant
 ```
 ```ngn
-const x <- "hello" // owned `string`
+const x =< "hello" // owned `string`
 
-fn doThing(thing: <string) { // requires an owned string, using `<` syntax
+// separate with a space, if that's more readable for you: `(thing: < string)`
+fn doThing(thing: <string) { // requires an owned string, using owned (`<`) syntax
   // consume thing
 }
 
