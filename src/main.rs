@@ -827,7 +827,6 @@ fn execute_stmt(
             }
 
             let (kind, existing_val, ownership, _moved) = env.get(name).unwrap().clone();
-            eprintln!("Reassign {}: ownership = {:?}", name, ownership);
             let existing_type = infer_value_type(&existing_val);
 
             match kind {

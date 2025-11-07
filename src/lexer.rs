@@ -11,7 +11,7 @@ pub enum Token {
     StarStar, EqEq, NotEq, LessEq, GreaterEq, OrOr,
     Plus, Minus, One, Once, Star, Slash, Percent, Caret, Eq, Less, Greater,
     Colon, Comma, Period,
-    PlusEq, MinusEq, StarEq, SlashEq, PercentEq, StarStarEq, CaretEq, LArrow,
+    PlusEq, MinusEq, StarEq, SlashEq, PercentEq, StarStarEq, CaretEq, OwnedAssign,
     LParen, RParen, LBracket, RBracket, LBrace, RBrace, Pipe,
     Newline,
     Fn, Return, ShortReturn,
@@ -64,6 +64,9 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
                 if chars.peek().map(|(_, c)| *c) == Some('=') {
                     chars.next();
                     tokens.push((pos, Token::EqEq, pos + 2));
+                } else if chars.peek().map(|(_, c)| *c) == Some('<') {
+                    chars.next();
+                    tokens.push((pos, Token::OwnedAssign, pos + 2));
                 } else if chars.peek().map(|(_, c)| *c) == Some('>') {
                     chars.next();
                     tokens.push((pos, Token::ShortReturn, pos + 2));
@@ -85,9 +88,6 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
                 if chars.peek().map(|(_, c)| *c) == Some('=') {
                     chars.next();
                     tokens.push((pos, Token::LessEq, pos + 2));
-                } else if chars.peek().map(|(_, c)| *c) == Some('-') {
-                    chars.next();
-                    tokens.push((pos, Token::LArrow, pos + 2));
                 } else {
                     tokens.push((pos, Token::Less, pos + 1));
                 }

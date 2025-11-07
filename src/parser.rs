@@ -112,7 +112,7 @@ impl Parser {
                 self.advance();
                 Ownership::Borrowed
             },
-            Some(Token::LArrow) => {
+            Some(Token::OwnedAssign) => {
                 self.advance();
                 Ownership::Owned
             },
