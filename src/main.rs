@@ -49,12 +49,20 @@ fn format_value(v: &Value) -> String {
 
 fn method_mutates_this(body: &[Stmt]) -> bool {
     for stmt in body {
-        if matches!(stmt, Stmt::RebindField { object, .. } if object == "this") {
-            return true;
-        }
-        
-        // Check nested blocks
         match stmt {
+            // Direct field assignment: this.field = value
+            Stmt::ExprStmt(Expr::FieldAccess { object, value, .. }) => {
+                if let Expr::Var(name) = object.as_ref() {
+                    if name == "this" && value.is_some() {
+                        return true;
+                    }
+                }
+            }
+            // Rebind on this
+            Stmt::RebindField { object, .. } if object == "this" => {
+                return true;
+            }
+            // Check nested blocks
             Stmt::If { then_block, else_ifs, else_block, .. } => {
                 if method_mutates_this(then_block) {
                     return true;
@@ -864,17 +872,23 @@ fn eval_expr(
 
                     // Check if method mutates this and if caller has permission
                     if let Expr::Var(var_name) = object.as_ref() {
-                        if let Some((kind, _, _, _)) = env.get(var_name) {
+                        if let Some((kind, _, ownership, _)) = env.get(var_name) {
                             let method_mutates = method_def.body.as_ref()
                                 .map(|body| method_mutates_this(body))
                                 .unwrap_or(false);
                             
                             if method_mutates {
-                                match kind {
-                                    AssignKind::Var => {
+                                match (kind, ownership) {
+                                    (AssignKind::Var, Ownership::Owned) => {
                                         // var allows mutations
                                     }
-                                    AssignKind::Const | AssignKind::Static | AssignKind::Lit => {
+                                    (AssignKind::Var, Ownership::Borrowed) => {
+                                        panic!(
+                                            "Cannot call mutating method '{}' on borrowed instance '{}'. Use rebind or declare with '<-' for owned access.",
+                                            method, var_name
+                                        );
+                                    }
+                                    (AssignKind::Const, _) | (AssignKind::Static, _) | (AssignKind::Lit, _) => {
                                         panic!(
                                             "Cannot call mutating method '{}' on immutable instance '{}' (declared as {:?})",
                                             method, var_name, format!("{:?}", kind).to_lowercase()
