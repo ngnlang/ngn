@@ -374,7 +374,7 @@ fn validate_role_compliance(
 fn call_closure(
     closure: &ClosureValue,
     args: &[Expr],
-    env: &mut HashMap<String, (AssignKind, Value, Ownership, Moved)>,
+    outer_env: &mut HashMap<String, (AssignKind, Value, Ownership, Moved)>,
     fns: &mut HashMap<String, FnDef>,
     models: &mut HashMap<String, ModelDef>,
     roles: &mut HashMap<String, RoleDef>,
@@ -386,7 +386,7 @@ fn call_closure(
     // Bind parameters
     for (i, (param_name, _param_type)) in closure.def.params.iter().enumerate() {
         if i < args.len() {
-            let arg_val = eval_expr(&args[i], env, fns, models, roles, model_methods);
+            let arg_val = eval_expr(&args[i], outer_env, fns, models, roles, model_methods);
             closure_env.insert(
                 param_name.clone(),
                 (AssignKind::Var, arg_val, Ownership::Borrowed, Moved::False),
@@ -406,6 +406,12 @@ fn call_closure(
         model_methods,
         closure.def.return_type.as_ref(),
     );
+
+    for var in &closure.vars {
+        if let Some(value) = closure_env.get(var) {
+            outer_env.insert(var.clone(), value.clone());
+        }
+    }
     
     match flow {
         ControlFlow::Return(val) => val,
@@ -726,9 +732,16 @@ fn eval_expr(
             }
         }
         Expr::Closure(closure_def) => {
+            let vars: Vec<String> = env
+                .iter()
+                .filter(|(_, (kind, _, _, _))| matches!(kind, AssignKind::Var))
+                .map(|(name, _)| name.clone())
+                .collect();
+
             Value::Closure(ClosureValue {
                 def: Box::new(closure_def.as_ref().clone()),
                 captured_env: env.clone(),
+                vars,
             })
         }
     }
