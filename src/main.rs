@@ -385,7 +385,7 @@ fn call_closure(
 
     // For vars, get current values from outer_env
     // (in case they've been updated since closure creation)
-    for var_name in &closure.rebound_vars {
+    for var_name in &closure.live_vars {
         if let Some(current_value) = outer_env.get(var_name) {
             closure_env.insert(var_name.clone(), current_value.clone());
         }
@@ -416,7 +416,7 @@ fn call_closure(
     );
 
     // Sync all vars back (they're live references now)
-    for rebound_var in &closure.rebound_vars {
+    for rebound_var in &closure.live_vars {
         if let Some(value) = closure_env.get(rebound_var) {
             outer_env.insert(rebound_var.clone(), value.clone());
         }
@@ -781,10 +781,26 @@ fn eval_expr(
         Expr::Closure(closure_def) => {
             let rebound_vars: Vec<String> = find_rebound_vars(&closure_def.body);
 
+            let owned_vars: Vec<String> = env
+                .iter()
+                .filter(|(_, (kind, _, ownership, _))| {
+                    matches!(kind, AssignKind::Var) && *ownership == Ownership::Owned
+                })
+                .map(|(name, _)| name.clone())
+                .collect();
+            
+            // Both rebound vars and owned vars should be live
+            let mut live_vars = rebound_vars;
+            for owned_var in owned_vars {
+                if !live_vars.contains(&owned_var) {
+                    live_vars.push(owned_var);
+                }
+            }
+
             Value::Closure(ClosureValue {
                 def: Box::new(closure_def.as_ref().clone()),
                 captured_env: env.clone(),
-                rebound_vars,
+                live_vars,
             })
         }
     }
