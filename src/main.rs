@@ -540,12 +540,7 @@ fn eval_expr(
                     InterpolationPart::Literal(s) => result.push_str(s),
                     InterpolationPart::Expression(expr) => {
                         let val = eval_expr(expr, env, fns, models, roles, model_methods);
-                        match val {
-                            Value::String(s) => result.push_str(&s),
-                            Value::Number(n) => result.push_str(&n.to_string()),
-                            Value::Bool(b) => result.push_str(&b.to_string()),
-                            _ => result.push_str(&format!("{:?}", val)),
-                        }
+                        result.push_str(&format_value(&val));
                     }
                 }
             }
