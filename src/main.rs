@@ -174,6 +174,7 @@ fn infer_expr_type(
     env: &HashMap<String, (AssignKind, Value, Ownership, Moved)>,
     fns: &HashMap<String, FnDef>,
     models: &HashMap<String, ModelDef>,
+    model_methods: &mut HashMap<(String, String), FnDef>,
 ) -> Type {
     match e {
         Expr::Number(_) => Type::Number,
@@ -184,9 +185,9 @@ fn infer_expr_type(
             if exprs.is_empty() {
                 Type::Array(Box::new(Type::Number))
             } else {
-                let elem_type = infer_expr_type(&exprs[0], env, fns, models);
+                let elem_type = infer_expr_type(&exprs[0], env, fns, models, model_methods);
                 for expr in exprs.iter().skip(1) {
-                    let other_type = infer_expr_type(expr, env, fns, models);
+                    let other_type = infer_expr_type(expr, env, fns, models, model_methods);
                     if !types_compatible(&elem_type, &other_type) {
                         panic!("Array type error: mixed types");
                     }
@@ -195,8 +196,8 @@ fn infer_expr_type(
             }
         }
         Expr::Add(a, b) => {
-            let left = infer_expr_type(a, env, fns, models);
-            let right = infer_expr_type(b, env, fns, models);
+            let left = infer_expr_type(a, env, fns, models, model_methods);
+            let right = infer_expr_type(b, env, fns, models, model_methods);
             if types_compatible(&left, &Type::Number) && types_compatible(&right, &Type::Number) {
                 Type::Number
             } else if types_compatible(&left, &Type::String) && types_compatible(&right, &Type::String) {
@@ -206,23 +207,23 @@ fn infer_expr_type(
             }
         }
         Expr::Subtract(a, b) | Expr::Multiply(a, b) | Expr::Divide(a, b) | Expr::Modulo(a, b) => {
-            let left = infer_expr_type(a, env, fns, models);
-            let right = infer_expr_type(b, env, fns, models);
+            let left = infer_expr_type(a, env, fns, models, model_methods);
+            let right = infer_expr_type(b, env, fns, models, model_methods);
             if !types_compatible(&left, &Type::Number) || !types_compatible(&right, &Type::Number) {
                 panic!("Type error: arithmetic requires numbers");
             }
             Type::Number
         }
         Expr::Power(a, b) => {
-            let left = infer_expr_type(a, env, fns, models);
-            let right = infer_expr_type(b, env, fns, models);
+            let left = infer_expr_type(a, env, fns, models, model_methods);
+            let right = infer_expr_type(b, env, fns, models, model_methods);
             if !types_compatible(&left, &Type::Number) || !types_compatible(&right, &Type::Number) {
                 panic!("Type error: power requires numbers");
             }
             Type::Number
         }
         Expr::Negative(e) => {
-            let t = infer_expr_type(e, env, fns, models);
+            let t = infer_expr_type(e, env, fns, models, model_methods);
             if !types_compatible(&t, &Type::Number) {
                 panic!("Type error: cannot negate non-number");
             }
@@ -256,11 +257,11 @@ fn infer_expr_type(
                 panic!("Unknown function: {}", name);
             }
         }
-        Expr::Assign { value, .. } => infer_expr_type(value, env, fns, models),
-        Expr::CompoundAssign { value, .. } => infer_expr_type(value, env, fns, models),
+        Expr::Assign { value, .. } => infer_expr_type(value, env, fns, models, model_methods),
+        Expr::CompoundAssign { value, .. } => infer_expr_type(value, env, fns, models, model_methods),
         Expr::ModelInstance { name, .. } => Type::Model(name.clone()),
         Expr::FieldAccess { object, field } => {
-            let obj_type = infer_expr_type(object, env, fns, models);
+            let obj_type = infer_expr_type(object, env, fns, models, model_methods);
             match obj_type {
                 Type::Model(model_name) => {
                     if let Some(model_def) = models.get(&model_name) {
@@ -276,8 +277,17 @@ fn infer_expr_type(
                 _ => panic!("Cannot access field on type {:?}", obj_type),
             }
         }
-        Expr::MethodCall { object, method: _, args: _ } => {
-            let obj_type = infer_expr_type(object, env, fns, models);
+        Expr::MethodCall { object, method, args: _ } => {
+            // Check for static method on model
+            if let Expr::Var(model_name) = &**object {
+                if models.contains_key(model_name) {
+                    if let Some(method_def) = model_methods.get(&(model_name.clone(), method.clone())) {
+                        return method_def.return_type.clone().unwrap_or(Type::Void);
+                    }
+                }
+            }
+
+            let obj_type = infer_expr_type(object, env, fns, models, model_methods);
             match obj_type {
                 Type::Model(_model_name) => {
                     // For now, assume method returns what we'll determine at runtime
@@ -735,6 +745,43 @@ fn eval_expr(
             }
         }
         Expr::MethodCall { object, method, args } => {
+            // Check if it's a static method call on a model type
+            if let Expr::Var(model_name) = &**object {
+                if models.contains_key(model_name) {
+                    // Static method call: Model.method(...)
+                    if let Some(method_def) = model_methods.get(&(model_name.clone(), method.clone())).cloned() {
+                        // Create new scope for the static method (no `this`)
+                        let mut method_env: HashMap<String, (AssignKind, Value, Ownership, Moved)> = HashMap::new();
+                        
+                        // Bind parameters
+                        for (i, (param_name, _param_type, _)) in method_def.params.iter().enumerate() {
+                            if i < args.len() {
+                                let arg_val = eval_expr(&args[i], env, fns, models, roles, model_methods);
+                                method_env.insert(
+                                    param_name.clone(),
+                                    (AssignKind::Var, arg_val, Ownership::Borrowed, Moved::False),
+                                );
+                            } else {
+                                panic!("Method {} expects {} arguments, got {}", method, method_def.params.len(), args.len());
+                            }
+                        }
+                        
+                        // Execute method body
+                        if let Some(body) = &method_def.body {
+                            let flow = execute_block(body, &mut method_env, fns, models, roles, model_methods, method_def.return_type.as_ref());
+                            match flow {
+                                ControlFlow::Return(val) => return val,
+                                _ => return Value::Void,
+                            }
+                        } else {
+                            panic!("Static method '{}' has no body", method);
+                        }
+                    } else {
+                        panic!("Static method '{}' not found on model '{}'", method, model_name);
+                    }
+                }
+            }
+
             let obj_val = eval_expr(object, env, fns, models, roles, model_methods);
             match &obj_val {
                 Value::Object(model_name, _fields) => {
@@ -817,19 +864,19 @@ fn execute_stmt(
 ) -> ControlFlow {
     match stmt {
         Stmt::Echo(e) => {
-            let _type = infer_expr_type(e, env, fns, models);
+            let _type = infer_expr_type(e, env, fns, models, model_methods);
             let v = eval_expr(e, env, fns, models, roles, model_methods);
             print!("{}", format_value(&v));
             ControlFlow::None
         }
         Stmt::Print(e) => {
-            let _type = infer_expr_type(e, env, fns, models);
+            let _type = infer_expr_type(e, env, fns, models, model_methods);
             let v = eval_expr(e, env, fns, models, roles, model_methods);
             println!("{}", format_value(&v));
             ControlFlow::None
         }
         Stmt::ExprStmt(e) => {
-            let _type = infer_expr_type(e, env, fns, models);
+            let _type = infer_expr_type(e, env, fns, models, model_methods);
             eval_expr(e, env, fns, models, roles, model_methods);
             ControlFlow::None
         }
@@ -859,7 +906,7 @@ fn execute_stmt(
                 _ => {}
             }
 
-            let _type = infer_expr_type(value, env, fns, models);
+            let _type = infer_expr_type(value, env, fns, models, model_methods);
             let v = eval_expr(value, env, fns, models, roles, model_methods);
             let mut actual_type = infer_value_type(&v);
             let mut normalized_declared_type = declared_type.clone();
@@ -893,7 +940,7 @@ fn execute_stmt(
             ControlFlow::None
         }
         Stmt::Reassign { name, value } => {
-            let _type = infer_expr_type(value, env, fns, models);
+            let _type = infer_expr_type(value, env, fns, models, model_methods);
             if !env.contains_key(name) {
                 panic!("Variable '{}' not declared", name);
             }
@@ -947,14 +994,14 @@ fn execute_stmt(
         Stmt::Break => ControlFlow::Break,
         Stmt::Next => ControlFlow::Next,
         Stmt::If { condition, then_block, else_ifs, else_block } => {
-            let _cond_type = infer_expr_type(condition, env, fns, models);
+            let _cond_type = infer_expr_type(condition, env, fns, models, model_methods);
             let cond_value = eval_expr(condition, env, fns, models, roles, model_methods);
             
             if is_truthy(&cond_value) {
                 execute_block(then_block, env, fns, models, roles, model_methods, None)
             } else {
                 for (else_if_cond, else_if_stmts) in else_ifs {
-                    let _type = infer_expr_type(else_if_cond, env, fns, models);
+                    let _type = infer_expr_type(else_if_cond, env, fns, models, model_methods);
                     let else_if_value = eval_expr(else_if_cond, env, fns, models, roles, model_methods);
                     if is_truthy(&else_if_value) {
                         return execute_block(else_if_stmts, env, fns, models, roles, model_methods, None);
@@ -970,7 +1017,7 @@ fn execute_stmt(
         }
         Stmt::While { condition, body } => {
             loop {
-                let _cond_type = infer_expr_type(condition, env, fns, models);
+                let _cond_type = infer_expr_type(condition, env, fns, models, model_methods);
                 let cond_value = eval_expr(condition, env, fns, models, roles, model_methods);
                 if !is_truthy(&cond_value) {
                     break;
@@ -994,7 +1041,7 @@ fn execute_stmt(
                     ControlFlow::None => {}
                 }
 
-                let _cond_type = infer_expr_type(condition, env, fns, models);
+                let _cond_type = infer_expr_type(condition, env, fns, models, model_methods);
                 let cond_value = eval_expr(condition, env, fns, models, roles, model_methods);
                 if !is_truthy(&cond_value) {
                     break;
@@ -1004,7 +1051,7 @@ fn execute_stmt(
         }
         Stmt::Until { condition, body } => {
             loop {
-                let _cond_type = infer_expr_type(condition, env, fns, models);
+                let _cond_type = infer_expr_type(condition, env, fns, models, model_methods);
                 let cond_value = eval_expr(condition, env, fns, models, roles, model_methods);
                 if is_truthy(&cond_value) {
                     break;
@@ -1028,7 +1075,7 @@ fn execute_stmt(
                     ControlFlow::None => {}
                 }
 
-                let _cond_type = infer_expr_type(condition, env, fns, models);
+                let _cond_type = infer_expr_type(condition, env, fns, models, model_methods);
                 let cond_value = eval_expr(condition, env, fns, models, roles, model_methods);
                 if is_truthy(&cond_value) {
                     break;
@@ -1037,13 +1084,13 @@ fn execute_stmt(
             ControlFlow::None
         }
         Stmt::Match { expr, cases, default, match_type } => {
-            let _expr_type = infer_expr_type(expr, env, fns, models);
+            let _expr_type = infer_expr_type(expr, env, fns, models, model_methods);
             let val = eval_expr(expr, env, fns, models, roles, model_methods);
             let mut matched = false;
             
             for (tests, stmts) in cases {
                 for test in tests {
-                    let _test_type = infer_expr_type(test, env, fns, models);
+                    let _test_type = infer_expr_type(test, env, fns, models, model_methods);
                     let test_val = eval_expr(test, env, fns, models, roles, model_methods);
 
                     if values_equal(&val, &test_val) {
@@ -1093,7 +1140,7 @@ fn execute_stmt(
         Stmt::Return(expr_opt) => {
             let val = match expr_opt {
                 Some(e) => {
-                    let _type = infer_expr_type(e, env, fns, models);
+                    let _type = infer_expr_type(e, env, fns, models, model_methods);
                     eval_expr(e, env, fns, models, roles, model_methods)
                 }
                 None => Value::Void,
