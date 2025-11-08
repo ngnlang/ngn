@@ -382,6 +382,14 @@ fn call_closure(
 ) -> Value {
     // Create new scope starting with captured environment
     let mut closure_env = closure.captured_env.clone();
+
+    // For vars, get current values from outer_env
+    // (in case they've been updated since closure creation)
+    for var_name in &closure.vars {
+        if let Some(current_value) = outer_env.get(var_name) {
+            closure_env.insert(var_name.clone(), current_value.clone());
+        }
+    }
     
     // Bind parameters
     for (i, (param_name, _param_type)) in closure.def.params.iter().enumerate() {
@@ -407,6 +415,7 @@ fn call_closure(
         closure.def.return_type.as_ref(),
     );
 
+    // Sync all vars back (they're live references now)
     for var in &closure.vars {
         if let Some(value) = closure_env.get(var) {
             outer_env.insert(var.clone(), value.clone());
