@@ -319,7 +319,7 @@ const doThing = || {
 doThing()
 ```
 
-Unlike functions, closures allow you to access the state of their surrounding scope.
+Unlike functions, closures give you access to the state of their surrounding scope.
 ```ngn
 var base = 10
 
@@ -327,20 +327,39 @@ const tally = |a: number| base + a
 print(tally(3)) // 13
 ```
 
-However, by default, this access is a read-only snapshot of the variable's state when the closure is created; so, changing the state afterwards does not change the state inside the closure.
+With borrowed variables, this access is a snapshot of the variable's value when the closure is created; so, changing the value afterwards does not change it inside the closure.
 ```ngn
 var base = 10
 
 const tally = |a: number| base + a
 print(tally(3)) // 13
 
-rebind base = 100
+rebind base = 100 // does not change the value of `base` within the closure
 print(tally(3)) // still 13
 ```
 
-If you want to mutate state from a closure, use `rebind` on the variables the closure uses. This approach helps you avoid accidentally mutating outside state when you didn't intend to. Using `rebind` in this way also syncs the variable's state within the closure, no matter where the variable is updated from.
+However, the value within the closure can be kept in sync when using owned variables or using `rebind`. This also mutates the variable outside the closure.
+
+- implicit mutability to owned variables
+- explicit mutability to rebindable variables, via `rebind`
+
 ```ngn
-var count = 0
+var count =< 0 // owned, mutable by default
+
+const incrementBy = |a: number| count = count + a // `count`'s value is synced with the outside
+
+incrementBy(10)
+print(count) // 10
+
+incrementBy(5)
+print(count) // 15
+
+rebind count = 100
+incremenBy(7)
+print(count) // 107
+```
+```ngn
+var count = 0 // borrrowed, but rebindable
 
 const incrementBy = |a: number| rebind count = count + a
 
