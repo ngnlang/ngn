@@ -242,6 +242,7 @@ impl ExprParser {
                                 expr = Expr::FieldAccess {
                                     object: Box::new(expr),
                                     field: field_name,
+                                    value: None,
                                 };
                             }
                         }

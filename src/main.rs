@@ -260,7 +260,7 @@ fn infer_expr_type(
         Expr::Assign { value, .. } => infer_expr_type(value, env, fns, models, model_methods),
         Expr::CompoundAssign { value, .. } => infer_expr_type(value, env, fns, models, model_methods),
         Expr::ModelInstance { name, .. } => Type::Model(name.clone()),
-        Expr::FieldAccess { object, field } => {
+        Expr::FieldAccess { object, field, value: _ } => {
             let obj_type = infer_expr_type(object, env, fns, models, model_methods);
             match obj_type {
                 Type::Model(model_name) => {
@@ -734,12 +734,41 @@ fn eval_expr(
                 panic!("Unknown model: {}", name);
             }
         }
-        Expr::FieldAccess { object, field } => {
+        // In eval_expr, fix the FieldAccess branch:
+        Expr::FieldAccess { object, field, value } => {
             let obj_val = eval_expr(object, env, fns, models, roles, model_methods);
+            
             match obj_val {
-                Value::Object(_, fields) => {
-                    fields.get(field).cloned()
-                        .unwrap_or_else(|| panic!("Field '{}' not found", field))
+                Value::Object(model_name, mut fields) => {
+                    // Only update if value is provided
+                    if let Some(new_val_expr) = value {
+                        let new_val = eval_expr(new_val_expr, env, fns, models, roles, model_methods);
+                        fields.insert(field.clone(), new_val.clone());
+                        let updated_obj = Value::Object(model_name, fields);
+                        
+                        // Update the original variable
+                        if let Expr::Var(var_name) = object.as_ref() {
+                            if let Some((kind, _, ownership, _)) = env.get(var_name) {
+                                match ownership {
+                                    Ownership::Owned => {
+                                        env.insert(var_name.clone(), (kind.clone(), updated_obj, ownership.clone(), Moved::False));
+                                    }
+                                    Ownership::Borrowed => {
+                                        panic!("Cannot directly assign field on borrowed instance '{}'. Use 'rebind'", var_name);
+                                    }
+                                }
+                            }
+                        } else {
+                            panic!("Can only assign fields on variables");
+                        }
+                        
+                        new_val
+                    } else {
+                        // Just accessing the field, return it
+                        fields.get(field)
+                            .cloned()
+                            .unwrap_or_else(|| panic!("Field '{}' not found", field))
+                    }
                 }
                 _ => panic!("Cannot access field on non-object"),
             }
@@ -797,7 +826,7 @@ fn eval_expr(
                     // Bind `this` as first implicit parameter
                     method_env.insert(
                         "this".to_string(),
-                        (AssignKind::Const, obj_val.clone(), Ownership::Borrowed, Moved::False),
+                        (AssignKind::Var, obj_val.clone(), Ownership::Borrowed, Moved::False),
                     );
                     
                     // Bind explicit parameters (skip first param if it matches signature)
@@ -812,14 +841,25 @@ fn eval_expr(
                     }
                         
                     // Execute method body
-                    if let Some(body) = &method_def.body {
-                        let flow = execute_block(body, &mut method_env, fns, models, roles, model_methods, method_def.return_type.as_ref());
-                        match flow {
-                            ControlFlow::Return(val) => val,
-                            _ => Value::Void,
-                        }
+                    let flow = if let Some(body) = &method_def.body {
+                        execute_block(body, &mut method_env, fns, models, roles, model_methods, method_def.return_type.as_ref())
                     } else {
                         panic!("Method '{}' has no body", method);
+                    };
+                    
+                    // Sync `this` back to the original variable
+                    if let Expr::Var(var_name) = object.as_ref() {
+                        if let Some((_, updated_obj, _, _)) = method_env.get("this") {
+                            // Get the original ownership from the outer env
+                            if let Some((kind, _, original_ownership, _)) = env.get(var_name) {
+                                env.insert(var_name.clone(), (kind.clone(), updated_obj.clone(), original_ownership.clone(), Moved::False));
+                            }
+                        }
+                    }
+                    
+                    match flow {
+                        ControlFlow::Return(val) => val,
+                        _ => Value::Void,
                     }
                 }
                 _ => panic!("Cannot call method on non-object"),
@@ -989,6 +1029,30 @@ fn execute_stmt(
             
             let v = eval_expr(value, env, fns, models, roles, model_methods);
             env.insert(name.clone(), (kind, v, ownership, Moved::False));
+            ControlFlow::None
+        }
+        Stmt::RebindField { object, field, value } => {
+            if let Some((kind, _, _, moved)) = env.get(object) {
+                if *kind != AssignKind::Var {
+                    panic!("Can only rebind fields defined via var, not {:?}", format!("{:?}", kind).to_lowercase());
+                }
+                if let Moved::True = *moved {
+                    panic!("Cannot rebind moved variable '{}'", object);
+                }
+                
+                let (kind, Value::Object(model_name, mut fields), ownership, _) = env.get(object).unwrap().clone() else {
+                    panic!("Can only rebind fields on objects");
+                };
+                
+                let new_val = eval_expr(value, env, fns, models, roles, model_methods);
+                fields.insert(field.clone(), new_val);
+                
+                let updated_obj = Value::Object(model_name, fields);
+                env.insert(object.clone(), (kind, updated_obj, ownership, Moved::False));
+            } else {
+                panic!("Cannot rebind undefined variable '{}'", object);
+            }
+            
             ControlFlow::None
         }
         Stmt::Break => ControlFlow::Break,

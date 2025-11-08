@@ -169,7 +169,34 @@ impl Parser {
 
     fn parse_rebind_stmt(&mut self) -> Result<Stmt, String> {
         self.advance(); // consume 'rebind'
+        
         let name = self.expect_ident()?;
+        
+        // Check if it's a field rebind: rebind obj.field = value
+        if matches!(self.current_token(), Some(Token::Period)) {
+            let mut expr = Expr::Var(name.clone());
+            expr = self.parse_method_chain(expr)?;
+            
+            self.expect(Token::Eq)?;
+            let value = self.parse_expr()?;
+            
+            // expr should be a FieldAccess
+            if let Expr::FieldAccess { object, field, value: _ } = expr {
+                if let Expr::Var(obj_name) = *object {
+                    return Ok(Stmt::RebindField { 
+                        object: obj_name, 
+                        field, 
+                        value 
+                    });
+                } else {
+                    return Err("Can only rebind fields on direct variables".to_string());
+                }
+            } else {
+                return Err("Cannot rebind to non-field".to_string());
+            }
+        }
+        
+        // Simple rebind: rebind name = value
         self.expect(Token::Eq)?;
         let value = self.parse_expr()?;
         Ok(Stmt::Rebind { name, value })
@@ -184,6 +211,31 @@ impl Parser {
                 self.advance();
                 let value = self.parse_expr()?;
                 Ok(Stmt::Reassign { name, value })
+            }
+            Some(Token::Period) => {
+                // Could be: method call, field access, or field assignment
+                // Parse the postfix chain first
+                let mut expr = Expr::Var(name);
+                expr = self.parse_method_chain(expr)?;
+                
+                // Now check if there's an assignment
+                if matches!(self.current_token(), Some(Token::Eq)) {
+                    self.advance();  // consume =
+                    let value = self.parse_expr()?;
+                    
+                    // expr should be a FieldAccess at this point
+                    if let Expr::FieldAccess { object, field, value: _ } = expr {
+                        return Ok(Stmt::ExprStmt(Expr::FieldAccess {
+                            object,
+                            field,
+                            value: Some(Box::new(value)),
+                        }));
+                    } else {
+                        return Err("Cannot assign to non-field".to_string());
+                    }
+                }
+                
+                Ok(Stmt::ExprStmt(expr))
             }
             Some(op_token) if self.is_compound_op(&op_token) => {
                 // Compound assignment (+=, -=, etc.)
@@ -213,11 +265,6 @@ impl Parser {
                 let args = self.parse_fn_args()?;
                 self.expect(Token::RParen)?;
                 Ok(Stmt::ExprStmt(Expr::Call { name, args }))
-            }
-            Some(Token::Period) => {
-                // Method call: name.method(args)
-                let obj_expr = Expr::Var(name);
-                self.parse_method_chain(obj_expr).map(Stmt::ExprStmt)
             }
             _ => Err(format!(
                 "Expected '=', '(', or '.' after identifier, got {:?}",
@@ -825,7 +872,22 @@ impl Parser {
         }
         
         let mut expr_parser = crate::expr_parser::ExprParser::new(expr_tokens);
-        expr_parser.parse()
+        let expr = expr_parser.parse()?;
+
+        // Check for field assignment: obj.field = value
+        if matches!(self.current_token(), Some(Token::Eq)) {
+            if let Expr::FieldAccess { object, field, value: _ } = expr {
+                self.advance();  // consume =
+                let value = self.parse_expr()?;
+                return Ok(Expr::FieldAccess {
+                    object,
+                    field,
+                    value: Some(Box::new(value)),
+                });
+            }
+        }
+
+        Ok(expr)
     }
 
     fn parse_method_chain(&mut self, mut obj: Expr) -> Result<Expr, String> {
@@ -846,6 +908,7 @@ impl Parser {
                 obj = Expr::FieldAccess {
                     object: Box::new(obj),
                     field: field_name,
+                    value: None,
                 };
             }
         }

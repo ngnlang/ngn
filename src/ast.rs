@@ -56,7 +56,7 @@ pub enum Expr {
     Call { name: String, args: Vec<Expr> },
     InterpolatedString(Vec<InterpolationPart>),
     ModelInstance { name: String, fields: Vec<(String, Expr)> },
-    FieldAccess { object: Box<Expr>, field: String },
+    FieldAccess { object: Box<Expr>, field: String, value: Option<Box<Expr>> },
     MethodCall { object: Box<Expr>, method: String, args: Vec<Expr> },
     Closure(Box<ClosureDef>),
 }
@@ -68,6 +68,7 @@ pub enum Stmt {
     Assign { kind: AssignKind, declared_type: Option<Type>, name: String, value: Expr, ownership: Ownership },
     Reassign { name: String, value: Expr },
     Rebind { name: String, value: Expr },
+    RebindField { object: String, field: String, value: Expr },
     ExprStmt(Expr),
     If { 
         condition: Expr, 
