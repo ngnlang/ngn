@@ -389,9 +389,16 @@ impl ExprParser {
             match self.current_token() {
                 Some(Token::Ident(name)) => {
                     self.advance();
-                    self.expect(Token::Colon)?;
-                    let expr = self.parse_assignment()?;
-                    fields.push((name, expr));
+
+                    // Check if it's shorthand (no colon) or explicit (with colon)
+                    if matches!(self.current_token(), Some(Token::Colon)) {
+                        self.advance();
+                        let expr = self.parse_assignment()?;
+                        fields.push((name, expr));
+                    } else {
+                        // Shorthand: field name only, becomes Var(name)
+                        fields.push((name.clone(), Expr::Var(name)));
+                    }
                     
                     // Optional comma
                     if matches!(self.current_token(), Some(Token::Comma)) {
