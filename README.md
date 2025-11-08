@@ -380,7 +380,10 @@ incremenBy(7)
 print(count) // 107
 ```
 
-### `model`
+### Objects and Composability
+You can create typed objects using models, then create a new instance of a model. You can also extend a model's functionality with direct methods or groups of methods via roles.
+
+#### `model`
 Create object structures.
 
 ```ngn
@@ -390,8 +393,8 @@ model Dog {
 }
 ```
 
-### `role`
-Declare one or more method signatures and/or method implementations. You create roles in order to implement their functionality for models.
+#### `role`
+Declare one or more method signatures and/or method implementations. Group methods into roles in order to implement their functionality for models.
 
 ```ngn
 role Animal {
@@ -399,7 +402,7 @@ role Animal {
 }
 ```
 
-### `extend`
+#### `extend`
 Extend a model's functionality with methods. You can implement custom methods, apply one or more roles, or a mix of both.
 
 ```ngn
@@ -433,6 +436,45 @@ const fetched = dog.fetch("stick")
 print(fetched) // either true or false
 
 dog.speak() // Woof, woof!
+```
+
+#### Alternative for instantiating models
+You may also choose to create a constructor method and use it to create a new instance of a model.
+
+```ngn
+model User {
+  name: string,
+  age: number
+}
+
+extend User with {
+  fn new(name: string, age: number): User {
+    return User { name, age }
+  }
+}
+
+fn main() {
+  var user = User.new("Chloe", 27)
+}
+```
+
+### `this`
+There's no need to fear `this` in ngn. It's an implicit reference to the instance that a method is called on. It gives you access to the instance's fields and other methods.
+
+```ngn
+model User {
+  name: string,
+  age: number
+}
+
+extend User with {
+  fn greet(): string {
+    print("Hello, I'm {this.name}")
+  }
+}
+
+var user = User { name: "Jason", age: 47 }
+user.greet()  // "Hello, I'm Jason"
 ```
 
 ### Types
