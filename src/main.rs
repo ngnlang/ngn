@@ -47,6 +47,53 @@ fn format_value(v: &Value) -> String {
     }
 }
 
+fn method_mutates_this(body: &[Stmt]) -> bool {
+    for stmt in body {
+        if matches!(stmt, Stmt::RebindField { object, .. } if object == "this") {
+            return true;
+        }
+        
+        // Check nested blocks
+        match stmt {
+            Stmt::If { then_block, else_ifs, else_block, .. } => {
+                if method_mutates_this(then_block) {
+                    return true;
+                }
+                for (_, block) in else_ifs {
+                    if method_mutates_this(block) {
+                        return true;
+                    }
+                }
+                if let Some(block) = else_block {
+                    if method_mutates_this(block) {
+                        return true;
+                    }
+                }
+            }
+            Stmt::While { body, .. } | Stmt::WhileOnce { body, .. } |
+            Stmt::Until { body, .. } | Stmt::UntilOnce { body, .. } => {
+                if method_mutates_this(body) {
+                    return true;
+                }
+            }
+            Stmt::Match { cases, default, .. } => {
+                for (_, block) in cases {
+                    if method_mutates_this(block) {
+                        return true;
+                    }
+                }
+                if let Some(block) = default {
+                    if method_mutates_this(block) {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 fn parse_expression_from_string(expr_str: &str) -> Result<Expr, String> {
     let tokens = crate::lexer::tokenize(expr_str);
     
@@ -820,13 +867,36 @@ fn eval_expr(
                         .cloned()
                         .unwrap_or_else(|| panic!("Method '{}' not found on model '{}'", method, model_name));
 
+                    // Check if method mutates this and if caller has permission
+                    if let Expr::Var(var_name) = object.as_ref() {
+                        if let Some((kind, _, _, _)) = env.get(var_name) {
+                            let method_mutates = method_def.body.as_ref()
+                                .map(|body| method_mutates_this(body))
+                                .unwrap_or(false);
+                            
+                            if method_mutates {
+                                match kind {
+                                    AssignKind::Var => {
+                                        // var allows mutations
+                                    }
+                                    AssignKind::Const | AssignKind::Static | AssignKind::Lit => {
+                                        panic!(
+                                            "Cannot call mutating method '{}' on immutable instance '{}' (declared as {:?})",
+                                            method, var_name, format!("{:?}", kind).to_lowercase()
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Create new scope for method
                     let mut method_env: HashMap<String, (AssignKind, Value, Ownership, Moved)> = HashMap::new();
 
                     // Bind `this` as first implicit parameter
                     method_env.insert(
                         "this".to_string(),
-                        (AssignKind::Var, obj_val.clone(), Ownership::Borrowed, Moved::False),
+                        (AssignKind::Var, obj_val.clone(), Ownership::Owned, Moved::False),
                     );
                     
                     // Bind explicit parameters (skip first param if it matches signature)
