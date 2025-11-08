@@ -385,7 +385,7 @@ fn call_closure(
 
     // For vars, get current values from outer_env
     // (in case they've been updated since closure creation)
-    for var_name in &closure.vars {
+    for var_name in &closure.rebound_vars {
         if let Some(current_value) = outer_env.get(var_name) {
             closure_env.insert(var_name.clone(), current_value.clone());
         }
@@ -416,9 +416,9 @@ fn call_closure(
     );
 
     // Sync all vars back (they're live references now)
-    for var in &closure.vars {
-        if let Some(value) = closure_env.get(var) {
-            outer_env.insert(var.clone(), value.clone());
+    for rebound_var in &closure.rebound_vars {
+        if let Some(value) = closure_env.get(rebound_var) {
+            outer_env.insert(rebound_var.clone(), value.clone());
         }
     }
     
@@ -426,6 +426,44 @@ fn call_closure(
         ControlFlow::Return(val) => val,
         _ => Value::Void,
     }
+}
+
+fn find_rebound_vars(stmts: &[Stmt]) -> Vec<String> {
+    let mut rebound = Vec::new();
+    
+    for stmt in stmts {
+        match stmt {
+            Stmt::Rebind { name, .. } => {
+                if !rebound.contains(name) {
+                    rebound.push(name.clone());
+                }
+            }
+            Stmt::If { then_block, else_ifs, else_block, .. } => {
+                rebound.extend(find_rebound_vars(then_block));
+                for (_, block) in else_ifs {
+                    rebound.extend(find_rebound_vars(block));
+                }
+                if let Some(block) = else_block {
+                    rebound.extend(find_rebound_vars(block));
+                }
+            }
+            Stmt::While { body, .. } | Stmt::WhileOnce { body, .. } |
+            Stmt::Until { body, .. } | Stmt::UntilOnce { body, .. } => {
+                rebound.extend(find_rebound_vars(body));
+            }
+            Stmt::Match { cases, default, .. } => {
+                for (_, block) in cases {
+                    rebound.extend(find_rebound_vars(block));
+                }
+                if let Some(block) = default {
+                    rebound.extend(find_rebound_vars(block));
+                }
+            }
+            _ => {}
+        }
+    }
+    
+    rebound
 }
 
 fn eval_expr(
@@ -741,16 +779,12 @@ fn eval_expr(
             }
         }
         Expr::Closure(closure_def) => {
-            let vars: Vec<String> = env
-                .iter()
-                .filter(|(_, (kind, _, _, _))| matches!(kind, AssignKind::Var))
-                .map(|(name, _)| name.clone())
-                .collect();
+            let rebound_vars: Vec<String> = find_rebound_vars(&closure_def.body);
 
             Value::Closure(ClosureValue {
                 def: Box::new(closure_def.as_ref().clone()),
                 captured_env: env.clone(),
-                vars,
+                rebound_vars,
             })
         }
     }

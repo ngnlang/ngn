@@ -169,5 +169,5 @@ pub struct ClosureDef {
 pub struct ClosureValue {
     pub def: Box<ClosureDef>,
     pub captured_env: HashMap<String, (AssignKind, Value, Ownership, Moved)>,
-    pub vars: Vec<String>,
+    pub rebound_vars: Vec<String>,
 }
