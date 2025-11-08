@@ -12,20 +12,19 @@ Extremely early development.
 
 Your entrypoint file must define a `main()` function, which is run automatically; you do not have to call it.
 
-Most of your code will live inside of this function, but things like `model`s, `role`s, `extend`s, and global delcarations will not.
+Most of your code will live inside of this function, but not everything.
 
 ## Declaring identifiers
-> You cannot assign functions using this syntax. Use `fn` instead.
 
 ngn follows in the footsteps of Rust's ownership model, but tries to make it easier to use and reason about.
 
-| keyword | scope | binding | value | ownership | example | type |
-|-------|-------|-------|-------|-------|-------|-------|
-| var | local | mutable | immutable | borrowed | `var x = "hello"` | string |
-| var | local | mutable | mutable | owned | `var z =< "world"` | string |
-| const | local | immutable | immutable | borrowed | `const status = "go"` | string |
-| lit | global | immutable | immutable | borrowed | `lit VERSION = "2"` | string |
-| static | global | immutable | immutable | borrowed | `static DATA = [1..=1000]` | [i32] |
+| example | scope | binding | value | ownership |
+|-------|-------|-------|-------|-------|
+| `var x = "hello"` | local | mutable | immutable | borrowed |
+| `var z =< "world"` | local | mutable | mutable | owned |
+| `const status = "go"` | local | immutable | immutable | borrowed |
+| `lit VERSION = "2"` | global | immutable | immutable | borrowed |
+| `static DATA = [1..=1000]` | global | immutable | immutable | borrowed |
 
 > The `static` example uses psuedocode to mimic creating an array of numbers from 1 to 1000, inclusively.
 
@@ -33,22 +32,34 @@ ngn follows in the footsteps of Rust's ownership model, but tries to make it eas
 
 ```ngn
 var x = "hello" // declares `x` as a borrowed `string`
-x = "hello!" ❌ // value is immutable since it's borrowed
+x = "goodbye" ❌ // value is immutable since it's borrowed
 rebind x = 0 ✅ // is rebindable, which allows you to change the value and type
 ```
 ```ngn
 var x =< "hello" // declares `x` as an owned `string`
-x = "hello!!" ✅ // value is mutable since it's owned
-rebind x = "goodbye" ✅ // is rebindable
+x = "goodbye" ✅ // value is mutable since it's owned
+rebind x = "cya" ✅ // is rebindable
 ```
 ```ngn
-var x = "hello" // borrowed `string`
+var x = "hello" // borrowed
 
-fn doThing(thing: <string) { // requires owned string via `<` prefix
+fn doThing(t: <string) { // requires owned string via `<`
+  // do something
+}
+
+doThing(x) ❌ // function requires an owned param
+```
+```ngn
+var x =< "hello" // owned `string`
+
+// separate with a space, if that's more readable for you: `(thing: < string)`
+fn doThing(thing: <string) { // requires an owned string via `<` prefix
   // consume thing
 }
 
-doThing(x) ❌ // cannot use a borrowed arg for a function that expects an owned param
+doThing(x) ✅
+
+print(x) ❌ // can no longer use `x` in this context
 ```
 ```ngn
 model User {
@@ -63,7 +74,7 @@ var user =< User {
 }
 
 fn readUser(u: User) {
-  // only read u, not consume
+  // only read u, do not mutate
 }
 
 // Can pass an owned variable to a function that expects a borrowed param
@@ -76,21 +87,9 @@ readUser(user)
 ### `const`
 
 ```ngn
-const x = "hello" // declare x as a borrowed `string`
-x = "hello!!" ❌ // value is immutable since it's borrowed
+const x = "hello" // borrowed
+x = "goodbye" ❌ // value is immutable since it's borrowed
 rebind x = "goodbye" ❌ // is not rebindable since it's a constant
-```
-```ngn
-const x =< "hello" // owned `string`
-
-// separate with a space, if that's more readable for you: `(thing: < string)`
-fn doThing(thing: <string) { // requires an owned string, using owned (`<`) syntax
-  // consume thing
-}
-
-doThing(x) ✅
-
-print(x) ❌ // can no longer use `x` in this context
 ```
 
 ### `lit` vs `static`
@@ -161,8 +160,7 @@ print("Hello, {greeting}!")
 var stuff = ["hat", "coat", "gloves"]
 const ages = [3, 8, 15, 23]
 
-// cannot mix types
-const stuff = ["hat", true, 3] ❌
+const mixed = ["hat", true, 7] ❌ // cannot mix types
 ```
 
 ### `while`
@@ -237,6 +235,14 @@ if (!browser) print("not browser")
 you can do
 ```ngn
 if not (browser) print("not browser")
+
+// or
+
+if {
+  not (browser) print("not browser")
+  : not (thing) print("not it either")
+  : print("something else")
+}
 ```
 
 ### `match`
@@ -340,13 +346,13 @@ print(tally(3)) // still 13
 
 However, the value within the closure can be kept in sync when using owned variables or using `rebind`. This also mutates the variable outside the closure.
 
-- implicit mutability to owned variables
-- explicit mutability to rebindable variables, via `rebind`
+- implicit mutability for owned variables
+- explicit mutability for rebindable variables, via `rebind`
 
 ```ngn
 var count =< 0 // owned, mutable by default
 
-const incrementBy = |a: number| count = count + a // `count`'s value is synced with the outside
+const incrementBy = |a: number| count = count + a // `count`'s value is synced with the outside variable
 
 incrementBy(10)
 print(count) // 10
@@ -384,18 +390,8 @@ model Dog {
 }
 ```
 
-#### Instantiate a model
-```ngn
-const dog = Dog {
-  name: "Apollo",
-  breed: "Labrador"
-}
-print(dog) // { name: Apollo, breed: Labrador }
-print(dog.name) // Apollo
-```
-
 ### `role`
-Declare one or more method signatures and/or method implementations. Create roles in order to later implement their functionality for models.
+Declare one or more method signatures and/or method implementations. You create roles in order to implement their functionality for models.
 
 ```ngn
 role Animal {
@@ -403,12 +399,11 @@ role Animal {
 }
 ```
 
-See below on how to use roles.
-
 ### `extend`
-Extend a model's functionality with methods. You can implement custom methods or base them off of a role.
+Extend a model's functionality with methods. You can implement custom methods, apply one or more roles, or a mix of both.
 
 ```ngn
+// extend with custom methods
 extend Dog with {
   fn fetch(thing: string): bool {
     return attemptToFetch(thing)
@@ -417,6 +412,7 @@ extend Dog with {
 ```
 
 ```ngn
+// extend with role
 extend Dog with Animal {
   fn speak(): void {
     print("Woof, woof!")
@@ -426,6 +422,13 @@ extend Dog with Animal {
 
 Now, putting it all together:
 ```ngn
+const dog = Dog {
+  name: "Apollo",
+  breed: "Labrador"
+}
+print(dog) // { name: Apollo, breed: Labrador }
+print(dog.name) // Apollo
+
 const fetched = dog.fetch("stick")
 print(fetched) // either true or false
 
