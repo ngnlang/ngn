@@ -28,6 +28,16 @@ impl Parser {
         Ok(stmts)
     }
 
+    fn is_statement_start(&mut self) -> bool {
+        matches!(
+            self.current_token(),
+            Some(Token::Print | Token::Echo | Token::Var | Token::Const 
+                | Token::If | Token::While | Token::Until | Token::Match 
+                | Token::Fn | Token::Model | Token::Role | Token::Extend 
+                | Token::Return | Token::Break | Token::Next | Token::Rebind)
+        )
+    }
+
     fn current_token(&mut self) -> Option<Token> {
         self.tokens.peek().map(|(_, token, _)| token.clone())
     }
@@ -512,7 +522,7 @@ impl Parser {
     fn parse_match_tests(&mut self) -> Result<Vec<Expr>, String> {
         let mut tests = vec![self.parse_match_literal()?];
         
-        while matches!(self.current_token(), Some(Token::OrOr)) {
+        while matches!(self.current_token(), Some(Token::Or)) {
             self.advance();
             tests.push(self.parse_match_literal()?);
         }
@@ -766,7 +776,7 @@ impl Parser {
     // Expression parsing (delegate to expr_parser)
     fn parse_expr(&mut self) -> Result<Expr, String> {
         // Closures have special syntax (|params|), so handle them directly
-        if matches!(self.current_token(), Some(Token::Pipe)) {
+        if matches!(self.current_token(), Some(Token::Or)) {
             return self.parse_closure_expr();
         }
 
@@ -868,12 +878,12 @@ impl Parser {
     }
 
     fn parse_closure_expr(&mut self) -> Result<Expr, String> {
-        self.expect(Token::Pipe)?;  // consume opening |
+        self.expect(Token::Or)?;  // consume opening |
         
-        // Parse parameters
+        // Parse parameters (can be empty)
         let mut params = Vec::new();
         
-        while !matches!(self.current_token(), Some(Token::Pipe)) {
+        while !matches!(self.current_token(), Some(Token::Or)) {
             let name = self.expect_ident()?;
             
             let param_type = if matches!(self.current_token(), Some(Token::Colon)) {
@@ -894,7 +904,7 @@ impl Parser {
             }
         }
         
-        self.expect(Token::Pipe)?;  // consume closing |
+        self.expect(Token::Or)?;  // consume closing |
         self.skip_newlines();
         
         // Parse optional return type
@@ -910,16 +920,21 @@ impl Parser {
         
         // Parse body
         let body = if matches!(self.current_token(), Some(Token::LBrace)) {
-            // Block body - requires explicit return
+            // Braces: parse block
             self.advance();
             self.skip_newlines();
             let block = self.parse_block()?;
             self.expect(Token::RBrace)?;
             block
         } else {
-            // Inline body - single expression with implicit return
-            let expr = self.parse_expr()?;
-            vec![Stmt::Return(Some(expr))]
+            // No braces: parse as expression or statement
+            // Check if it starts with a statement keyword
+            if self.is_statement_start() {
+                vec![self.parse_statement()?]
+            } else {
+                let expr = self.parse_expr()?;
+                vec![Stmt::Return(Some(expr))]
+            }
         };
         
         Ok(Expr::Closure(Box::new(ClosureDef {

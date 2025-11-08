@@ -8,11 +8,11 @@ impl std::fmt::Display for Token {
 pub enum Token {
     Any, Var, Const, Lit, Static, Rebind,
     If, Not, While, Until, Match, Echo, Print, Break, Next, True, False,
-    StarStar, EqEq, NotEq, LessEq, GreaterEq, OrOr,
+    StarStar, EqEq, NotEq, LessEq, GreaterEq, Or, And,
     Plus, Minus, One, Once, Star, Slash, Percent, Caret, Eq, Less, Greater,
     Colon, Comma, Period,
     PlusEq, MinusEq, StarEq, SlashEq, PercentEq, StarStarEq, CaretEq, OwnedAssign,
-    LParen, RParen, LBracket, RBracket, LBrace, RBrace, Pipe,
+    LParen, RParen, LBracket, RBracket, LBrace, RBrace,
     Newline,
     Fn, Return, ShortReturn,
     Ident(String), String(String), Number(f64),
@@ -103,12 +103,11 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
             }
             
             '|' => {
-                if chars.peek().map(|(_, c)| *c) == Some('|') {
-                    chars.next();
-                    tokens.push((pos, Token::OrOr, pos + 2));
-                } else {
-                    tokens.push((pos, Token::Pipe, pos + 1));
-                }
+                tokens.push((pos, Token::Or, pos + 1));
+            }
+
+            '&' => {
+                tokens.push((pos, Token::And, pos + 1));
             }
             
             '+' => {
