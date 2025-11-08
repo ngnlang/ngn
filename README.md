@@ -250,7 +250,7 @@ If a match is found:
 const value = 3
 match (value) {
   1 => statement,
-  2 || 3 => statement,
+  2 | 3 => statement,
   4 => {
     statement
     statement
@@ -265,7 +265,7 @@ Even if a match is found, continue checking cases unless a matched statement blo
 ```
 match any (value) {
   test => statement,
-  test1 || test2 => {
+  test1 | test2 => {
     statement
     statement
   },
@@ -305,6 +305,56 @@ fn doThing() {
 }
 ```
 
+### Closures
+Closures are similar to functions, but you can assign them to an identifier, then call it like a function. You can define any params within a pair of pipes, or have an empty set of pipes if not using params.
+```ngn
+const add = |a: number, b: number| a + b
+
+const sum = add(3, 4)
+
+const doThing = || {
+  // do thing!
+  print("Hello")
+}
+doThing()
+```
+
+Unlike functions, closures allow you to access the state of their surrounding scope.
+```ngn
+var base = 10
+
+const tally = |a: number| base + a
+print(tally(3)) // 13
+```
+
+However, by default, this access is a read-only snapshot of the variable's state when the closure is created; so, changing the state afterwards does not change the state inside the closure.
+```ngn
+var base = 10
+
+const tally = |a: number| base + a
+print(tally(3)) // 13
+
+rebind base = 100
+print(tally(3)) // still 13
+```
+
+If you want to mutate state from a closure, use `rebind` on the variables the closure uses. This approach helps you avoid accidentally mutating outside state when you didn't intend to. Using `rebind` in this way also syncs the variable's state within the closure, no matter where the variable is updated from.
+```ngn
+var count = 0
+
+const incrementBy = |a: number| rebind count = count + a
+
+incrementBy(10)
+print(count) // 10
+
+incrementBy(5)
+print(count) // 15
+
+rebind count = 100
+incremenBy(7)
+print(count) // 107
+```
+
 ### `model`
 Create object structures.
 
@@ -321,8 +371,8 @@ const dog = Dog {
   name: "Apollo",
   breed: "Labrador"
 }
-print(user) // { name: Apollo, breed: Labrador }
-print(user.name) // Apollo
+print(dog) // { name: Apollo, breed: Labrador }
+print(dog.name) // Apollo
 ```
 
 ### `role`
