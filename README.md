@@ -1,8 +1,8 @@
 # ngn
 
-An expressive, strongly and statically typed programming language. Built with Rust.
-
 Pronounced "engine".
+
+An expressive and easy to use programming language, that's strongly and statically typed.
 
 ## Status
 
@@ -10,9 +10,7 @@ Extremely early development.
 
 ## `main()`
 
-Your entrypoint file must define a `main()` function, which is run automatically; you do not have to call it.
-
-Most of your code will live inside of this function, but not everything.
+Your entrypoint file must define a `main()` function. It's found and run automatically. Most of your code will live inside of this function, but not everything.
 
 ## Declaring identifiers
 
@@ -31,35 +29,35 @@ ngn follows in the footsteps of Rust's ownership model, but tries to make it eas
 ### `var`
 
 ```ngn
-var x = "hello" // declares `x` as a borrowed `string`
+var x = "hello" // declares `x` as a borrowed string
 x = "goodbye" ❌ // value is immutable since it's borrowed
 rebind x = 0 ✅ // is rebindable, which allows you to change the value and type
 ```
 ```ngn
-var x =< "hello" // declares `x` as an owned `string`
+var x =< "hello" // declares `x` as an owned string
 x = "goodbye" ✅ // value is mutable since it's owned
 rebind x = "cya" ✅ // is rebindable
 ```
 ```ngn
 var x = "hello" // borrowed
 
-fn doThing(t: <string) { // requires owned string via `<`
-  // do something
+fn doThing(thing: <string) { // the `<` means it requires an owned string
+  // do thing
 }
 
-doThing(x) ❌ // function requires an owned param
+doThing(x) ❌ // function requires an owned argument
 ```
 ```ngn
-var x =< "hello" // owned `string`
+var x =< "hello" // owned string
 
 // separate with a space, if that's more readable for you: `(thing: < string)`
-fn doThing(thing: <string) { // requires an owned string via `<` prefix
-  // consume thing
+fn doThing(thing: <string) {
+  // do thing
 }
 
-doThing(x) ✅
+doThing(x) ✅ // moves ownership of `x` to the function
 
-print(x) ❌ // can no longer use `x` in this context
+print(x) ❌ // `x` is no longer available, since it's ownership was moved
 ```
 ```ngn
 model User {
@@ -67,21 +65,22 @@ model User {
   role: string
 }
 
-// use `=<` to ensure all relevant properties are owned, per types in the model
-var user =< User {
+// use `=<` to ensure all relevant properties are owned
+var user =< User { // owned
   name: "Sam",
   role: "Developer"
+  years: 3
 }
 
-fn readUser(u: User) {
-  // only read u, do not mutate
+fn readUser(u: User) { // only require a borrowed User
+  // take a read action on the reference to `u`; cannot mutate
 }
 
 // Can pass an owned variable to a function that expects a borrowed param
-// ngn handles this for you
-readUser(user)
+// ngn ensures it's "downgraded" to borrowed within the function
+readUser(user) ✅
 
-// can still do things with `user` here
+print(user) ✅ // can still do things with `user` here
 ```
 
 ### `const`
@@ -156,6 +155,8 @@ print("Hello, {greeting}!")
 ```
 
 ### Arrays
+If you want to mutate arrays, be sure to declare them with `=<`
+
 ```ngn
 var stuff = ["hat", "coat", "gloves"]
 const ages = [3, 8, 15, 23]
@@ -166,56 +167,62 @@ const mixed = ["hat", true, 7] ❌ // cannot mix types
 #### `push(item)`
 Push, i.e. add, an item to the end of an array. Returns the new size of the array as a `number`.
 ```
-var stuff = ["guitar", "shirt"]
+var stuff =< ["guitar", "shirt"]
 const size = stuff.push("hat")
-print size // 3
-print stuff // ["guitar", "shirt", "hat"]
+
+print(size) // 3
+print(stuff) // ["guitar", "shirt", "hat"]
 ```
 
 #### `pop()`
 Pop, i.e. remove, the last item of an array. Returns the removed item's value.
 ```
-var stuff = ["guitar", "shirt", "hat"]
-const thing = stuff.pop()
-print thing // hat
-print stuff // ["guitar", "shirt"]
+var stuff =< ["guitar", "shirt", "hat"]
+const popped = stuff.pop()
+
+print(popped) // hat
+print(stuff) // ["guitar", "shirt"]
 ```
 
 #### `put(item, index?)`
 Put, i.e. add, an item into an array. By default, it puts at the beginning. To put in another location, provide the index number. Returns the new size of the array as a `number`.
 ```
-var stuff = ["guitar", "shirt"]
+var stuff =< ["guitar", "shirt"]
 const size = stuff.put("hat")
-print size // 3
-print stuff // ["hat", "guitar", "shirt"]
+
+print(size) // 3
+print(stuff) // ["hat", "guitar", "shirt"]
 
 stuff.put("coat", 2)
-print stuff // ["hat", "guitar", "coat", "shirt"]
+print(stuff) // ["hat", "guitar", "coat", "shirt"]
 ```
 
 #### `pull(index?)`
 Pull, i.e. remove, an item from an array. By default, it removes from the beginning. To pull from another location, provide the index number. Returns the removed item's value.
 ```
-var stuff = ["guitar", "shirt", "coat", "hat"]
-const thing = stuff.pull()
-print thing // guitar
-print stuff // ["shirt", "coat", "hat"]
+var stuff =< ["guitar", "shirt", "coat", "hat"]
+const pulled = stuff.pull()
 
-const thing1 = stuff.pull(1)
-print thing1 // ["coat"]
+print(pulled) // guitar
+print(stuff) // ["shirt", "coat", "hat"]
+
+const pulled_one = stuff.pull(1)
+
+print(pulled_one) // ["coat"]
 print stuff // ["shirt", "hat"]
 ```
 
 #### `slice(start, stop?)`
-Remove a section of the array by providing a start index and an optional stop index.
+Remove a section of the array by providing a start index and an optional stop index. This changes the array and returns the item(s) as a new array.
 
 - If `stop` is provided, the slice excludes the item at that index.
-- If `stop` is not provided, it removes everything upto and including the last item. This changes the array and returns the item(s) as a new array.
+- If `stop` is not provided, it removes everything upto and including the last item.
 ```
-var stuff = [10, 20, 30, 40, 50]
-const things = stuff.slice(1, 3)
-print things = [20, 30]
-print stuff // [10, 40, 50]
+var stuff =< [10, 20, 30, 40, 50]
+const sliced = stuff.slice(1, 3)
+
+print(sliced) = [20, 30]
+print(stuff) // [10, 40, 50]
 ```
 
 #### `copy(start?, stop?)`
@@ -226,19 +233,17 @@ Copies an entire array or a section of it. This does not change the array you co
 - If neither is provided, the entire array is copied.
 
 ```
-const stuff = [10, 20, 30, 40, 50]
-const things = stuff.copy(3)
-print things // [40, 50]
-print stuff // [10, 20, 30, 40, 50]
+const stuff = [10, 20, 30, 40, 50] // borrowed
+const copied = stuff.copy(3) // note you can copy borrowed arrays
+
+print(copied) // [40, 50]
+print(stuff) // [10, 20, 30, 40, 50]
 
 var all = stuff.copy()
-print stuff // [10, 20, 30, 40, 50]
-print all // [10, 20, 30, 40, 50]
 
-all.push(60)
+print(all) // [10, 20, 30, 40, 50]
+print(stuff) // [10, 20, 30, 40, 50]
 ```
-
-> Note that you can copy immutable arrays.
 
 ### `while`
 Run the statement block while the condition is true. Not guaranteed to run at all.
@@ -285,6 +290,9 @@ until once (condition) {
 ```
 
 ### `if`
+Run a statement based on if a condition is true.
+
+The full syntax is a bit out of the ordinary, but helps reduce boilerplate "else if" and "else" wording, along with the extra braces. This style is required if any of your blocks have multiple statements.
 ```ngn
 if {
   (condition)
@@ -297,9 +305,15 @@ if {
 }
 ```
 
-Can also be inlined:
+For single statement blocks, you can drop the braces and go inline; or even go multiline if desired.
 ```ngn
 if (condtion) statement : (condition) statement : statement
+
+if (condition)
+  statement
+: (condition)
+  statement
+: statement
 ```
 
 #### `not` variant
@@ -323,7 +337,7 @@ if {
 ```
 
 ### `match`
-Match a value (Number, String, Boolean) against one test case. Optionally provide a default case.
+Match a value against one test case; optionally, provide a default case.
 
 If a match is found:
 - that branch's statement block is run.
@@ -337,6 +351,7 @@ match (value) {
   4 => {
     statement
     statement
+    next
   },
   => statement
 }
@@ -351,6 +366,7 @@ match any (value) {
   test1 | test2 => {
     statement
     statement
+    break
   },
   => statement
 }
@@ -561,7 +577,7 @@ user.greet()  // "Hello, I'm Jason"
 #### Mutating "object" data
 When you create an instance of a model, it's essentially an object - although it can have methods attached to it as well.
 
-The general rule is that you can mutate based on how the variable was declared (`var =`, `var =<`, `const`, etc)
+The general rule is that you can mutate based on how the variable was declared (`var =`, `var =<`, `const`, etc). However, you can't change a field's type - which is typically allowed with `rebind`.
 
 Here are the ways to manipulate an object's fields, based on the above example code:
 - direct assignment, by owned `var`s: `user.age = 7`
