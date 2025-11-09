@@ -163,6 +163,83 @@ const ages = [3, 8, 15, 23]
 const mixed = ["hat", true, 7] ❌ // cannot mix types
 ```
 
+#### `push(item)`
+Push, i.e. add, an item to the end of an array. Returns the new size of the array as a `number`.
+```
+var stuff = ["guitar", "shirt"]
+const size = stuff.push("hat")
+print size // 3
+print stuff // ["guitar", "shirt", "hat"]
+```
+
+#### `pop()`
+Pop, i.e. remove, the last item of an array. Returns the removed item's value.
+```
+var stuff = ["guitar", "shirt", "hat"]
+const thing = stuff.pop()
+print thing // hat
+print stuff // ["guitar", "shirt"]
+```
+
+#### `put(item, index?)`
+Put, i.e. add, an item into an array. By default, it puts at the beginning. To put in another location, provide the index number. Returns the new size of the array as a `number`.
+```
+var stuff = ["guitar", "shirt"]
+const size = stuff.put("hat")
+print size // 3
+print stuff // ["hat", "guitar", "shirt"]
+
+stuff.put("coat", 2)
+print stuff // ["hat", "guitar", "coat", "shirt"]
+```
+
+#### `pull(index?)`
+Pull, i.e. remove, an item from an array. By default, it removes from the beginning. To pull from another location, provide the index number. Returns the removed item's value.
+```
+var stuff = ["guitar", "shirt", "coat", "hat"]
+const thing = stuff.pull()
+print thing // guitar
+print stuff // ["shirt", "coat", "hat"]
+
+const thing1 = stuff.pull(1)
+print thing1 // ["coat"]
+print stuff // ["shirt", "hat"]
+```
+
+#### `slice(start, stop?)`
+Remove a section of the array by providing a start index and an optional stop index.
+
+- If `stop` is provided, the slice excludes the item at that index.
+- If `stop` is not provided, it removes everything upto and including the last item. This changes the array and returns the item(s) as a new array.
+```
+var stuff = [10, 20, 30, 40, 50]
+const things = stuff.slice(1, 3)
+print things = [20, 30]
+print stuff // [10, 40, 50]
+```
+
+#### `copy(start?, stop?)`
+Copies an entire array or a section of it. This does not change the array you copied from, but returns the copied items as a new array.
+
+- If `start` is provided but `stop` is not, it copies everything upto and including the last item.
+- If `stop` is provided (implies `start`), the copy excludes the item at that index.
+- If neither is provided, the entire array is copied.
+
+```
+const stuff = [10, 20, 30, 40, 50]
+const things = stuff.copy(3)
+print things // [40, 50]
+print stuff // [10, 20, 30, 40, 50]
+
+var all = stuff.copy()
+print stuff // [10, 20, 30, 40, 50]
+print all // [10, 20, 30, 40, 50]
+
+all.push(60)
+```
+
+> Note that you can copy immutable arrays.
+
 ### `while`
 Run the statement block while the condition is true. Not guaranteed to run at all.
 ```ngn
