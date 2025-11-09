@@ -38,6 +38,26 @@ use ast::{Expr, Stmt};
 
 use crate::ast::{AssignKind, ControlFlow, MatchType, Value};
 
+fn format_type_for_error(t: &Type) -> String {
+    match t {
+        Type::Number => "number".to_string(),
+        Type::String => "string".to_string(),
+        Type::Str => "string".to_string(),
+        Type::Bool => "bool".to_string(),
+        Type::Array(inner) => format!("array<{}>", format_type_for_error(inner)),
+        Type::Object(map) => {
+            let fields = map.iter()
+                .map(|(k, v)| format!("{}: {}", k, format_type_for_error(v)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{{ {} }}", fields)
+        }
+        Type::Function => "function".to_string(),
+        Type::Void => "void".to_string(),
+        Type::Model(name) => name.clone(),
+    }
+}
+
 fn format_value(v: &Value) -> String {
     match v {
         Value::Number(n) => n.to_string(),
@@ -514,9 +534,23 @@ fn call_closure(
     }
     
     // Bind parameters
-    for (i, (param_name, _param_type)) in closure.def.params.iter().enumerate() {
+    for (i, (param_name, param_type)) in closure.def.params.iter().enumerate() {
         if i < args.len() {
             let arg_val = eval_expr(&args[i], outer_env, fns, models, roles, model_methods);
+
+            // Type check if parameter has a type annotation
+            if let Some(expected_type) = param_type {
+                let actual_type = infer_value_type(&arg_val);
+                if !types_compatible(expected_type, &actual_type) {
+                    panic!(
+                        "Closure param '{}' expects {}, got {}",
+                        param_name,
+                        format_type_for_error(expected_type),
+                        format_type_for_error(&actual_type)
+                    );
+                }
+            }
+
             closure_env.insert(
                 param_name.clone(),
                 (AssignKind::Var, arg_val, Ownership::Borrowed, Moved::False),
@@ -545,7 +579,20 @@ fn call_closure(
     }
     
     match flow {
-        ControlFlow::Return(val) => val,
+        ControlFlow::Return(val) => {
+            // Type check return value if return type is specified
+            if let Some(expected_return_type) = &closure.def.return_type {
+                let actual_type = infer_value_type(&val);
+                if !types_compatible(expected_return_type, &actual_type) {
+                    panic!(
+                        "Closure return type mismatch: expected {}, got {}",
+                        format_type_for_error(expected_return_type),
+                        format_type_for_error(&actual_type)
+                    );
+                }
+            }
+            val
+        },
         _ => Value::Void,
     }
 }
@@ -1401,7 +1448,11 @@ fn execute_stmt(
             if let Some(expected_type) = expected_return_type {
                 let actual_type = infer_value_type(&val);
                 if !types_compatible(expected_type, &actual_type) {
-                    panic!("Return type error: expected {:?}, got {:?}", expected_type, actual_type);
+                    panic!(
+                        "Return type error: expected {:?}, got {:?}",
+                        format_type_for_error(expected_type),
+                        format_type_for_error(&actual_type)
+                    );
                 }
             }
 
