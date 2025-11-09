@@ -927,7 +927,6 @@ fn eval_expr(
                 panic!("Unknown model: {}", name);
             }
         }
-        // In eval_expr, fix the FieldAccess branch:
         Expr::FieldAccess { object, field, value } => {
             let obj_val = eval_expr(object, env, fns, models, roles, model_methods);
             
@@ -936,6 +935,26 @@ fn eval_expr(
                     // Only update if value is provided
                     if let Some(new_val_expr) = value {
                         let new_val = eval_expr(new_val_expr, env, fns, models, roles, model_methods);
+
+                        // Type check the field assignment
+                        if let Some(model_def) = models.get(&model_name) {
+                            if let Some((_, expected_type)) = model_def.fields.iter().find(|(n, _)| n == field) {
+                                let actual_type = infer_value_type(&new_val);
+                                if !types_compatible(expected_type, &actual_type) {
+                                    panic!(
+                                        "Type error: field '{}' on model '{}' expects {}, got {}",
+                                        field, model_name,
+                                        format_type_for_error(expected_type),
+                                        format_type_for_error(&actual_type)
+                                    );
+                                }
+                            } else {
+                                panic!("Field '{}' not found on model '{}'", field, model_name);
+                            }
+                        } else {
+                            panic!("Unknown model: {}", model_name);
+                        }
+
                         fields.insert(field.clone(), new_val.clone());
                         let updated_obj = Value::Object(model_name, fields);
                         
