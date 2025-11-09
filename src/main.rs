@@ -8,7 +8,17 @@ use expr_parser::ExprParser;
 
 use std::fs;
 use std::collections::HashSet;
-use crate::ast::{ClosureValue, FnDef, InterpolationPart, ModelDef, Moved, Ownership, RoleDef, Type};
+use crate::ast::{
+    ClosureValue,
+    FnDef,
+    InterpolationPart,
+    MethodMutationType,
+    ModelDef,
+    Moved,
+    Ownership,
+    RoleDef,
+    Type
+};
 
 fn main() {
     let source = fs::read_to_string("main.ngn")
@@ -47,59 +57,106 @@ fn format_value(v: &Value) -> String {
     }
 }
 
-fn method_mutates_this(body: &[Stmt]) -> bool {
+fn method_mutation_type(body: &[Stmt]) -> MethodMutationType {
+    let mut has_direct = false;
+    let mut has_rebind = false;
+
     for stmt in body {
         match stmt {
             // Direct field assignment: this.field = value
             Stmt::ExprStmt(Expr::FieldAccess { object, value, .. }) => {
                 if let Expr::Var(name) = object.as_ref() {
                     if name == "this" && value.is_some() {
-                        return true;
+                        has_direct = true;
                     }
                 }
             }
             // Rebind on this
             Stmt::RebindField { object, .. } if object == "this" => {
-                return true;
+                has_rebind = true;
             }
             // Check nested blocks
             Stmt::If { then_block, else_ifs, else_block, .. } => {
-                if method_mutates_this(then_block) {
-                    return true;
-                }
-                for (_, block) in else_ifs {
-                    if method_mutates_this(block) {
-                        return true;
+                let mut_type = method_mutation_type(then_block);
+                if mut_type != MethodMutationType::None {
+                    match mut_type {
+                        MethodMutationType::DirectAssignment => has_direct = true,
+                        MethodMutationType::Rebind => has_rebind = true,
+                        MethodMutationType::Mixed => return MethodMutationType::Mixed,
+                        MethodMutationType::None => {}
                     }
                 }
+                
+                for (_, block) in else_ifs {
+                    let mut_type = method_mutation_type(block);
+                    if mut_type != MethodMutationType::None {
+                        match mut_type {
+                            MethodMutationType::DirectAssignment => has_direct = true,
+                            MethodMutationType::Rebind => has_rebind = true,
+                            MethodMutationType::Mixed => return MethodMutationType::Mixed,
+                            MethodMutationType::None => {}
+                        }
+                    }
+                }
+                
                 if let Some(block) = else_block {
-                    if method_mutates_this(block) {
-                        return true;
+                    let mut_type = method_mutation_type(block);
+                    if mut_type != MethodMutationType::None {
+                        match mut_type {
+                            MethodMutationType::DirectAssignment => has_direct = true,
+                            MethodMutationType::Rebind => has_rebind = true,
+                            MethodMutationType::Mixed => return MethodMutationType::Mixed,
+                            MethodMutationType::None => {}
+                        }
                     }
                 }
             }
             Stmt::While { body, .. } | Stmt::WhileOnce { body, .. } |
             Stmt::Until { body, .. } | Stmt::UntilOnce { body, .. } => {
-                if method_mutates_this(body) {
-                    return true;
+                let mut_type = method_mutation_type(body);
+                if mut_type != MethodMutationType::None {
+                    match mut_type {
+                        MethodMutationType::DirectAssignment => has_direct = true,
+                        MethodMutationType::Rebind => has_rebind = true,
+                        MethodMutationType::Mixed => return MethodMutationType::Mixed,
+                        MethodMutationType::None => {}
+                    }
                 }
             }
             Stmt::Match { cases, default, .. } => {
                 for (_, block) in cases {
-                    if method_mutates_this(block) {
-                        return true;
+                    let mut_type = method_mutation_type(block);
+                    if mut_type != MethodMutationType::None {
+                        match mut_type {
+                            MethodMutationType::DirectAssignment => has_direct = true,
+                            MethodMutationType::Rebind => has_rebind = true,
+                            MethodMutationType::Mixed => return MethodMutationType::Mixed,
+                            MethodMutationType::None => {}
+                        }
                     }
                 }
                 if let Some(block) = default {
-                    if method_mutates_this(block) {
-                        return true;
+                    let mut_type = method_mutation_type(block);
+                    if mut_type != MethodMutationType::None {
+                        match mut_type {
+                            MethodMutationType::DirectAssignment => has_direct = true,
+                            MethodMutationType::Rebind => has_rebind = true,
+                            MethodMutationType::Mixed => return MethodMutationType::Mixed,
+                            MethodMutationType::None => {}
+                        }
                     }
                 }
             }
             _ => {}
         }
     }
-    false
+    
+    match (has_direct, has_rebind) {
+        (false, false) => MethodMutationType::None,
+        (true, false) => MethodMutationType::DirectAssignment,
+        (false, true) => MethodMutationType::Rebind,
+        (true, true) => MethodMutationType::Mixed,
+    }
 }
 
 fn parse_expression_from_string(expr_str: &str) -> Result<Expr, String> {
@@ -873,27 +930,37 @@ fn eval_expr(
                     // Check if method mutates this and if caller has permission
                     if let Expr::Var(var_name) = object.as_ref() {
                         if let Some((kind, _, ownership, _)) = env.get(var_name) {
-                            let method_mutates = method_def.body.as_ref()
-                                .map(|body| method_mutates_this(body))
-                                .unwrap_or(false);
-                            
-                            if method_mutates {
-                                match (kind, ownership) {
-                                    (AssignKind::Var, Ownership::Owned) => {
-                                        // var allows mutations
+                            let mutation_type = method_def.body.as_ref()
+                                .map(|body| method_mutation_type(body))
+                                .unwrap_or(MethodMutationType::None);
+
+                            match mutation_type {
+                                MethodMutationType::None => {
+                                    // No mutations, allow
+                                }
+                                MethodMutationType::DirectAssignment => {
+                                    // Requires ownership
+                                    match (kind, ownership) {
+                                        (AssignKind::Var, Ownership::Owned) => {}
+                                        (AssignKind::Var, Ownership::Borrowed) => {
+                                            panic!("Cannot call method with direct field assignment on borrowed instance '{}'", var_name);
+                                        }
+                                        (AssignKind::Const, _) | (AssignKind::Static, _) | (AssignKind::Lit, _) => {
+                                            panic!("Cannot call mutating method on immutable instance '{}'", var_name);
+                                        }
                                     }
-                                    (AssignKind::Var, Ownership::Borrowed) => {
-                                        panic!(
-                                            "Cannot call mutating method '{}' on borrowed instance '{}'. Use rebind or declare with '<-' for owned access.",
-                                            method, var_name
-                                        );
+                                }
+                                MethodMutationType::Rebind => {
+                                    // Can work on any var
+                                    match kind {
+                                        AssignKind::Var => {}
+                                        AssignKind::Const | AssignKind::Static | AssignKind::Lit => {
+                                            panic!("Cannot call mutating method on immutable instance '{}'", var_name);
+                                        }
                                     }
-                                    (AssignKind::Const, _) | (AssignKind::Static, _) | (AssignKind::Lit, _) => {
-                                        panic!(
-                                            "Cannot call mutating method '{}' on immutable instance '{}' (declared as {:?})",
-                                            method, var_name, format!("{:?}", kind).to_lowercase()
-                                        );
-                                    }
+                                }
+                                MethodMutationType::Mixed => {
+                                    panic!("Method uses both direct assignment and rebind on this—pick one");
                                 }
                             }
                         }

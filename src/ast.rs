@@ -172,3 +172,11 @@ pub struct ClosureValue {
     pub captured_env: HashMap<String, (AssignKind, Value, Ownership, Moved)>,
     pub live_vars: Vec<String>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MethodMutationType {
+    None,
+    DirectAssignment,  // this.field = value
+    Rebind,            // rebind this.field = value
+    Mixed,             // both types
+}
