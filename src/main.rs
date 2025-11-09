@@ -827,13 +827,35 @@ fn eval_expr(
         }
         Expr::ModelInstance { name, fields } => {
             // Lookup model definition
-            if let Some(_model_def) = models.get(name).cloned() {
+            if let Some(model_def) = models.get(name).cloned() {
                 let mut field_values = HashMap::new();
                 
                 // Evaluate all field expressions
                 for (field_name, field_expr) in fields {
                     let field_val = eval_expr(field_expr, env, fns, models, roles, model_methods);
+
+                    // Find the expected type for this field
+                    if let Some((_, expected_type)) = model_def.fields.iter().find(|(n, _)| n == field_name) {
+                        let actual_type = infer_value_type(&field_val);
+                        if !types_compatible(expected_type, &actual_type) {
+                            panic!(
+                                "Type error in model '{}': field '{}' expects {:?}, got {:?}",
+                                name, field_name, expected_type, actual_type
+                            );
+                        }
+                    } else {
+                        panic!("Unknown field '{}' on model '{}'", field_name, name);
+                    }
+
                     field_values.insert(field_name.clone(), field_val);
+                }
+
+                // Check that all required fields are provided
+                // TODO some fields could be optional
+                for (required_field, _) in &model_def.fields {
+                    if !field_values.contains_key(required_field) {
+                        panic!("Missing required field '{}' on model '{}'", required_field, name);
+                    }
                 }
                 
                 Value::Object(name.clone(), field_values)
@@ -1190,7 +1212,27 @@ fn execute_stmt(
                     panic!("Can only rebind fields on objects");
                 };
                 
+                // Look up the model definition to check field type
+                let expected_type = if let Some(model_def) = models.get(&model_name) {
+                    if let Some((_, t)) = model_def.fields.iter().find(|(n, _)| n == field) {
+                        t.clone()
+                    } else {
+                        panic!("Field '{}' not found on model '{}'", field, model_name);
+                    }
+                } else {
+                    panic!("Unknown model: {}", model_name);
+                };
+
                 let new_val = eval_expr(value, env, fns, models, roles, model_methods);
+                let actual_type = infer_value_type(&new_val);
+                
+                if !types_compatible(&expected_type, &actual_type) {
+                    panic!(
+                        "Type error: field '{}' on model '{}' expects {:?}, got {:?}",
+                        field, model_name, expected_type, actual_type
+                    );
+                }
+                
                 fields.insert(field.clone(), new_val);
                 
                 let updated_obj = Value::Object(model_name, fields);
