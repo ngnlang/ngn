@@ -179,6 +179,15 @@ fn method_mutation_type(body: &[Stmt]) -> MethodMutationType {
     }
 }
 
+fn can_mutate(var_name: &str, env: &HashMap<String, (AssignKind, Value, Ownership, Moved)>) -> bool {
+    if let Some((kind, _, ownership, _)) = env.get(var_name) {
+        // Only Var with Owned can mutate
+        matches!(kind, AssignKind::Var) && matches!(ownership, Ownership::Owned)
+    } else {
+        false
+    }
+}
+
 fn parse_expression_from_string(expr_str: &str) -> Result<Expr, String> {
     let tokens = crate::lexer::tokenize(expr_str);
     
@@ -421,6 +430,14 @@ fn infer_expr_type(
 
             let obj_type = infer_expr_type(object, env, fns, models, model_methods);
             match obj_type {
+                Type::Array(inner_type) => {
+                    match method.as_str() {
+                        "push" | "put" => Type::Number,  // Return size
+                        "pop" | "pull" => *inner_type,   // Return element
+                        "slice" | "copy" => Type::Array(inner_type),  // Return array
+                        _ => panic!("Unknown array method: {}", method),
+                    }
+                }
                 Type::Model(_model_name) => {
                     // For now, assume method returns what we'll determine at runtime
                     // In a full implementation, you'd look up the method signature
@@ -988,6 +1005,208 @@ fn eval_expr(
             }
 
             let obj_val = eval_expr(object, env, fns, models, roles, model_methods);
+
+            // Handle array methods
+            if let Value::Array(mut arr) = obj_val.clone() {
+                match method.as_str() {
+                    "push" => {
+                        // Check mutability
+                        if let Expr::Var(var_name) = object.as_ref() {
+                            if !can_mutate(var_name, env) {
+                                panic!("Cannot call mutating method '{}' on immutable or borrowed array '{}'", method, var_name);
+                            }
+                        }
+                        
+                        // Handle push(item | item[])
+                        if args.is_empty() {
+                            panic!("push() requires at least one argument");
+                        }
+                        
+                        let arg_val = eval_expr(&args[0], env, fns, models, roles, model_methods);
+                        
+                        arr.push(arg_val);
+                        
+                        let size = arr.len() as f64;
+                        
+                        // Update the original variable
+                        if let Expr::Var(var_name) = object.as_ref() {
+                            if let Some((kind, _, ownership, _)) = env.get(var_name) {
+                                env.insert(var_name.clone(), (kind.clone(), Value::Array(arr), ownership.clone(), Moved::False));
+                            }
+                        }
+                        
+                        return Value::Number(size);
+                    }
+                    "pop" => {
+                        // Check mutability
+                        if let Expr::Var(var_name) = object.as_ref() {
+                            if !can_mutate(var_name, env) {
+                                panic!("Cannot call mutating method '{}' on immutable or borrowed array '{}'", method, var_name);
+                            }
+                        }
+                        
+                        if arr.is_empty() {
+                            panic!("Cannot pop from an empty array");
+                        }
+                        
+                        let popped = arr.pop().unwrap();
+                        
+                        // Update the original variable
+                        if let Expr::Var(var_name) = object.as_ref() {
+                            if let Some((kind, _, ownership, _)) = env.get(var_name) {
+                                env.insert(var_name.clone(), (kind.clone(), Value::Array(arr), ownership.clone(), Moved::False));
+                            }
+                        }
+                        
+                        return popped;
+                    }
+                    "put" => {
+                        // Check mutability
+                        if let Expr::Var(var_name) = object.as_ref() {
+                            if !can_mutate(var_name, env) {
+                                panic!("Cannot call mutating method '{}' on immutable or borrowed array '{}'", method, var_name);
+                            }
+                        }
+                        
+                        if args.is_empty() {
+                            panic!("put() requires at least one argument");
+                        }
+                        
+                        let arg_val = eval_expr(&args[0], env, fns, models, roles, model_methods);
+                        let index = if args.len() > 1 {
+                            match eval_expr(&args[1], env, fns, models, roles, model_methods) {
+                                Value::Number(n) => n as usize,
+                                _ => panic!("put() index must be a number"),
+                            }
+                        } else {
+                            0 // Default to beginning
+                        };
+                        
+                        if index > arr.len() {
+                            panic!("put() index {} out of bounds for array of length {}", index, arr.len());
+                        }
+                        
+                        arr.insert(index, arg_val);
+                        
+                        let size = arr.len() as f64;
+                        
+                        // Update the original variable
+                        if let Expr::Var(var_name) = object.as_ref() {
+                            if let Some((kind, _, ownership, _)) = env.get(var_name) {
+                                env.insert(var_name.clone(), (kind.clone(), Value::Array(arr), ownership.clone(), Moved::False));
+                            }
+                        }
+                        
+                        return Value::Number(size);
+                    }
+                    "pull" => {
+                        // Check mutability
+                        if let Expr::Var(var_name) = object.as_ref() {
+                            if !can_mutate(var_name, env) {
+                                panic!("Cannot call mutating method '{}' on immutable or borrowed array '{}'", method, var_name);
+                            }
+                        }
+                        
+                        let index = if !args.is_empty() {
+                            match eval_expr(&args[0], env, fns, models, roles, model_methods) {
+                                Value::Number(n) => n as usize,
+                                _ => panic!("pull() index must be a number"),
+                            }
+                        } else {
+                            0 // Default to beginning
+                        };
+                        
+                        if index >= arr.len() {
+                            panic!("pull() index {} out of bounds for array of length {}", index, arr.len());
+                        }
+                        
+                        let pulled = arr.remove(index);
+                        
+                        // Update the original variable
+                        if let Expr::Var(var_name) = object.as_ref() {
+                            if let Some((kind, _, ownership, _)) = env.get(var_name) {
+                                env.insert(var_name.clone(), (kind.clone(), Value::Array(arr), ownership.clone(), Moved::False));
+                            }
+                        }
+                        
+                        return pulled;
+                    }
+                    "slice" => {
+                        // Check mutability
+                        if let Expr::Var(var_name) = object.as_ref() {
+                            if !can_mutate(var_name, env) {
+                                panic!("Cannot call mutating method '{}' on immutable or borrowed array '{}'", method, var_name);
+                            }
+                        }
+                        
+                        if args.is_empty() {
+                            panic!("slice() requires at least a start index");
+                        }
+                        
+                        let start = match eval_expr(&args[0], env, fns, models, roles, model_methods) {
+                            Value::Number(n) => n as usize,
+                            _ => panic!("slice() start must be a number"),
+                        };
+                        
+                        let stop = if args.len() > 1 {
+                            match eval_expr(&args[1], env, fns, models, roles, model_methods) {
+                                Value::Number(n) => n as usize,
+                                _ => panic!("slice() stop must be a number"),
+                            }
+                        } else {
+                            arr.len()
+                        };
+
+                        if start > arr.len() || stop > arr.len() || start > stop {
+                            panic!("slice() indices out of bounds: start={}, stop={}, len={}", start, stop, arr.len());
+                        }
+                        
+                        let sliced: Vec<Value> = arr.drain(start..stop).collect();
+                        
+                        // Update the original variable
+                        if let Expr::Var(var_name) = object.as_ref() {
+                            if let Some((kind, _, ownership, _)) = env.get(var_name) {
+                                env.insert(var_name.clone(), (kind.clone(), Value::Array(arr), ownership.clone(), Moved::False));
+                            }
+                        }
+                        
+                        return Value::Array(sliced);
+                    }
+                    "copy" => {
+                        // copy() doesn't mutate, so no mutability check needed
+                        
+                        let start = if !args.is_empty() {
+                            match eval_expr(&args[0], env, fns, models, roles, model_methods) {
+                                Value::Number(n) => n as usize,
+                                _ => panic!("copy() start must be a number"),
+                            }
+                        } else {
+                            0
+                        };
+                        
+                        let stop = if args.len() > 1 {
+                            match eval_expr(&args[1], env, fns, models, roles, model_methods) {
+                                Value::Number(n) => n as usize,
+                                _ => panic!("copy() stop must be a number"),
+                            }
+                        } else {
+                            arr.len()
+                        };
+                        
+                        if start > arr.len() || stop > arr.len() || start > stop {
+                            panic!("copy() indices out of bounds: start={}, stop={}, len={}", start, stop, arr.len());
+                        }
+                        
+                        let copied: Vec<Value> = arr[start..stop].to_vec();
+                        
+                        return Value::Array(copied);
+                    }
+                    _ => {
+                        // Not an array method, continue to regular method handling
+                    }
+                }
+            }
+
             match &obj_val {
                 Value::Object(model_name, _fields) => {
                     // Clone the method_def first to avoid borrow issues
