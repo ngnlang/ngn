@@ -471,11 +471,28 @@ extend User with {
   fn greet(): string {
     print("Hello, I'm {this.name}")
   }
+
+  fn changeName(name: string): void {
+    this.name = name
+  }
 }
 
 var user = User { name: "Jason", age: 47 }
 user.greet()  // "Hello, I'm Jason"
 ```
+
+#### Mutating "object" data
+When you create an instance of a model, it's essentially an object - although it can have methods attached to it as well.
+
+The general rule is that you can mutate based on how the variable was declared (`var =`, `var =<`, `const`, etc)
+
+Here are the ways to manipulate an object's fields, based on the above example code:
+- direct assignment, by owned `var`s: `user.age = 7`
+- rebind, by owned or borrowed `var`s: `rebind user.age = 7`
+- rebind entire object, by owned or borrowed `var`s: `rebind user = User { name: "Ben", age: 56 }`
+- method, by owned `var`s: `user.changeName("Stacie")`
+- method, by borrowed `var`s: `user.changeName("Stacie")` only if the method mutates via `rebind this.name = name`
+- by `const`, `lit`, `static` variables: ❌ not allowed, as these are all strictly immutable
 
 ### Types
 
