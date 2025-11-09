@@ -369,6 +369,8 @@ impl Parser {
             self.expect(Token::LParen)?;
             let mut condition = self.parse_expr()?;
             self.expect(Token::RParen)?;
+
+            self.skip_newlines();
             
             if negated {
                 condition = Expr::Not(Box::new(condition));
@@ -379,11 +381,16 @@ impl Parser {
             self.skip_newlines();
             
             let mut else_ifs = Vec::new();
+            let mut else_block = None;
+
             while matches!(self.current_token(), Some(Token::Colon)) {
                 self.advance();
                 self.skip_newlines();
-                
+
+                // Check if this is an else (no condition)
                 if !matches!(self.current_token(), Some(Token::LParen)) {
+                    // This is an else block, not an else-if
+                    else_block = Some(vec![self.parse_statement()?]);
                     break;
                 }
                 
@@ -407,17 +414,8 @@ impl Parser {
                 
                 self.skip_newlines();
             }
-            
-            let else_block = if matches!(self.current_token(), Some(Token::Colon)) {
-                self.advance();
-                self.skip_newlines();
-                Some(self.parse_block()?)
-            } else {
-                None
-            };
 
             self.skip_newlines();
-            //self.expect(Token::RBrace)?;
             
             Ok(Stmt::If {
                 condition,

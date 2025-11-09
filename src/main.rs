@@ -1514,7 +1514,7 @@ fn execute_stmt(
         Stmt::If { condition, then_block, else_ifs, else_block } => {
             let _cond_type = infer_expr_type(condition, env, fns, models, model_methods);
             let cond_value = eval_expr(condition, env, fns, models, roles, model_methods);
-            
+
             if is_truthy(&cond_value) {
                 execute_block(then_block, env, fns, models, roles, model_methods, None)
             } else {
