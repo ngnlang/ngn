@@ -323,6 +323,10 @@ impl ExprParser {
                 self.expect(Token::RParen)?;
                 Ok(expr)
             }
+            Some(Token::Regex(pattern)) => {
+                self.advance();
+                Ok(Expr::Regex(pattern))
+            }
             _ => Err(format!(
                 "Unexpected token in expression: {:?}",
                 self.current_token()

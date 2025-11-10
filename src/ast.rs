@@ -12,6 +12,7 @@ pub enum Type {
     Function,
     Void,
     Model(String),
+    Regex,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -24,6 +25,7 @@ pub enum Value {
     Closure(ClosureValue),
     Object(String, HashMap<String, Value>),
     Void,
+    Regex(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -59,6 +61,7 @@ pub enum Expr {
     FieldAccess { object: Box<Expr>, field: String, value: Option<Box<Expr>> },
     MethodCall { object: Box<Expr>, method: String, args: Vec<Expr> },
     Closure(Box<ClosureDef>),
+    Regex(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]

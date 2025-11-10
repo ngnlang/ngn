@@ -6,6 +6,8 @@ mod expr_parser;
 use parser::Parser;
 use expr_parser::ExprParser;
 
+use regex::Regex as RegexLib;
+
 use std::fs;
 use std::collections::HashSet;
 use crate::ast::{
@@ -55,6 +57,7 @@ fn format_type_for_error(t: &Type) -> String {
         Type::Function => "function".to_string(),
         Type::Void => "void".to_string(),
         Type::Model(name) => name.clone(),
+        Type::Regex => "regex".to_string(),
     }
 }
 
@@ -73,7 +76,8 @@ fn format_value(v: &Value) -> String {
                 .map(|(k, v)| format!("{}: {}", k, format_value(v)))
                 .collect();
             format!("{{ {} }}", field_strs.join(", "))
-        }
+        },
+        Value::Regex(pattern) => format!("/{}/", pattern),
     }
 }
 
@@ -259,6 +263,7 @@ fn is_truthy(v: &Value) -> bool {
         Value::Void => false,
         Value::Object(_, _) => true,
         Value::Closure(_) => true,
+        Value::Regex(_) => true,
     }
 }
 
@@ -269,6 +274,16 @@ fn is_literal(e: &Expr) -> bool {
         Expr::Bool(_) |
         Expr::Array(_)
     )
+}
+
+fn normalize_regex_pattern(pattern: &str) -> String {
+    // Remove 'g' flag (Rust regex doesn't support it)
+    let mut normal = pattern.replace("g", "");
+    
+    // Remove empty flag groups like (?)
+    normal = normal.replace("(?)", "");
+    
+    normal
 }
 
 fn values_equal(a: &Value, b: &Value) -> bool {
@@ -307,6 +322,7 @@ fn infer_value_type(v: &Value) -> Type {
         Value::Closure(_) => Type::Function,
         Value::Void => Type::Void,
         Value::Object(model_name, _) => Type::Model(model_name.clone()),
+        Value::Regex(_) => Type::Regex,
     }
 }
 
@@ -400,6 +416,7 @@ fn infer_expr_type(
         }
         Expr::Assign { value, .. } => infer_expr_type(value, env, fns, models, model_methods),
         Expr::CompoundAssign { value, .. } => infer_expr_type(value, env, fns, models, model_methods),
+        Expr::Regex(_) => Type::Regex,
         Expr::ModelInstance { name, .. } => Type::Model(name.clone()),
         Expr::FieldAccess { object, field, value: _ } => {
             let obj_type = infer_expr_type(object, env, fns, models, model_methods);
@@ -432,10 +449,19 @@ fn infer_expr_type(
             match obj_type {
                 Type::Array(inner_type) => {
                     match method.as_str() {
-                        "push" | "put" => Type::Number,  // Return size
+                        "push" | "put" | "size" => Type::Number,  // Return size
                         "pop" | "pull" => *inner_type,   // Return element
                         "slice" | "copy" => Type::Array(inner_type),  // Return array
                         _ => panic!("Unknown array method: {}", method),
+                    }
+                }
+                Type::Str | Type::String => {
+                    match method.as_str() {
+                        "includes" | "startsWith" | "endsWith" => Type::Bool,
+                        "replace" | "replaceAll" | "slice" | "copy" | "toUpperCase" | "toLowerCase" | "trim" | "repeat" => Type::String,
+                        "split" => Type::Array(Box::new(Type::String)),
+                        "indexOf" | "length" => Type::Number,
+                        _ => panic!("Unknown string method: {}", method),
                     }
                 }
                 Type::Model(_model_name) => {
@@ -459,6 +485,7 @@ fn types_compatible(expected: &Type, actual: &Type) -> bool {
         (Type::Array(e1), Type::Array(e2)) => types_compatible(e1, e2),
         (Type::Void, Type::Void) => true,
         (Type::Model(a), Type::Model(b)) => a == b,
+        (Type::Regex, Type::Regex) => true,
         _ => false,
     }
 }
@@ -775,6 +802,15 @@ fn eval_expr(
             env.insert(name.clone(), (AssignKind::Var, v.clone(), Ownership::Borrowed, Moved::False));
             v
         }
+        Expr::Regex(pattern) => {
+            // Remove custom flags
+            let normalized_pattern = normalize_regex_pattern(pattern);
+
+            match RegexLib::new(&normalized_pattern) {
+                Ok(_) => Value::Regex(pattern.clone()),
+                Err(e) => panic!("Invalid regex pattern '{}': {}", pattern, e),
+            }
+        }
         Expr::Var(name) => {
             if let Some((_, v, _ownership, moved)) = env.get(name) {
                 if let Moved::True = *moved {
@@ -1028,6 +1064,9 @@ fn eval_expr(
             // Handle array methods
             if let Value::Array(mut arr) = obj_val.clone() {
                 match method.as_str() {
+                    "size" => {
+                        return Value::Number(arr.len() as f64);
+                    }
                     "push" => {
                         // Check mutability
                         if let Expr::Var(var_name) = object.as_ref() {
@@ -1222,6 +1261,320 @@ fn eval_expr(
                     }
                     _ => {
                         // Not an array method, continue to regular method handling
+                    }
+                }
+            }
+
+            // Handle string methods
+            if let Value::String(mut s) = obj_val.clone() {
+                match method.as_str() {
+                    "length" => {
+                        return Value::Number(s.len() as f64);
+                    }
+                    "includes" => {
+                        if args.is_empty() {
+                            panic!("includes() requires a search argument");
+                        }
+                        
+                        let search = match eval_expr(&args[0], env, fns, models, roles, model_methods) {
+                            Value::String(search_str) => search_str,
+                            _ => panic!("includes() argument must be a string"),
+                        };
+                        
+                        if search.is_empty() {
+                            return Value::Bool(false);
+                        }
+                        
+                        return Value::Bool(s.contains(&search));
+                    }
+                    "startsWith" => {
+                        if args.is_empty() {
+                            panic!("startsWith() requires a search argument");
+                        }
+                        
+                        let search = match eval_expr(&args[0], env, fns, models, roles, model_methods) {
+                            Value::String(search_str) => search_str,
+                            _ => panic!("startsWith() argument must be a string"),
+                        };
+                        
+                        if search.is_empty() {
+                            return Value::Bool(false);
+                        }
+                        
+                        return Value::Bool(s.starts_with(&search));
+                    }
+                    "endsWith" => {
+                        if args.is_empty() {
+                            panic!("endsWith() requires a search argument");
+                        }
+                        
+                        let search = match eval_expr(&args[0], env, fns, models, roles, model_methods) {
+                            Value::String(search_str) => search_str,
+                            _ => panic!("endsWith() argument must be a string"),
+                        };
+                        
+                        if search.is_empty() {
+                            return Value::Bool(false);
+                        }
+                        
+                        return Value::Bool(s.ends_with(&search));
+                    }
+                    "replace" => {
+                        if args.len() < 2 {
+                            panic!("replace() requires search and replacement arguments");
+                        }
+                        
+                        let search_arg = eval_expr(&args[0], env, fns, models, roles, model_methods);
+                        let replacement = match eval_expr(&args[1], env, fns, models, roles, model_methods) {
+                            Value::String(replacement_str) => replacement_str,
+                            _ => panic!("replace() replacement argument must be a string"),
+                        };
+                        
+                        let result = match search_arg {
+                            Value::String(search_str) => {
+                                if search_str.is_empty() {
+                                    panic!("replace() search string cannot be empty");
+                                }
+                                // String replace - only first occurrence
+                                if let Some(pos) = s.find(&search_str) {
+                                    let mut replaced = s.clone();
+                                    replaced.replace_range(pos..pos + search_str.len(), &replacement);
+                                    replaced
+                                } else {
+                                    s.clone()
+                                }
+                            }
+                            Value::Regex(pattern) => {
+                                // Check if pattern has custom global flag
+                                let has_global = pattern.contains("g");
+
+                                // Remove custom flags
+                                let normalized_pattern = normalize_regex_pattern(&pattern);
+                                
+                                match RegexLib::new(&normalized_pattern) {
+                                    Ok(re) => {
+                                        if has_global {
+                                            // Replace all occurrences
+                                            re.replace_all(&s, replacement.as_str()).to_string()
+                                        } else {
+                                            // Replace only first occurrence
+                                            re.replace(&s, replacement.as_str()).to_string()
+                                        }
+                                    }
+                                    Err(e) => panic!("Invalid regex: {}", e),
+                                }
+                            }
+                            _ => panic!("replace() search argument must be a string or regex"),
+                        };
+                        
+                        return Value::String(result);
+                    }
+                    "replaceAll" => {
+                        if args.len() < 2 {
+                            panic!("replaceAll() requires search and replacement arguments");
+                        }
+                        
+                        let search_arg = eval_expr(&args[0], env, fns, models, roles, model_methods);
+                        let replacement = match eval_expr(&args[1], env, fns, models, roles, model_methods) {
+                            Value::String(replacement_str) => replacement_str,
+                            _ => panic!("replaceAll() replacement argument must be a string"),
+                        };
+                        
+                        let result = match search_arg {
+                            Value::String(search_str) => {
+                                if search_str.is_empty() {
+                                    panic!("replaceAll() search string cannot be empty");
+                                }
+                                // Replace all occurrences
+                                s.replace(&search_str, &replacement)
+                            }
+                            Value::Regex(pattern) => {
+                                // Remove custom flags, just in case
+                                let normalized_pattern = normalize_regex_pattern(&pattern);
+
+                                match RegexLib::new(&normalized_pattern) {
+                                    Ok(re) => {
+                                        // Always replace all with replaceAll
+                                        re.replace_all(&s, replacement.as_str()).to_string()
+                                    }
+                                    Err(e) => panic!("Invalid regex: {}", e),
+                                }
+                            }
+                            _ => panic!("replaceAll() search argument must be a string or regex"),
+                        };
+                        
+                        return Value::String(result);
+                    }
+                    "slice" => {
+                        // Check mutability - only Var + Owned can mutate
+                        if let Expr::Var(var_name) = object.as_ref() {
+                            if !can_mutate(var_name, env) {
+                                panic!("Cannot call mutating method 'slice' on immutable or borrowed string '{}'", var_name);
+                            }
+                        }
+                        
+                        if args.is_empty() {
+                            panic!("slice() requires at least a start index");
+                        }
+                        
+                        let start = match eval_expr(&args[0], env, fns, models, roles, model_methods) {
+                            Value::Number(n) => n as usize,
+                            _ => panic!("slice() start must be a number"),
+                        };
+                        
+                        let stop = if args.len() > 1 {
+                            match eval_expr(&args[1], env, fns, models, roles, model_methods) {
+                                Value::Number(n) => n as usize,
+                                _ => panic!("slice() stop must be a number"),
+                            }
+                        } else {
+                            s.len()
+                        };
+                        
+                        if start > s.len() || stop > s.len() || start > stop {
+                            panic!("slice() indices out of bounds: start={}, stop={}, len={}", start, stop, s.len());
+                        }
+                        
+                        if start == stop {
+                            panic!("slice() cannot slice an empty range");
+                        }
+                        
+                        let sliced = s[start..stop].to_string();
+                        s = format!("{}{}", &s[..start], &s[stop..]);
+                        
+                        // Update the original variable
+                        if let Expr::Var(var_name) = object.as_ref() {
+                            if let Some((kind, _, ownership, _)) = env.get(var_name) {
+                                env.insert(var_name.clone(), (kind.clone(), Value::String(s), ownership.clone(), Moved::False));
+                            }
+                        }
+                        
+                        return Value::String(sliced);
+                    }
+                    "split" => {
+                        let separator = if !args.is_empty() {
+                            match eval_expr(&args[0], env, fns, models, roles, model_methods) {
+                                Value::String(sep) => {
+                                    if sep.is_empty() {
+                                        panic!("split() separator cannot be empty. Use split() with no arguments to split by character");
+                                    }
+                                    sep
+                                }
+                                _ => panic!("split() argument must be a string"),
+                            }
+                        } else {
+                            // Split by character if no argument
+                            let chars: Vec<Value> = s.chars()
+                                .map(|c| Value::String(c.to_string()))
+                                .collect();
+                            return Value::Array(chars);
+                        };
+                        
+                        let parts: Vec<Value> = s.split(&separator)
+                            .map(|part| Value::String(part.to_string()))
+                            .collect();
+                        
+                        return Value::Array(parts);
+                    }
+                    "copy" => {
+                        // copy() doesn't mutate, so no mutability check needed
+                        
+                        let start = if !args.is_empty() {
+                            match eval_expr(&args[0], env, fns, models, roles, model_methods) {
+                                Value::Number(n) => n as usize,
+                                _ => panic!("copy() start must be a number"),
+                            }
+                        } else {
+                            0
+                        };
+                        
+                        let stop = if args.len() > 1 {
+                            match eval_expr(&args[1], env, fns, models, roles, model_methods) {
+                                Value::Number(n) => n as usize,
+                                _ => panic!("copy() stop must be a number"),
+                            }
+                        } else {
+                            s.len()
+                        };
+                        
+                        if start > s.len() || stop > s.len() || start > stop {
+                            panic!("copy() indices out of bounds: start={}, stop={}, len={}", start, stop, s.len());
+                        }
+                        
+                        if start == stop {
+                            panic!("copy() cannot copy an empty range");
+                        }
+                        
+                        let copied = s[start..stop].to_string();
+                        return Value::String(copied);
+                    }
+                    "toUpperCase" => {
+                        return Value::String(s.to_uppercase());
+                    }
+                    "toLowerCase" => {
+                        return Value::String(s.to_lowercase());
+                    }
+                    "trim" => {
+                        return Value::String(s.trim().to_string());
+                    }
+                    "indexOf" => {
+                        if args.is_empty() {
+                            panic!("indexOf() requires a search argument");
+                        }
+                        
+                        let search = match eval_expr(&args[0], env, fns, models, roles, model_methods) {
+                            Value::String(search_str) => search_str,
+                            _ => panic!("indexOf() search argument must be a string"),
+                        };
+                        
+                        if search.is_empty() {
+                            panic!("indexOf() search string cannot be empty");
+                        }
+                        
+                        let start_pos = if args.len() > 1 {
+                            match eval_expr(&args[1], env, fns, models, roles, model_methods) {
+                                Value::Number(n) => n as usize,
+                                _ => panic!("indexOf() start position must be a number"),
+                            }
+                        } else {
+                            0
+                        };
+                        
+                        if start_pos > s.len() {
+                            return Value::Number(-1.0);
+                        }
+                        
+                        return match s[start_pos..].find(&search) {
+                            Some(pos) => Value::Number((start_pos + pos) as f64),
+                            None => Value::Number(-1.0),
+                        };
+                    }
+                    "repeat" => {
+                        if args.is_empty() {
+                            panic!("repeat() requires a count argument");
+                        }
+                        
+                        let count = match eval_expr(&args[0], env, fns, models, roles, model_methods) {
+                            Value::Number(n) => n,
+                            _ => panic!("repeat() count argument must be a number"),
+                        };
+                        
+                        if count < 0.0 {
+                            panic!("repeat() count cannot be negative");
+                        }
+                        
+                        if count.fract() != 0.0 {
+                            panic!("repeat() count must be an integer");
+                        }
+                        
+                        if count == 0.0 {
+                            return Value::String(String::new());
+                        }
+                        
+                        return Value::String(s.repeat(count as usize));
+                    }
+                    _ => {
+                        // Not a string method, continue to model method handling
                     }
                 }
             }

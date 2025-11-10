@@ -17,6 +17,7 @@ pub enum Token {
     Fn, Return, ShortReturn,
     Ident(String), String(String), Number(f64),
     Model, Role, Extend, With,
+    Regex(String),
 }
 
 pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
@@ -32,16 +33,81 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
                 continue;
             }
 
-            '/' if chars.peek().map(|(_, c)| *c) == Some('/') => {
-                // Skip comment until end of line
-                chars.next(); // consume second /
-                while let Some((_, c)) = chars.next() {
-                    if c == '\n' || c == '\r' {
-                        break;
+            '/' => {
+                // Check for comment first
+                if chars.peek().map(|(_, c)| *c) == Some('/') {
+                    // Skip comment until end of line
+                    chars.next(); // consume second /
+                    while let Some((_, c)) = chars.next() {
+                        if c == '\n' || c == '\r' {
+                            break;
+                        }
+                    }
+                    continue;
+                }
+
+                // Not a comment, check if it's regex or division
+                let is_regex = tokens.is_empty() || matches!(
+                    tokens.last().map(|(_, t, _)| t),
+                    Some(Token::LParen) | Some(Token::Comma) | Some(Token::Eq) 
+                    | Some(Token::EqEq) | Some(Token::NotEq) | Some(Token::Less)
+                    | Some(Token::LessEq) | Some(Token::Greater) | Some(Token::GreaterEq)
+                    | Some(Token::LBracket) | Some(Token::Return) | Some(Token::Colon)
+                );
+                
+                if is_regex {
+                    // Parse regex
+                    let start = pos;
+                    let mut pattern = String::new();
+                    let mut escaped = false;
+                    
+                    while let Some((_, c)) = chars.peek() {
+                        if escaped {
+                            pattern.push(*c);
+                            escaped = false;
+                            chars.next();
+                        } else if *c == '\\' {
+                            pattern.push(*c);
+                            escaped = true;
+                            chars.next();
+                        } else if *c == '/' {
+                            chars.next(); // consume closing /
+                            
+                            // Parse optional flags
+                            let mut flags = String::new();
+                            while let Some((_, c)) = chars.peek() {
+                                if c.is_alphabetic() {
+                                    flags.push(*c);
+                                    chars.next();
+                                } else {
+                                    break;
+                                }
+                            }
+                            
+                            let full_pattern = if flags.is_empty() {
+                                pattern
+                            } else {
+                                format!("(?{}){}", flags, pattern)
+                            };
+                            
+                            let end = chars.peek().map(|(i, _)| *i).unwrap_or(input.len());
+                            tokens.push((start, Token::Regex(full_pattern), end));
+                            break;
+                        } else {
+                            pattern.push(*c);
+                            chars.next();
+                        }
+                    }
+                } else {
+                    // Parse division or compound assignment
+                    if chars.peek().map(|(_, c)| *c) == Some('=') {
+                        chars.next();
+                        tokens.push((pos, Token::SlashEq, pos + 2));
+                    } else {
+                        tokens.push((pos, Token::Slash, pos + 1));
                     }
                 }
-                continue;
-            },
+            }
             
             '*' => {
                 if chars.peek().map(|(_, c)| *c) == Some('*') {
@@ -124,14 +190,6 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
                     tokens.push((pos, Token::MinusEq, pos + 2));
                 } else {
                     tokens.push((pos, Token::Minus, pos + 1));
-                }
-            },
-            '/' => {
-                if chars.peek().map(|(_, c)| *c) == Some('=') {
-                    chars.next();
-                    tokens.push((pos, Token::SlashEq, pos + 2));
-                } else {
-                    tokens.push((pos, Token::Slash, pos + 1));
                 }
             },
             '%' => {
