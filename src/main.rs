@@ -447,6 +447,12 @@ fn infer_expr_type(
 
             let obj_type = infer_expr_type(object, env, fns, models, model_methods);
             match obj_type {
+                Type::Number => {
+                    match method.as_str() {
+                        "abs" | "round" | "floor" | "ceil" => Type::Number,
+                        _ => panic!("Unknown number method: {}", method),
+                    }
+                }
                 Type::Array(inner_type) => {
                     match method.as_str() {
                         "push" | "put" | "size" | "splice" => Type::Number,
@@ -1045,6 +1051,27 @@ fn eval_expr(
             }
 
             let obj_val = eval_expr(object, env, fns, models, roles, model_methods);
+
+            // Handle number methods
+            if let Value::Number(n) = obj_val.clone() {
+                match method.as_str() {
+                    "abs" => {
+                        return Value::Number(n.abs());
+                    }
+                    "round" => {
+                        return Value::Number(n.round());
+                    }
+                    "floor" => {
+                        return Value::Number(n.floor());
+                    }
+                    "ceil" => {
+                        return Value::Number(n.ceil());
+                    }
+                    _ => {
+                        // Not a number method, continue to other types
+                    }
+                }
+            }
 
             // Handle array methods
             if let Value::Array(mut arr) = obj_val.clone() {
