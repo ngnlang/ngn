@@ -154,6 +154,133 @@ const greeting = "world"
 print("Hello, {greeting}!")
 ```
 
+### Strings
+
+#### `length()`
+Return the length of a string.
+
+#### `index(pattern, start?)`
+Search a string for a given pattern, and return the index number of the first instance found. If no pattern is found, returns `-1`. You can pass an optional start index.
+
+```ngn
+const sent = "I learned to draw today."
+const ind = sent.index("to") // 10
+```
+
+#### `includes(pattern)`
+Determine if a string includes a given pattern. Returns a boolean.
+
+```ngn
+const weather = "sunny"
+const inc = weather.includes("sun") // true
+```
+
+#### `starts(pattern)`
+Determine if a string starts with a given pattern. Returns a boolean.
+
+```ngn
+var process = "complete"
+const beg = process.starts("c") // true
+```
+
+#### `ends(pattern)`
+Determine if a string ends with a given pattern. Returns a boolean.
+
+```ngn
+var process = "working"
+const end = process.ends("ing") // true
+```
+
+#### `split(pattern?)`
+Create an array of strings by splitting a string on a pattern of characters. If you do not pass a pattern, each character in the string is split individually. Preserves the original string.
+
+```ngn
+const sent = "The quick brown fox jumped over the fence."
+const arr = sent.split("o") // ["The quick br", "wn f", "x jumped ", "ver the fence."]
+
+var greeting = "Hello"
+const arr = greeting.split() // ["H", "e", "l", "l", "o"]
+```
+
+#### `replace(search, replacement)`
+Replace a pattern with a string. `search` can be a string or a RegEx; but if a string is passed, only the first occurrence is replaced. Preserves the original string and returns a new one.
+
+```ngn
+var plain = "Forge ahead"
+const fancy = plain.replace("a", "@") // "Forge @head"
+```
+
+```ngn
+var plain = "Forge ahead"
+const fancy = plain.replace(/a/g, "@") // "Forge @he@d"
+```
+
+#### `copy(start?, stop?)`
+Copies an entire string or a section of it, based on indices. This does not change the string you copied from, but returns the copied value as a new string.
+
+- If `start` is provided but `stop` is not, it copies everything upto and including the end of the string.
+- If `stop` is provided (implies `start`), the copy excludes the item at that index.
+- If neither is provided, the entire string is copied.
+
+```
+const some = "Some Stuff" // borrowed
+const copied = some.copy(5) // you can copy borrowed strings
+
+print(copied) // "Stuff"
+print(some) // "Some Stuff"
+
+var all = some.copy()
+
+print(all) // "Some Stuff"
+print(some) // "Some Stuff"
+```
+
+#### `slice(start, stop?)`
+Remove a section of a string by providing a start index and an optional stop index. This changes the original string and returns the item(s) as a new string.
+
+- If `stop` is provided, the slice excludes the item at that index.
+- If `stop` is not provided, it removes everything upto and including the last item.
+- Since you're mutating the original string, it must be owned.
+```
+var stuff =< [10, 20, 30, 40, 50]
+const sliced = stuff.slice(1, 3)
+
+print(sliced) = [20, 30]
+print(stuff) // [10, 40, 50]
+```
+
+#### `upper()`
+Transform a string to all uppercase. String must be owned.
+
+```ngn
+var version =< "one"
+print(version.upper()) // ONE
+```
+
+#### `lower()`
+Transform a string to all lowercase. String must be owned.
+
+```ngn
+var version =< "ONE"
+print(version.lower()) // one
+```
+
+#### `trim()`
+Remove whitespace from both ends of a string. String must be owned.
+
+```ngn
+var =< thing = " strong "
+print(thing.trim()) // "strong"
+```
+
+#### `repeat(num)`
+Repeat a string some number of times.
+
+```ngn
+const ending = "goodbye"
+print(greeting.repeat(2)) // goodbyegoodbye
+```
+
 ### Arrays
 If you want to mutate arrays, be sure to declare them with `=<`
 
@@ -163,6 +290,9 @@ const ages = [3, 8, 15, 23]
 
 const mixed = ["hat", true, 7] ❌ // cannot mix types
 ```
+
+#### `size()`
+Return the size of the array.
 
 #### `push(item)`
 Push, i.e. add, an item to the end of an array. Returns the new size of the array as a `number`.
@@ -212,21 +342,8 @@ print(pulled_one) // ["coat"]
 print stuff // ["shirt", "hat"]
 ```
 
-#### `slice(start, stop?)`
-Remove a section of the array by providing a start index and an optional stop index. This changes the array and returns the item(s) as a new array.
-
-- If `stop` is provided, the slice excludes the item at that index.
-- If `stop` is not provided, it removes everything upto and including the last item.
-```
-var stuff =< [10, 20, 30, 40, 50]
-const sliced = stuff.slice(1, 3)
-
-print(sliced) = [20, 30]
-print(stuff) // [10, 40, 50]
-```
-
 #### `copy(start?, stop?)`
-Copies an entire array or a section of it. This does not change the array you copied from, but returns the copied items as a new array.
+Copies an entire array or a section of it, based on indices. This does not change the array you copied from, but returns the copied items as a new array.
 
 - If `start` is provided but `stop` is not, it copies everything upto and including the last item.
 - If `stop` is provided (implies `start`), the copy excludes the item at that index.
@@ -234,7 +351,7 @@ Copies an entire array or a section of it. This does not change the array you co
 
 ```
 const stuff = [10, 20, 30, 40, 50] // borrowed
-const copied = stuff.copy(3) // note you can copy borrowed arrays
+const copied = stuff.copy(3) // you can copy borrowed arrays
 
 print(copied) // [40, 50]
 print(stuff) // [10, 20, 30, 40, 50]
@@ -243,6 +360,35 @@ var all = stuff.copy()
 
 print(all) // [10, 20, 30, 40, 50]
 print(stuff) // [10, 20, 30, 40, 50]
+```
+
+#### `slice(start, stop?)`
+Remove a section of the array by providing a start index and an optional stop index. This changes the array and returns the item(s) as a new array.
+
+- If `stop` is provided, the slice excludes the item at that index.
+- If `stop` is not provided, it removes everything upto and including the last item.
+- Array must be owned.
+```
+var stuff =< [10, 20, 30, 40, 50]
+const sliced = stuff.slice(1, 3)
+
+print(sliced) = [20, 30]
+print(stuff) // [10, 40, 50]
+```
+
+#### `splice(item[], start?)`
+Add multiple items to an array; optionally, at a specific index. Returns the new size of the array.
+
+- If `start` is not provided, it adds the items at the end.
+- Array must be owned.
+```
+var stuff =< [10, 20, 30]
+stuff.splice([40, 50]) // [10, 20, 30, 40, 50]
+
+const size = stuff.splice([45, 47], 4)
+
+print(stuff) // [10, 20, 30, 40, 45, 47, 50]
+print(size) // 7
 ```
 
 ### `while`
