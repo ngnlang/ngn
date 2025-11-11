@@ -490,21 +490,6 @@ fn types_compatible(expected: &Type, actual: &Type) -> bool {
     }
 }
 
-fn convert_ownership(t: Type) -> Type {
-    match t {
-        Type::Str => Type::String,
-        Type::Array(inner) => Type::Array(Box::new(convert_ownership(*inner))),
-        Type::Object(map) => {
-            Type::Object(
-                map.into_iter()
-                    .map(|(k, v)| (k, convert_ownership(v)))
-                    .collect()
-            )
-        }
-        other => other,
-    }
-}
-
 fn get_arg_ownership(e: &Expr, env: &HashMap<String, (AssignKind, Value, Ownership, Moved)>) -> Ownership {
     match e {
         Expr::Var(name) => {
@@ -1752,6 +1737,11 @@ fn execute_stmt(
             ControlFlow::None
         }
         Stmt::Assign { kind, declared_type, name, value, ownership} => {
+            // Check if variable already declared in this scope
+            if env.contains_key(name) {
+                panic!("Identifier '{}' already declared in this scope", name);
+            }
+            
             // Disallow function assignments for all variable types
             if let AssignKind::Var | AssignKind::Const = kind {
                 if let Expr::Var(fn_name) | Expr::Const(fn_name) = value {
@@ -1777,33 +1767,16 @@ fn execute_stmt(
                 _ => {}
             }
 
-            let _type = infer_expr_type(value, env, fns, models, model_methods);
             let v = eval_expr(value, env, fns, models, roles, model_methods);
-            let mut actual_type = infer_value_type(&v);
-            let mut normalized_declared_type = declared_type.clone();
+            let actual_type = infer_value_type(&v);
 
-            normalized_declared_type = normalized_declared_type.map(|t| {
-                match ownership {
-                    Ownership::Owned => convert_ownership(t),
-                    Ownership::Borrowed => t,
-                }
-            });
-
-            match ownership {
-                Ownership::Borrowed => {
-                    // Value must be borrowable (&str, &[T], etc.)
-                    if *kind == AssignKind::Var && actual_type == Type::String {
-                        panic!("Cannot use '=' with String; use '<-' for owned assignment");
-                    }
-                }
-                Ownership::Owned => {
-                    actual_type = convert_ownership(actual_type);
-                }
-            }
-
-            if let Some(expected_type) = normalized_declared_type {
+            // Type check against declared type if provided
+            if let Some(expected_type) = declared_type {
                 if !types_compatible(&expected_type, &actual_type) {
-                    panic!("Type error: expected {:?}, got {:?}", expected_type, actual_type);
+                    panic!("Type error: expected {}, got {}", 
+                        format_type_for_error(&expected_type),
+                        format_type_for_error(&actual_type)
+                    );
                 }
             }
 
