@@ -281,6 +281,35 @@ const ending = "goodbye"
 print(greeting.repeat(2)) // goodbyegoodbye
 ```
 
+### Numbers
+
+#### `abs(number)`
+Get the absolute value of a number.
+```ngn
+print((-5).abs()) // 5
+```
+
+#### `round(number)`
+Round a number to the nearest integer.
+```ngn
+print((3.7).round()) // 4
+print((5.5).round()) // 6
+```
+
+#### `ceil(number)`
+Round a number up, no matter the decimal value.
+```ngn
+print((7.6).ceil()) // 8
+print((3.2).ceil())  // 4
+```
+
+#### `floor(number)`
+Round a number down, no matter the decimal value.
+```ngn
+print((1.3).floor()) // 1
+print((3.7).floor()) // 3
+```
+
 ### Arrays
 If you want to mutate arrays, be sure to declare them with `=<`
 
