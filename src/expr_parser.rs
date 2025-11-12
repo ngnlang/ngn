@@ -282,13 +282,14 @@ impl ExprParser {
             }
             Some(Token::Ident(name)) => {
                 self.advance();
+
                 match self.current_token() {
                     // Function call
                     Some(Token::LParen) => {
                         self.advance();
                         let args = self.parse_fn_args()?;
                         self.expect(Token::RParen)?;
-                        Ok(Expr::Call { name, args })
+                        return Ok(Expr::Call { name, args })
                     }
                     // Model instance
                     Some(Token::LBrace) => {
@@ -299,11 +300,34 @@ impl ExprParser {
                         }
                         let fields = self.parse_model_fields()?;
                         self.expect(Token::RBrace)?;
-                        Ok(Expr::ModelInstance { name, fields })
+                        return Ok(Expr::ModelInstance { name, fields })
                     }
                     // Bare identifier
-                    _ => Ok(Expr::Var(name)),
+                    _ => {},
                 }
+                
+                // Check if it's an enum variant (capitalized, or special like Ok, Error, Null, Value)
+                if self.is_enum_variant(&name) {
+                    if matches!(self.current_token(), Some(Token::LParen)) {
+                        self.advance();
+                        let data = self.parse_assignment()?;
+                        self.expect(Token::RParen)?;
+                        return Ok(Expr::EnumVariant {
+                            enum_name: self.infer_enum_name(&name),  // Helper to determine enum
+                            variant: name,
+                            data: Some(Box::new(data)),
+                        });
+                    } else {
+                        // Unit variant like Null
+                        return Ok(Expr::EnumVariant {
+                            enum_name: self.infer_enum_name(&name),
+                            variant: name,
+                            data: None,
+                        });
+                    }
+                }
+
+                Ok(Expr::Var(name))
             }
             Some(Token::LBracket) => {
                 self.advance();
@@ -424,6 +448,18 @@ impl ExprParser {
         }
 
         Ok(fields)
+    }
+
+    fn is_enum_variant(&self, name: &str) -> bool {
+        matches!(name, "Ok" | "Error" | "Value" | "Null")
+    }
+
+    fn infer_enum_name(&self, variant: &str) -> String {
+        match variant {
+            "Ok" | "Error" => "Result".to_string(),
+            "Value" | "Null" => "Maybe".to_string(),
+            _ => variant.to_string(),  // Custom enum
+        }
     }
 
     fn expect(&mut self, expected: Token) -> Result<(), String> {

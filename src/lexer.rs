@@ -17,7 +17,7 @@ pub enum Token {
     Fn, Return, ShortReturn,
     Ident(String), String(String), Number(f64),
     Model, Role, Extend, With,
-    Regex(String),
+    Regex(String), Enum,
 }
 
 pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
@@ -285,6 +285,7 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
                     "role" => Token::Role,
                     "extend" => Token::Extend,
                     "with" => Token::With,
+                    "enum" => Token::Enum,
                     _ => Token::Ident(ident),
                 };
                 tokens.push((start, token, end));

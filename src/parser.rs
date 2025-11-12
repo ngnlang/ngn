@@ -125,7 +125,8 @@ impl Parser {
             Some(Token::Ident(_)) => {
                 // Could be: assignment, reassignment, or expression statement
                 self.parse_ident_statement()
-            }
+            },
+            Some(Token::Enum) => self.parse_enum_def(),
             other => Err(format!("Unexpected token in statement: {:?}", other)),
         }
     }
@@ -750,6 +751,61 @@ impl Parser {
             let expr = self.parse_expr()?;
             Ok(Stmt::Return(Some(expr)))
         }
+    }
+
+    fn parse_enum_def(&mut self) -> Result<Stmt, String> {
+        self.advance();  // consume 'enum'
+        
+        let name = self.expect_ident()?;
+        
+        // Parse optional type parameters: <T, E>
+        let type_params = if matches!(self.current_token(), Some(Token::Less)) {
+            self.advance();
+            let mut params = vec![self.expect_ident()?];
+            while matches!(self.current_token(), Some(Token::Comma)) {
+                self.advance();
+                params.push(self.expect_ident()?);
+            }
+            self.expect(Token::Greater)?;
+            params
+        } else {
+            vec![]
+        };
+        
+        self.expect(Token::LBrace)?;
+        self.skip_newlines();
+        
+        let mut variants = Vec::new();
+        while !matches!(self.current_token(), Some(Token::RBrace)) {
+            let variant_name = self.expect_ident()?;
+            
+            let data_type = if matches!(self.current_token(), Some(Token::LParen)) {
+                self.advance();
+                let (ty, _) = self.parse_type()?;
+                self.expect(Token::RParen)?;
+                Some(ty)
+            } else {
+                None
+            };
+            
+            variants.push(EnumVariant {
+                name: variant_name,
+                data_type,
+            });
+            
+            if matches!(self.current_token(), Some(Token::Comma)) {
+                self.advance();
+            }
+            self.skip_newlines();
+        }
+        
+        self.expect(Token::RBrace)?;
+        
+        Ok(Stmt::EnumDef(EnumDef {
+            name,
+            type_params,
+            variants,
+        }))
     }
 
    fn parse_block(&mut self) -> Result<Vec<Stmt>, String> {

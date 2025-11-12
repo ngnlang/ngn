@@ -13,6 +13,21 @@ pub enum Type {
     Void,
     Model(String),
     Regex,
+    Generic(String),
+    Enum(String, Vec<Type>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumVariant {
+    pub name: String,
+    pub data_type: Option<Type>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumDef {
+    pub name: String,
+    pub type_params: Vec<String>,
+    pub variants: Vec<EnumVariant>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -26,6 +41,7 @@ pub enum Value {
     Object(String, HashMap<String, Value>),
     Void,
     Regex(String),
+    EnumValue(String, String, Option<Box<Value>>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -62,6 +78,7 @@ pub enum Expr {
     MethodCall { object: Box<Expr>, method: String, args: Vec<Expr> },
     Closure(Box<ClosureDef>),
     Regex(String),
+    EnumVariant { enum_name: String, variant: String, data: Option<Box<Expr>> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -99,7 +116,8 @@ pub enum Stmt {
         model_name: String,
         role_name: Option<String>,
         methods: Vec<FnDef>,
-    }
+    },
+    EnumDef(EnumDef),
 }
 
 #[derive(Debug, Clone, PartialEq)]
