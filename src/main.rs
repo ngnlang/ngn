@@ -4,7 +4,6 @@ mod parser;
 mod expr_parser;
 
 use parser::Parser;
-use expr_parser::ExprParser;
 
 use regex::Regex as RegexLib;
 
@@ -19,7 +18,26 @@ fn main() {
         .expect("Failed to read ngn file");
 
     let tokens = lexer::tokenize(&source);
-    let mut parser = Parser::new(tokens);
+
+    // Preliminary parse to extract enum definitions
+    let mut preliminary_parser = Parser::new(tokens.clone(), HashMap::new());
+    let preliminary_ast = match preliminary_parser.parse_program() {
+        Ok(ast) => ast,
+        Err(e) => {
+            eprintln!("Parse error: {}", e);
+            return;
+        }
+    };
+    
+    // Extract enums from the AST
+    let mut enums: HashMap<String, EnumDef> = HashMap::new();
+    for stmt in &preliminary_ast {
+        if let Stmt::EnumDef(enum_def) = stmt {
+            enums.insert(enum_def.name.clone(), enum_def.clone());
+        }
+    }
+
+    let mut parser = Parser::new(tokens, enums.clone());
 
     match parser.parse_program() {
         Ok(ast) => run(&ast),
@@ -202,67 +220,6 @@ fn can_mutate(var_name: &str, env: &HashMap<String, (AssignKind, Value, Ownershi
     } else {
         false
     }
-}
-
-fn parse_expression_from_string(expr_str: &str) -> Result<Expr, String> {
-    let tokens = crate::lexer::tokenize(expr_str);
-    
-    let mut parser = ExprParser::new(tokens);
-    parser.parse()
-        .map_err(|e| format!("Failed to parse interpolated expression: {}", e))
-}
-
-fn parse_interpolated_string(s: &str) -> Result<Vec<InterpolationPart>, String> {
-    let mut parts = Vec::new();
-    let mut current = String::new();
-    let mut chars = s.chars().peekable();
-    
-    while let Some(c) = chars.next() {
-        if c == '{' {
-            if !current.is_empty() {
-                parts.push(InterpolationPart::Literal(current.clone()));
-                current.clear();
-            }
-            
-            let mut expr_str = String::new();
-            let mut brace_depth = 1;
-            while let Some(c) = chars.next() {
-                if c == '{' {
-                    brace_depth += 1;
-                    expr_str.push(c);
-                } else if c == '}' {
-                    brace_depth -= 1;
-                    if brace_depth == 0 { break; }
-                    expr_str.push(c);
-                } else {
-                    expr_str.push(c);
-                }
-            }
-            
-            // Parse the expression!
-            let expr = parse_expression_from_string(&expr_str)?;
-            parts.push(InterpolationPart::Expression(Box::new(expr)));
-        } else if c == '\\' {
-            if let Some(next) = chars.next() {
-                match next {
-                    'n' => current.push('\n'),
-                    't' => current.push('\t'),
-                    'r' => current.push('\r'),
-                    '\\' => current.push('\\'),
-                    '"' => current.push('"'),
-                    _ => current.push(next),
-                }
-            }
-        } else {
-            current.push(c);
-        }
-    }
-    
-    if !current.is_empty() {
-        parts.push(InterpolationPart::Literal(current));
-    }
-    
-    Ok(parts)
 }
 
 fn is_truthy(v: &Value) -> bool {

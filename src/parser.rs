@@ -1,16 +1,19 @@
 use crate::ast::*;
 use crate::lexer::Token;
+use std::collections::HashMap;
 use std::iter::Peekable;
 use std::vec::IntoIter;
 
 pub struct Parser {
     tokens: Peekable<IntoIter<(usize, Token, usize)>>,
+    enums: HashMap<String, EnumDef>,
 }
 
 impl Parser {
-    pub fn new(tokens: Vec<(usize, Token, usize)>) -> Self {
+    pub fn new(tokens: Vec<(usize, Token, usize)>, enums: HashMap<String, EnumDef>) -> Self {
         Parser {
             tokens: tokens.into_iter().peekable(),
+            enums,
         }
     }
 
@@ -925,7 +928,7 @@ impl Parser {
             return Err("Expected expression".to_string());
         }
         
-        let mut expr_parser = crate::expr_parser::ExprParser::new(expr_tokens);
+        let mut expr_parser = crate::expr_parser::ExprParser::new(expr_tokens, &self.enums);
         let expr = expr_parser.parse()?;
 
         // Check for field assignment: obj.field = value

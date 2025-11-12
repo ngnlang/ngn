@@ -1,16 +1,19 @@
-use crate::ast::Expr;
+use crate::ast::{EnumDef, Expr, InterpolationPart};
 use crate::lexer::Token;
+use std::collections::HashMap;
 use std::iter::Peekable;
 use std::vec::IntoIter;
 
 pub struct ExprParser {
     tokens: Peekable<IntoIter<(usize, Token, usize)>>,
+    enums: HashMap<String, EnumDef>,
 }
 
 impl ExprParser {
-    pub fn new(tokens: Vec<(usize, Token, usize)>) -> Self {
+    pub fn new(tokens: Vec<(usize, Token, usize)>, enums: &HashMap<String, EnumDef>) -> Self {
         ExprParser {
             tokens: tokens.into_iter().peekable(),
+            enums: enums.clone(),
         }
     }
 
@@ -266,7 +269,7 @@ impl ExprParser {
                 self.advance();
                 // Handle interpolation
                 if s.contains('{') {
-                    let parts = crate::parse_interpolated_string(&s)?;
+                    let parts = Self::parse_interpolated_string(&s, &self.enums)?;
                     Ok(Expr::InterpolatedString(parts))
                 } else {
                     Ok(Expr::String(s))
@@ -282,6 +285,27 @@ impl ExprParser {
             }
             Some(Token::Ident(name)) => {
                 self.advance();
+
+                // Check if it's an enum variant (capitalized, or special like Ok, Error, Null, Value)
+                if self.is_enum_variant(&name) {
+                    if matches!(self.current_token(), Some(Token::LParen)) {
+                        self.advance();
+                        let data = self.parse_assignment()?;
+                        self.expect(Token::RParen)?;
+                        return Ok(Expr::EnumVariant {
+                            enum_name: self.infer_enum_name(&name),  // Helper to determine enum
+                            variant: name,
+                            data: Some(Box::new(data)),
+                        });
+                    } else {
+                        // Unit variant like Null
+                        return Ok(Expr::EnumVariant {
+                            enum_name: self.infer_enum_name(&name),
+                            variant: name,
+                            data: None,
+                        });
+                    }
+                }
 
                 match self.current_token() {
                     // Function call
@@ -304,27 +328,6 @@ impl ExprParser {
                     }
                     // Bare identifier
                     _ => {},
-                }
-                
-                // Check if it's an enum variant (capitalized, or special like Ok, Error, Null, Value)
-                if self.is_enum_variant(&name) {
-                    if matches!(self.current_token(), Some(Token::LParen)) {
-                        self.advance();
-                        let data = self.parse_assignment()?;
-                        self.expect(Token::RParen)?;
-                        return Ok(Expr::EnumVariant {
-                            enum_name: self.infer_enum_name(&name),  // Helper to determine enum
-                            variant: name,
-                            data: Some(Box::new(data)),
-                        });
-                    } else {
-                        // Unit variant like Null
-                        return Ok(Expr::EnumVariant {
-                            enum_name: self.infer_enum_name(&name),
-                            variant: name,
-                            data: None,
-                        });
-                    }
                 }
 
                 Ok(Expr::Var(name))
@@ -450,15 +453,93 @@ impl ExprParser {
         Ok(fields)
     }
 
+    fn parse_expression_from_string(expr_str: &str, enums: &HashMap<String, EnumDef>) -> Result<Expr, String> {
+        let tokens = crate::lexer::tokenize(expr_str);
+        
+        let mut parser = ExprParser::new(tokens, enums);
+        parser.parse()
+            .map_err(|e| format!("Failed to parse interpolated expression: {}", e))
+    }
+
+    fn parse_interpolated_string(s: &str, enums: &HashMap<String, EnumDef>) -> Result<Vec<InterpolationPart>, String> {
+        let mut parts = Vec::new();
+        let mut current = String::new();
+        let mut chars = s.chars().peekable();
+        
+        while let Some(c) = chars.next() {
+            if c == '{' {
+                if !current.is_empty() {
+                    parts.push(InterpolationPart::Literal(current.clone()));
+                    current.clear();
+                }
+                
+                let mut expr_str = String::new();
+                let mut brace_depth = 1;
+                while let Some(c) = chars.next() {
+                    if c == '{' {
+                        brace_depth += 1;
+                        expr_str.push(c);
+                    } else if c == '}' {
+                        brace_depth -= 1;
+                        if brace_depth == 0 { break; }
+                        expr_str.push(c);
+                    } else {
+                        expr_str.push(c);
+                    }
+                }
+                
+                // Parse the expression!
+                let expr = Self::parse_expression_from_string(&expr_str, enums)?;
+                parts.push(InterpolationPart::Expression(Box::new(expr)));
+            } else if c == '\\' {
+                if let Some(next) = chars.next() {
+                    match next {
+                        'n' => current.push('\n'),
+                        't' => current.push('\t'),
+                        'r' => current.push('\r'),
+                        '\\' => current.push('\\'),
+                        '"' => current.push('"'),
+                        _ => current.push(next),
+                    }
+                }
+            } else {
+                current.push(c);
+            }
+        }
+        
+        if !current.is_empty() {
+            parts.push(InterpolationPart::Literal(current));
+        }
+        
+        Ok(parts)
+    }
+
     fn is_enum_variant(&self, name: &str) -> bool {
-        matches!(name, "Ok" | "Error" | "Value" | "Null")
+        // Check both built-in and custom enums
+        if matches!(name, "Ok" | "Error" | "Value" | "Null") {
+            return true;
+        }
+        // Check custom enums
+        for enum_def in self.enums.values() {
+            if enum_def.variants.iter().any(|v| v.name == *name) {
+                return true;
+            }
+        }
+        false
     }
 
     fn infer_enum_name(&self, variant: &str) -> String {
         match variant {
             "Ok" | "Error" => "Result".to_string(),
             "Value" | "Null" => "Maybe".to_string(),
-            _ => variant.to_string(),  // Custom enum
+            _ => {
+                for enum_def in self.enums.values() {
+                    if enum_def.variants.iter().any(|v| v.name == *variant) {
+                        return enum_def.name.clone();
+                    }
+                }
+                panic!("Enum variant '{}' not found (internal error)", variant)
+            }
         }
     }
 
