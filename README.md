@@ -112,19 +112,7 @@ Therefore, it's best to use `lit` when assigning a small amount of data. If you'
 
 Think about it this way: if you had an array of 1000 numbers defined using `lit`, every single use of it in your code would be replaced with the entire array of data. This would be an inefficient use of memory. Whereas if you define the large array with `static`, ngn stores a single instance of the data in memory and any code references to it are just that, a reference, not the entire data set.
 
-## Working API
-
-> All code examples assume you're placing them in the correct context within the file.
-
-```ngn
-const version = 2
-version = 3 ❌
-
-var age = 41
-age = 42 ✅
-```
-
-### `echo`
+## `echo`
 Log to the console, without formatting.
 ```ngn
 const name = "ngn"
@@ -136,7 +124,7 @@ echo("World")
 // HelloWorld
 ```
 
-### `print`
+## `print`
 Line logging to the console. Implicit `\n`.
 ```ngn
 print("Hello")
@@ -145,7 +133,7 @@ print("World")
 // World
 ```
 
-### String Interpolation
+## String Interpolation
 ```ngn
 const x = 5
 print("x plus 1 is {x + 1}")
@@ -154,12 +142,12 @@ const greeting = "world"
 print("Hello, {greeting}!")
 ```
 
-### Strings
+## Strings
 
-#### `length()`
+### `length()`
 Return the length of a string.
 
-#### `index(pattern, start?)`
+### `index(pattern, start?)`
 Search a string for a given pattern, and return the index number of the first instance found. If no pattern is found, returns `-1`. You can pass an optional start index.
 
 ```ngn
@@ -167,7 +155,7 @@ const sent = "I learned to draw today."
 const ind = sent.index("to") // 10
 ```
 
-#### `includes(pattern)`
+### `includes(pattern)`
 Determine if a string includes a given pattern. Returns a boolean.
 
 ```ngn
@@ -175,7 +163,7 @@ const weather = "sunny"
 const inc = weather.includes("sun") // true
 ```
 
-#### `starts(pattern)`
+### `starts(pattern)`
 Determine if a string starts with a given pattern. Returns a boolean.
 
 ```ngn
@@ -183,7 +171,7 @@ var process = "complete"
 const beg = process.starts("c") // true
 ```
 
-#### `ends(pattern)`
+### `ends(pattern)`
 Determine if a string ends with a given pattern. Returns a boolean.
 
 ```ngn
@@ -191,7 +179,7 @@ var process = "working"
 const end = process.ends("ing") // true
 ```
 
-#### `split(pattern?)`
+### `split(pattern?)`
 Create an array of strings by splitting a string on a pattern of characters. If you do not pass a pattern, each character in the string is split individually. Preserves the original string.
 
 ```ngn
@@ -202,7 +190,7 @@ var greeting = "Hello"
 const arr = greeting.split() // ["H", "e", "l", "l", "o"]
 ```
 
-#### `replace(search, replacement)`
+### `replace(search, replacement)`
 Replace a pattern with a string. `search` can be a string or a RegEx; but if a string is passed, only the first occurrence is replaced. Preserves the original string and returns a new one.
 
 ```ngn
@@ -215,7 +203,7 @@ var plain = "Forge ahead"
 const fancy = plain.replace(/a/g, "@") // "Forge @he@d"
 ```
 
-#### `copy(start?, stop?)`
+### `copy(start?, stop?)`
 Copies an entire string or a section of it, based on indices. This does not change the string you copied from, but returns the copied value as a new string.
 
 - If `start` is provided but `stop` is not, it copies everything upto and including the end of the string.
@@ -235,7 +223,7 @@ print(all) // "Some Stuff"
 print(some) // "Some Stuff"
 ```
 
-#### `slice(start, stop?)`
+### `slice(start, stop?)`
 Remove a section of a string by providing a start index and an optional stop index. This changes the original string and returns the item(s) as a new string.
 
 - If `stop` is provided, the slice excludes the item at that index.
@@ -249,7 +237,7 @@ print(sliced) = [20, 30]
 print(stuff) // [10, 40, 50]
 ```
 
-#### `upper()`
+### `upper()`
 Transform a string to all uppercase. String must be owned.
 
 ```ngn
@@ -257,7 +245,7 @@ var version =< "one"
 print(version.upper()) // ONE
 ```
 
-#### `lower()`
+### `lower()`
 Transform a string to all lowercase. String must be owned.
 
 ```ngn
@@ -265,7 +253,7 @@ var version =< "ONE"
 print(version.lower()) // one
 ```
 
-#### `trim()`
+### `trim()`
 Remove whitespace from both ends of a string. String must be owned.
 
 ```ngn
@@ -273,7 +261,7 @@ var =< thing = " strong "
 print(thing.trim()) // "strong"
 ```
 
-#### `repeat(num)`
+### `repeat(num)`
 Repeat a string some number of times.
 
 ```ngn
@@ -281,36 +269,36 @@ const ending = "goodbye"
 print(greeting.repeat(2)) // goodbyegoodbye
 ```
 
-### Numbers
+## Numbers
 
-#### `abs(number)`
+### `abs(number)`
 Get the absolute value of a number.
 ```ngn
 print((-5).abs()) // 5
 ```
 
-#### `round(number)`
+### `round(number)`
 Round a number to the nearest integer.
 ```ngn
 print((3.7).round()) // 4
 print((5.5).round()) // 6
 ```
 
-#### `ceil(number)`
+### `ceil(number)`
 Round a number up, no matter the decimal value.
 ```ngn
 print((7.6).ceil()) // 8
 print((3.2).ceil())  // 4
 ```
 
-#### `floor(number)`
+### `floor(number)`
 Round a number down, no matter the decimal value.
 ```ngn
 print((1.3).floor()) // 1
 print((3.7).floor()) // 3
 ```
 
-### Arrays
+## Arrays
 If you want to mutate arrays, be sure to declare them with `=<`
 
 ```ngn
@@ -320,10 +308,10 @@ const ages = [3, 8, 15, 23]
 const mixed = ["hat", true, 7] ❌ // cannot mix types
 ```
 
-#### `size()`
+### `size()`
 Return the size of the array.
 
-#### `push(item)`
+### `push(item)`
 Push, i.e. add, an item to the end of an array. Returns the new size of the array as a `number`.
 ```
 var stuff =< ["guitar", "shirt"]
@@ -333,7 +321,7 @@ print(size) // 3
 print(stuff) // ["guitar", "shirt", "hat"]
 ```
 
-#### `pop()`
+### `pop()`
 Pop, i.e. remove, the last item of an array. Returns the removed item's value.
 ```
 var stuff =< ["guitar", "shirt", "hat"]
@@ -343,7 +331,7 @@ print(popped) // hat
 print(stuff) // ["guitar", "shirt"]
 ```
 
-#### `put(item, index?)`
+### `put(item, index?)`
 Put, i.e. add, an item into an array. By default, it puts at the beginning. To put in another location, provide the index number. Returns the new size of the array as a `number`.
 ```
 var stuff =< ["guitar", "shirt"]
@@ -356,7 +344,7 @@ stuff.put("coat", 2)
 print(stuff) // ["hat", "guitar", "coat", "shirt"]
 ```
 
-#### `pull(index?)`
+### `pull(index?)`
 Pull, i.e. remove, an item from an array. By default, it removes from the beginning. To pull from another location, provide the index number. Returns the removed item's value.
 ```
 var stuff =< ["guitar", "shirt", "coat", "hat"]
@@ -371,7 +359,7 @@ print(pulled_one) // ["coat"]
 print stuff // ["shirt", "hat"]
 ```
 
-#### `copy(start?, stop?)`
+### `copy(start?, stop?)`
 Copies an entire array or a section of it, based on indices. This does not change the array you copied from, but returns the copied items as a new array.
 
 - If `start` is provided but `stop` is not, it copies everything upto and including the last item.
@@ -391,7 +379,7 @@ print(all) // [10, 20, 30, 40, 50]
 print(stuff) // [10, 20, 30, 40, 50]
 ```
 
-#### `slice(start, stop?)`
+### `slice(start, stop?)`
 Remove a section of the array by providing a start index and an optional stop index. This changes the array and returns the item(s) as a new array.
 
 - If `stop` is provided, the slice excludes the item at that index.
@@ -405,7 +393,7 @@ print(sliced) = [20, 30]
 print(stuff) // [10, 40, 50]
 ```
 
-#### `splice(item[], start?)`
+### `splice(item[], start?)`
 Add multiple items to an array; optionally, at a specific index. Returns the new size of the array.
 
 - If `start` is not provided, it adds the items at the end.
@@ -420,7 +408,94 @@ print(stuff) // [10, 20, 30, 40, 45, 47, 50]
 print(size) // 7
 ```
 
-### `while`
+## Enums: Result and Maybe
+
+ngn provides two built-in enums for common patterns: `Result` for error handling and `Maybe` for possible values.
+
+### Result<T, E>
+
+`Result` represents an operation that can either succeed or fail.
+
+#### Variants
+
+- `Ok(T)` — The operation succeeded with a value of type `T`
+- `Error(E)` — The operation failed with an error of type `E`
+
+#### Examples
+
+```ngn
+fn divide(a: number, b: number): Result<number, string> {
+    if b == 0 return Error("Division by zero")
+    return Ok(a / b)
+}
+
+fn main() {
+    const result = divide(10, 2)
+    print(result)  // Result::Ok (5)
+}
+```
+
+### Maybe<T>
+
+`Maybe` represents a value that may or may not exist.
+
+#### Variants
+
+- `Value(T)` — The value exists
+- `Null` — The value does not exist
+
+#### Examples
+
+```ngn
+model User {
+    name: string,
+    email: Optional<string>  // May be Null
+}
+
+fn findUser(id: number): Maybe<User> {
+    if user_exists return Value(user)
+    return Null
+}
+
+fn main() {
+    const user = findUser(1)
+    print(user)  // Maybe::Value (...) or Maybe::Null
+}
+```
+
+### Custom Enums
+
+You can define your own enums for domain-specific types.
+
+```ngn
+enum Color { Red, Green, Blue }
+
+enum Status {
+    Active,
+    Inactive(string)  // With associated data
+}
+
+fn main() {
+    const c = Red
+    print(c)  // Color::Red
+    
+    const s = Inactive("maintenance")
+    print(s)  // Status::Inactive (maintenance)
+}
+```
+
+### Pattern Matching
+
+Use `match` to work with enum values:
+
+```ngn
+match result {
+    Ok(value) => print("Success: {value}"),
+    Error(msg) => print("Failed: {msg}"),
+}
+```
+
+## `while`
 Run the statement block while the condition is true. Not guaranteed to run at all.
 ```ngn
 while (condition) {
@@ -434,7 +509,7 @@ Can be inlined if only using a single statement.
 while (condition) statement
 ```
 
-#### `once` variant
+### `once` variant
 To always run the statement block once, before checking the condition.
 ```ngn
 while once (condition) {
@@ -442,7 +517,7 @@ while once (condition) {
 }
 ```
 
-### `until`
+## `until`
 Run the statement block until the condition is true. Not guaranteed to run at all.
 ```ngn
 until (condition) {
@@ -456,7 +531,7 @@ Can be inlined if only using a single statement.
 until (condition) statement
 ```
 
-#### `once` variant
+### `once` variant
 To always run the statement block once, before checking the condition.
 ```ngn
 until once (condition) {
@@ -464,7 +539,7 @@ until once (condition) {
 }
 ```
 
-### `if`
+## `if`
 Run a statement based on if a condition is true.
 
 The full syntax is a bit out of the ordinary, but helps reduce boilerplate "else if" and "else" wording, along with the extra braces. This style is required if any of your blocks have multiple statements.
@@ -491,7 +566,7 @@ if (condition)
 : statement
 ```
 
-#### `not` variant
+### `not` variant
 If you're concerned about code readability in certain situations, you can use the `not` operator in place of `!`.
 
 So, instead of
@@ -511,7 +586,7 @@ if {
 }
 ```
 
-### `match`
+## `match`
 Match a value against one test case; optionally, provide a default case.
 
 If a match is found:
@@ -532,7 +607,7 @@ match (value) {
 }
 ```
 
-#### `any` variant
+### `any` variant
 Even if a match is found, continue checking cases unless a matched statement block contains the `break` keyword.
 
 ```
@@ -547,17 +622,17 @@ match any (value) {
 }
 ```
 
-### `fn`
+## `fn`
 You can write functions in various ways; along with passing them as arguments to other functions.
 
-#### Traditional block, explicit return
+### Traditional block, explicit return
 ```ngn
 fn add(a, b) {
   return a + b
 }
 ```
 
-#### Traditional block, explicit multiline return
+### Traditional block, explicit multiline return
 ```ngn
 fn add(a, b) {
   return (
@@ -567,19 +642,19 @@ fn add(a, b) {
 }
 ```
 
-#### Implicit return
+### Implicit return
 ```ngn
 fn add(a, b) a + b
 ```
 
-#### Side-effects only
+### Side-effects only
 ```ngn
 fn doThing() {
   print("something")
 }
 ```
 
-### Closures
+## Closures
 Closures are similar to functions, but you can assign them to an identifier, then call it like a function. You can define any params within a pair of pipes, or have an empty set of pipes if not using params.
 ```ngn
 const add = |a: number, b: number| a + b
@@ -648,10 +723,10 @@ incremenBy(7)
 print(count) // 107
 ```
 
-### Objects and Composability
+## Objects and Composability
 You can create typed objects using models, then create a new instance of a model. You can also extend a model's functionality with direct methods or groups of methods via roles.
 
-#### `model`
+### `model`
 Create object structures.
 
 ```ngn
@@ -661,7 +736,7 @@ model Dog {
 }
 ```
 
-#### `role`
+### `role`
 Declare one or more method signatures and/or method implementations. Group methods into roles in order to implement their functionality for models.
 
 ```ngn
@@ -670,7 +745,7 @@ role Animal {
 }
 ```
 
-#### `extend`
+### `extend`
 Extend a model's functionality with methods. You can implement custom methods, apply one or more roles, or a mix of both.
 
 ```ngn
@@ -706,7 +781,7 @@ print(fetched) // either true or false
 dog.speak() // Woof, woof!
 ```
 
-#### Alternative for instantiating models
+### Alternative for instantiating models
 You may also choose to create a constructor method and use it to create a new instance of a model.
 
 ```ngn
@@ -726,7 +801,7 @@ fn main() {
 }
 ```
 
-### `this`
+## `this`
 There's no need to fear `this` in ngn. It's an implicit reference to the instance that a method is called on. It gives you access to the instance's fields and other methods.
 
 ```ngn
@@ -749,7 +824,7 @@ var user = User { name: "Jason", age: 47 }
 user.greet()  // "Hello, I'm Jason"
 ```
 
-#### Mutating "object" data
+### Mutating "object" data
 When you create an instance of a model, it's essentially an object - although it can have methods attached to it as well.
 
 The general rule is that you can mutate based on how the variable was declared (`var =`, `var =<`, `const`, etc). However, you can't change a field's type - which is typically allowed with `rebind`.
@@ -762,7 +837,7 @@ Here are the ways to manipulate an object's fields, based on the above example c
 - method, by borrowed `var`s: `user.changeName("Stacie")` only if the method mutates via `rebind this.name = name`
 - by `const`, `lit`, `static` variables: ❌ not allowed, as these are all strictly immutable
 
-### Types
+## Types
 
 - `string`
 - `number`
@@ -772,7 +847,7 @@ Here are the ways to manipulate an object's fields, based on the above example c
 - `void`
 
 
-#### explicit
+### explicit
 ```ngn
 const thing: string = "one"
 var answer: number = 42
@@ -785,7 +860,7 @@ fn sideEffects(): void {
 }
 ```
 
-#### implicit
+### implicit
 Supported for literals and expressions, as well as inside functions (requires explict types for fn params and return).
 
 ```ngn
