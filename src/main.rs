@@ -724,6 +724,14 @@ fn find_rebound_vars(stmts: &[Stmt]) -> Vec<String> {
                     rebound.push(name.clone());
                 }
             }
+            Stmt::RebindField { object, .. } => {
+                if !rebound.contains(object) {
+                    rebound.push(object.clone());
+                }
+            }
+            Stmt::Echo(e) | Stmt::Print(e) => {
+                collect_vars_from_expr(e, &mut rebound);
+            }
             Stmt::If { then_block, else_ifs, else_block, .. } => {
                 rebound.extend(find_rebound_vars(then_block));
                 for (_, block) in else_ifs {
@@ -750,6 +758,109 @@ fn find_rebound_vars(stmts: &[Stmt]) -> Vec<String> {
     }
     
     rebound
+}
+
+fn find_referenced_vars(stmts: &[Stmt]) -> Vec<String> {
+    let mut vars = Vec::new();
+    
+    for stmt in stmts {
+        match stmt {
+            Stmt::Echo(e) | Stmt::Print(e) | Stmt::ExprStmt(e) => {
+                collect_vars_from_expr(e, &mut vars);
+            }
+            Stmt::Return(Some(e)) => {
+                collect_vars_from_expr(e, &mut vars);
+            }
+            Stmt::Assign { value, .. } | Stmt::Reassign { value, .. } | Stmt::Rebind { value, .. } => {
+                collect_vars_from_expr(value, &mut vars);
+            }
+            Stmt::If { condition, then_block, else_ifs, else_block, .. } => {
+                collect_vars_from_expr(condition, &mut vars);
+                vars.extend(find_referenced_vars(then_block));
+                for (cond, block) in else_ifs {
+                    collect_vars_from_expr(cond, &mut vars);
+                    vars.extend(find_referenced_vars(block));
+                }
+                if let Some(block) = else_block {
+                    vars.extend(find_referenced_vars(block));
+                }
+            }
+            Stmt::While { condition, body, .. } | Stmt::WhileOnce { condition, body, .. } |
+            Stmt::Until { condition, body, .. } | Stmt::UntilOnce { condition, body, .. } => {
+                collect_vars_from_expr(condition, &mut vars);
+                vars.extend(find_referenced_vars(body));
+            }
+            Stmt::Match { expr, cases, default, .. } => {
+                collect_vars_from_expr(expr, &mut vars);
+                for (_, block) in cases {
+                    vars.extend(find_referenced_vars(block));
+                }
+                if let Some(block) = default {
+                    vars.extend(find_referenced_vars(block));
+                }
+            }
+            _ => {}
+        }
+    }
+    
+    vars
+}
+
+fn collect_vars_from_expr(e: &Expr, vars: &mut Vec<String>) {
+    match e {
+        Expr::Var(name) | Expr::Const(name) | Expr::Lit(name) | Expr::Static(name) => {
+            if !vars.contains(name) {
+                vars.push(name.clone());
+            }
+        }
+        Expr::Add(a, b) | Expr::Subtract(a, b) | Expr::Multiply(a, b) | 
+        Expr::Divide(a, b) | Expr::Modulo(a, b) | Expr::Power(a, b) |
+        Expr::Equal(a, b) | Expr::NotEqual(a, b) | Expr::LessThan(a, b) |
+        Expr::LessThanOrEqual(a, b) | Expr::GreaterThan(a, b) | Expr::GreaterThanOrEqual(a, b) => {
+            collect_vars_from_expr(a, vars);
+            collect_vars_from_expr(b, vars);
+        }
+        Expr::Not(e) | Expr::Negative(e) => collect_vars_from_expr(e, vars),
+        Expr::Array(exprs) => {
+            for expr in exprs {
+                collect_vars_from_expr(expr, vars);
+            }
+        }
+        Expr::Call { args, .. } => {
+            for arg in args {
+                collect_vars_from_expr(arg, vars);
+            }
+        }
+        Expr::MethodCall { object, args, .. } => {
+            collect_vars_from_expr(object, vars);
+            for arg in args {
+                collect_vars_from_expr(arg, vars);
+            }
+        }
+        Expr::FieldAccess { object, value: opt_val, .. } => {
+            collect_vars_from_expr(object, vars);
+            if let Some(val) = opt_val {
+                collect_vars_from_expr(val, vars);
+            }
+        }
+        Expr::InterpolatedString(parts) => {
+            for part in parts {
+                if let InterpolationPart::Expression(expr) = part {
+                    collect_vars_from_expr(expr, vars);
+                }
+            }
+        }
+        Expr::Closure(def) => {
+            for stmt in &def.body {
+                // Recursively find vars in nested closures
+                match stmt {
+                    Stmt::ExprStmt(e) | Stmt::Echo(e) | Stmt::Print(e) => collect_vars_from_expr(e, vars),
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn eval_expr(
@@ -1809,7 +1920,13 @@ fn eval_expr(
             }
         }
         Expr::Closure(closure_def) => {
+            let param_names: Vec<String> = closure_def.params
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect();
+
             let rebound_vars: Vec<String> = find_rebound_vars(&closure_def.body);
+            let referenced_vars: Vec<String> = find_referenced_vars(&closure_def.body);
 
             let owned_vars: Vec<String> = env
                 .iter()
@@ -1818,18 +1935,33 @@ fn eval_expr(
                 })
                 .map(|(name, _)| name.clone())
                 .collect();
+
+            // Referenced variables should not include ones that are rebound, owned, or defined in closure params
+            let read_vars: Vec<String> = referenced_vars.clone()
+                .into_iter()
+                .filter(|ref_var| !rebound_vars.contains(ref_var) && !owned_vars.contains(ref_var) && !param_names.contains(ref_var))
+                .collect();
             
             // Both rebound vars and owned vars should be live
             let mut live_vars = rebound_vars;
             for owned_var in owned_vars {
-                if !live_vars.contains(&owned_var) {
+                if !live_vars.contains(&owned_var) && referenced_vars.contains(&owned_var) {
                     live_vars.push(owned_var);
                 }
             }
 
+            // Combine live_vars and read_vars for captured_env
+            let all_captured = [live_vars.clone(), read_vars].concat();
+            let captured_env = all_captured
+                .into_iter()
+                .filter_map(|var_name| {
+                    env.get(&var_name).map(|val| (var_name, val.clone()))
+                })
+                .collect();
+
             Value::Closure(ClosureValue {
                 def: Box::new(closure_def.as_ref().clone()),
-                captured_env: env.clone(),
+                captured_env,
                 live_vars,
             })
         }
@@ -1905,9 +2037,7 @@ fn execute_stmt(
             }
 
             let v = eval_expr(value, env, fns, models, roles, model_methods, enums);
-            eprintln!("DEBUG: Evaluated value: {:?}", v);
             let actual_type = infer_value_type(&v);
-            eprintln!("DEBUG: Actual type from value: {:?}", actual_type);
 
             // Type check against declared type if provided
             if let Some(expected_type) = declared_type {
