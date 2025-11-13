@@ -3,6 +3,7 @@ use crate::lexer::Token;
 use std::collections::HashMap;
 use std::iter::Peekable;
 use std::vec::IntoIter;
+use crate::utils::infer_enum_name;
 
 pub struct Parser {
     tokens: Peekable<IntoIter<(usize, Token, usize)>>,
@@ -536,7 +537,7 @@ impl Parser {
                 self.skip_newlines();
             } else {
                 // Parse regular case
-                let tests = self.parse_match_tests()?;
+                let patterns = self.parse_match_tests()?;
                 self.expect(Token::ShortReturn)?;
                 self.skip_newlines();
                 
@@ -550,7 +551,7 @@ impl Parser {
                     vec![self.parse_statement()?]
                 };
 
-                cases.push((tests, body));
+                cases.push((patterns, body));
                 
                 self.skip_newlines();
                 self.expect(Token::Comma)?;
@@ -568,36 +569,75 @@ impl Parser {
         })
     }
 
-    fn parse_match_tests(&mut self) -> Result<Vec<Expr>, String> {
-        let mut tests = vec![self.parse_match_literal()?];
+    fn parse_match_tests(&mut self) -> Result<Vec<Pattern>, String> {
+        let mut patterns = vec![self.parse_match_pattern()?];
         
         while matches!(self.current_token(), Some(Token::Or)) {
             self.advance();
-            tests.push(self.parse_match_literal()?);
+            patterns.push(self.parse_match_pattern()?);
         }
         
-        Ok(tests)
+        Ok(patterns)
     }
 
-    fn parse_match_literal(&mut self) -> Result<Expr, String> {
+    fn parse_match_pattern(&mut self) -> Result<Pattern, String> {
         match self.current_token() {
+            Some(Token::Ident(name)) => {
+                self.advance();
+                
+                // Check if it's an enum variant: Ok(binding) or Error(binding)
+                if matches!(self.current_token(), Some(Token::LParen)) {
+                    // Could be enum variant or function call in pattern
+                    // For now, assume it's an enum variant if it's a known one
+                    if matches!(name.as_str(), "Ok" | "Error" | "Value" | "Null") {
+                        self.advance();
+                        
+                        let binding = if matches!(self.current_token(), Some(Token::Ident(_))) {
+                            Some(self.expect_ident()?)
+                        } else {
+                            None
+                        };
+                        
+                        self.expect(Token::RParen)?;
+                        
+                        let enum_name = infer_enum_name(&name, &self.enums);
+                        return Ok(Pattern::EnumVariant {
+                            enum_name,
+                            variant: name,
+                            binding,
+                        });
+                    } else {
+                        // It's not an enum variant, so it must be in the match expression
+                        // Put the token back and return wildcard or error
+                        return Err("Expected pattern, got function call".to_string());
+                    }
+                }
+                
+                // Wildcard
+                if name == "_" {
+                    return Ok(Pattern::Wildcard);
+                }
+                
+                // Literal value (variable reference)
+                Ok(Pattern::Literal(Expr::Var(name)))
+            }
             Some(Token::Number(n)) => {
                 self.advance();
-                Ok(Expr::Number(n))
+                Ok(Pattern::Literal(Expr::Number(n)))
             }
             Some(Token::String(s)) => {
                 self.advance();
-                Ok(Expr::String(s))
+                Ok(Pattern::Literal(Expr::String(s)))
             }
             Some(Token::True) => {
                 self.advance();
-                Ok(Expr::Bool(true))
+                Ok(Pattern::Literal(Expr::Bool(true)))
             }
             Some(Token::False) => {
                 self.advance();
-                Ok(Expr::Bool(false))
+                Ok(Pattern::Literal(Expr::Bool(false)))
             }
-            other => Err(format!("Expected literal in match, got {:?}", other)),
+            _ => Err(format!("Expected pattern, got {:?}", self.current_token())),
         }
     }
 
@@ -834,23 +874,45 @@ impl Parser {
         };
         
         let type_name = self.expect_ident()?;
+
+        // Now parse generic type parameters: TypeName<T, E>
+        let mut type_args = Vec::new();
+        if matches!(self.current_token(), Some(Token::Less)) {
+            self.advance();
+            let (arg_type, _) = self.parse_type()?;
+            type_args.push(arg_type);
+            while matches!(self.current_token(), Some(Token::Comma)) {
+                self.advance();
+                let (arg_type, _) = self.parse_type()?;
+                type_args.push(arg_type);
+            }
+            self.expect(Token::Greater)?;
+        }
         
         let base_type = match type_name.as_str() {
             "number" => Type::Number,
             "string" => Type::Str,
             "bool" => Type::Bool,
             "array" => {
-                if matches!(self.current_token(), Some(Token::Less)) {
-                    self.advance();
-                    let (inner_type, _inner_ownership) = self.parse_type()?;
-                    self.expect(Token::Greater)?;
-                    Type::Array(Box::new(inner_type))
+                // Array is generic: array<T>
+                if !type_args.is_empty() {
+                    Type::Array(Box::new(type_args[0].clone()))
                 } else {
+                    // Default: array<number>
                     Type::Array(Box::new(Type::Number))
                 }
             }
             "void" => Type::Void,
-            model_name => Type::Model(model_name.to_string()),
+            "Result" | "Maybe" => {
+                Type::Enum(type_name.to_string(), type_args)
+            }
+            model_or_enum_name => {
+                if !type_args.is_empty() {
+                    Type::Enum(model_or_enum_name.to_string(), type_args)
+                } else {
+                    Type::Model(model_or_enum_name.to_string())
+                }
+            }
         };
         
         let ownership = if owned { Ownership::Owned } else { Ownership::Borrowed };

@@ -2,6 +2,7 @@ mod ast;
 mod lexer;
 mod parser;
 mod expr_parser;
+mod utils;
 
 use parser::Parser;
 
@@ -10,7 +11,7 @@ use regex::Regex as RegexLib;
 use std::fs;
 use std::collections::HashSet;
 use crate::ast::{
-    ClosureValue, EnumDef, FnDef, InterpolationPart, MethodMutationType, ModelDef, Moved, Ownership, RoleDef, Type
+    ClosureValue, EnumDef, FnDef, InterpolationPart, MethodMutationType, ModelDef, Moved, Ownership, Pattern, RoleDef, Type
 };
 
 fn main() {
@@ -294,15 +295,33 @@ fn infer_value_type(v: &Value) -> Type {
         Value::Object(model_name, _) => Type::Model(model_name.clone()),
         Value::Regex(_) => Type::Regex,
         Value::EnumValue(enum_name, _variant, data) => {
-            // Infer the enum type from the variant
-            // For now, return a generic Enum type
-            // Full implementation would look up the enum definition to get type params
-            if let Some(val) = data {
-                let data_type = infer_value_type(val);
-                Type::Enum(enum_name.clone(), vec![data_type])
-            } else {
-                // Unit variant like Null
-                Type::Enum(enum_name.clone(), vec![])
+            match enum_name.as_str() {
+                "Result" => {
+                    // For Result, we'd need to know E type from context
+                    // For now, just return Ok with number type
+                    if let Some(val) = data {
+                        let data_type = infer_value_type(val);
+                        Type::Enum("Result".to_string(), vec![data_type, Type::Str])  // Assume error is string
+                    } else {
+                        Type::Enum("Result".to_string(), vec![])
+                    }
+                }
+                "Maybe" => {
+                    if let Some(val) = data {
+                        let data_type = infer_value_type(val);
+                        Type::Enum("Maybe".to_string(), vec![data_type])
+                    } else {
+                        Type::Enum("Maybe".to_string(), vec![])
+                    }
+                }
+                _ => {
+                    if let Some(val) = data {
+                        let data_type = infer_value_type(val);
+                        Type::Enum(enum_name.clone(), vec![data_type])
+                    } else {
+                        Type::Enum(enum_name.clone(), vec![])
+                    }
+                }
             }
         }
     }
@@ -484,6 +503,14 @@ fn types_compatible(expected: &Type, actual: &Type) -> bool {
         (Type::Void, Type::Void) => true,
         (Type::Model(a), Type::Model(b)) => a == b,
         (Type::Regex, Type::Regex) => true,
+        (Type::Enum(name1, args1), Type::Enum(name2, args2)) => {
+            // Both must be the same enum with same type arguments
+            if name1 != name2 || args1.len() != args2.len() {
+                return false;
+            }
+            // Check all type arguments match
+            args1.iter().zip(args2.iter()).all(|(a, b)| types_compatible(a, b))
+        }
         _ => false,
     }
 }
@@ -503,6 +530,67 @@ fn get_arg_ownership(e: &Expr, env: &HashMap<String, (AssignKind, Value, Ownersh
 
 fn is_copy_type(t: &Type) -> bool {
     matches!(t, Type::Number | Type::Bool)
+}
+
+fn match_pattern(
+    val: &Value,
+    pattern: &Pattern,
+    env: &HashMap<String, (AssignKind, Value, Ownership, Moved)>,
+) -> Option<HashMap<String, (AssignKind, Value, Ownership, Moved)>> {
+    let mut new_env = env.clone();
+    
+    match pattern {
+        Pattern::Literal(expr) => {
+            // Evaluate the pattern expression and compare
+            match expr {
+                Expr::Number(n) => {
+                    if let Value::Number(val_n) = val {
+                        if (val_n - n).abs() < f64::EPSILON {
+                            return Some(new_env);
+                        }
+                    }
+                }
+                Expr::String(s) => {
+                    if let Value::String(val_s) = val {
+                        if val_s == s {
+                            return Some(new_env);
+                        }
+                    }
+                }
+                Expr::Bool(b) => {
+                    if let Value::Bool(val_b) = val {
+                        if val_b == b {
+                            return Some(new_env);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            None
+        }
+        Pattern::EnumVariant { enum_name, variant, binding } => {
+            if let Value::EnumValue(val_enum, val_variant, data) = val {
+                if val_enum == enum_name && val_variant == variant {
+                    // Pattern matches!
+                    if let Some(binding_name) = binding {
+                        // Bind the data if present
+                        if let Some(data_val) = data {
+                            new_env.insert(
+                                binding_name.clone(),
+                                (AssignKind::Var, (**data_val).clone(), Ownership::Borrowed, Moved::False),
+                            );
+                        }
+                    }
+                    return Some(new_env);
+                }
+            }
+            None
+        }
+        Pattern::Wildcard => {
+            // Always matches
+            Some(new_env)
+        }
+    }
 }
 
 fn validate_role_compliance(
@@ -1817,7 +1905,9 @@ fn execute_stmt(
             }
 
             let v = eval_expr(value, env, fns, models, roles, model_methods, enums);
+            eprintln!("DEBUG: Evaluated value: {:?}", v);
             let actual_type = infer_value_type(&v);
+            eprintln!("DEBUG: Actual type from value: {:?}", actual_type);
 
             // Type check against declared type if provided
             if let Some(expected_type) = declared_type {
@@ -2026,19 +2116,16 @@ fn execute_stmt(
             let val = eval_expr(expr, env, fns, models, roles, model_methods, enums);
             let mut matched = false;
             
-            for (tests, stmts) in cases {
-                for test in tests {
-                    let _test_type = infer_expr_type(test, env, fns, models, model_methods, enums);
-                    let test_val = eval_expr(test, env, fns, models, roles, model_methods, enums);
-
-                    if values_equal(&val, &test_val) {
+            for (patterns, stmts) in cases {
+                for pattern in patterns {
+                    if let Some(new_env) = match_pattern(&val, pattern, env) {
                         matched = true;
-                        let flow = execute_block(stmts, env, fns, models, roles, model_methods, enums, None);
+                        let mut pattern_env = new_env;
+                        let flow = execute_block(stmts, &mut pattern_env, fns, models, roles, model_methods, enums, None);
                         
                         match (match_type, flow) {
                             (MatchType::One, ControlFlow::Next) => continue,
                             (MatchType::One, _) => return ControlFlow::None,
-                            
                             (MatchType::Any, ControlFlow::Break) => return ControlFlow::None,
                             (MatchType::Any, _) => continue,
                         }

@@ -98,7 +98,7 @@ pub enum Stmt {
     },
     Match { 
         expr: Expr, 
-        cases: Vec<(Vec<Expr>, Vec<Stmt>)>, 
+        cases: Vec<(Vec<Pattern>, Vec<Stmt>)>, 
         default: Option<Vec<Stmt>>,
         match_type: MatchType,
     },
@@ -200,4 +200,11 @@ pub enum MethodMutationType {
     DirectAssignment,  // this.field = value
     Rebind,            // rebind this.field = value
     Mixed,             // both types
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Pattern {
+    Literal(Expr),
+    EnumVariant { enum_name: String, variant: String, binding: Option<String> },
+    Wildcard,
 }

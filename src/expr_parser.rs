@@ -1,5 +1,6 @@
 use crate::ast::{EnumDef, Expr, InterpolationPart};
 use crate::lexer::Token;
+use crate::utils::infer_enum_name;
 use std::collections::HashMap;
 use std::iter::Peekable;
 use std::vec::IntoIter;
@@ -293,14 +294,14 @@ impl ExprParser {
                         let data = self.parse_assignment()?;
                         self.expect(Token::RParen)?;
                         return Ok(Expr::EnumVariant {
-                            enum_name: self.infer_enum_name(&name),  // Helper to determine enum
+                            enum_name: infer_enum_name(&name, &self.enums),  // Helper to determine enum
                             variant: name,
                             data: Some(Box::new(data)),
                         });
                     } else {
                         // Unit variant like Null
                         return Ok(Expr::EnumVariant {
-                            enum_name: self.infer_enum_name(&name),
+                            enum_name: infer_enum_name(&name, &self.enums),
                             variant: name,
                             data: None,
                         });
@@ -526,21 +527,6 @@ impl ExprParser {
             }
         }
         false
-    }
-
-    fn infer_enum_name(&self, variant: &str) -> String {
-        match variant {
-            "Ok" | "Error" => "Result".to_string(),
-            "Value" | "Null" => "Maybe".to_string(),
-            _ => {
-                for enum_def in self.enums.values() {
-                    if enum_def.variants.iter().any(|v| v.name == *variant) {
-                        return enum_def.name.clone();
-                    }
-                }
-                panic!("Enum variant '{}' not found (internal error)", variant)
-            }
-        }
     }
 
     fn expect(&mut self, expected: Token) -> Result<(), String> {
