@@ -504,10 +504,21 @@ fn types_compatible(expected: &Type, actual: &Type) -> bool {
         (Type::Model(a), Type::Model(b)) => a == b,
         (Type::Regex, Type::Regex) => true,
         (Type::Enum(name1, args1), Type::Enum(name2, args2)) => {
-            // Both must be the same enum with same type arguments
-            if name1 != name2 || args1.len() != args2.len() {
+            // Both must be the same enum
+            if name1 != name2 {
                 return false;
             }
+
+            // For built-in enums, allow empty args to match anything
+            if (name1 == "Maybe" || name1 == "Result") && args2.is_empty() {
+                return true;
+            }
+
+            // Check all type arguments match
+            if args1.len() != args2.len() {
+                return false;
+            }
+
             // Check all type arguments match
             args1.iter().zip(args2.iter()).all(|(a, b)| types_compatible(a, b))
         }

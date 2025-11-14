@@ -585,11 +585,20 @@ impl Parser {
             Some(Token::Ident(name)) => {
                 self.advance();
                 
-                // Check if it's an enum variant: Ok(binding) or Error(binding)
-                if matches!(self.current_token(), Some(Token::LParen)) {
-                    // Could be enum variant or function call in pattern
-                    // For now, assume it's an enum variant if it's a known one
-                    if matches!(name.as_str(), "Ok" | "Error" | "Value" | "Null") {
+
+                // Check if it's a known enum variant
+                if matches!(name.as_str(), "Ok" | "Error" | "Value" | "Null") {
+                    // Unit variant (no parens) like Null
+                    if !matches!(self.current_token(), Some(Token::LParen)) {
+                        let enum_name = infer_enum_name(&name, &self.enums);
+                        return Ok(Pattern::EnumVariant {
+                            enum_name,
+                            variant: name,
+                            binding: None,
+                        });
+                    }
+
+                    if matches!(self.current_token(), Some(Token::LParen)) {
                         self.advance();
                         
                         let binding = if matches!(self.current_token(), Some(Token::Ident(_))) {
@@ -606,11 +615,11 @@ impl Parser {
                             variant: name,
                             binding,
                         });
-                    } else {
-                        // It's not an enum variant, so it must be in the match expression
-                        // Put the token back and return wildcard or error
-                        return Err("Expected pattern, got function call".to_string());
                     }
+                } else {
+                    // It's not an enum variant, so it must be in the match expression
+                    // Put the token back and return wildcard or error
+                    return Err("Expected pattern, got function call".to_string());
                 }
                 
                 // Wildcard
