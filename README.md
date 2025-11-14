@@ -408,7 +408,7 @@ print(stuff) // [10, 20, 30, 40, 45, 47, 50]
 print(size) // 7
 ```
 
-## Enums: Result and Maybe
+## Enums
 
 ngn provides two built-in enums for common patterns: `Result` for error handling and `Maybe` for possible values.
 
@@ -425,13 +425,16 @@ ngn provides two built-in enums for common patterns: `Result` for error handling
 
 ```ngn
 fn divide(a: number, b: number): Result<number, string> {
-    if b == 0 return Error("Division by zero")
-    return Ok(a / b)
+  if b == 0 return Error("Division by zero not allowed")
+  return Ok(a / b)
 }
 
 fn main() {
-    const result = divide(10, 2)
-    print(result)  // Result::Ok (5)
+  const result = divide(10, 2)
+  match (result) {
+    Ok(value) => print("Ok: {value}"),
+    Error(msg) => print("Error: {msg}"),
+  }
 }
 ```
 
@@ -447,19 +450,23 @@ fn main() {
 #### Examples
 
 ```ngn
-model User {
-    name: string,
-    email: Optional<string>  // May be Null
+fn findUser(id: number): Maybe<string> {
+  if (id == 1) return Value("Jason")
+  if (id == 2) return Value("Brad")
+  return Null
 }
 
-fn findUser(id: number): Maybe<User> {
-    if user_exists return Value(user)
-    return Null
+const user1 = findUser(1)
+const user2 = findUser(99)
+
+match (user1) {
+  Value(name) => print("Found: {name}"),
+  Null => print("User not found"),
 }
 
-fn main() {
-    const user = findUser(1)
-    print(user)  // Maybe::Value (...) or Maybe::Null
+match (user2) {
+  Value(name) => print("Found: {name}"),
+  Null => print("User not found"),
 }
 ```
 
@@ -845,7 +852,6 @@ Here are the ways to manipulate an object's fields, based on the above example c
 - `array`
 - `array<type>`
 - `void`
-
 
 ### explicit
 ```ngn
