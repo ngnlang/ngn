@@ -1,7 +1,7 @@
-[package]
-name = "ngn"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+members = ["crates/ngn", "crates/lsp"]
+resolver = "2"
 
-[dependencies]
-regex = "1"
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
