@@ -312,7 +312,7 @@ const mixed = ["hat", true, 7] ❌ // cannot mix types
 Return the size of the array.
 
 ### `push(item)`
-Push, i.e. add, an item to the end of an array. Returns the new size of the array as a `number`.
+Push, i.e. add, an item to the end of an array. Returns the new size of the array as an `i64`.
 ```
 var stuff =< ["guitar", "shirt"]
 const size = stuff.push("hat")
@@ -332,7 +332,7 @@ print(stuff) // ["guitar", "shirt"]
 ```
 
 ### `put(item, index?)`
-Put, i.e. add, an item into an array. By default, it puts at the beginning. To put in another location, provide the index number. Returns the new size of the array as a `number`.
+Put, i.e. add, an item into an array. By default, it puts at the beginning. To put in another location, provide the index number. Returns the new size of the array as an `i64`.
 ```
 var stuff =< ["guitar", "shirt"]
 const size = stuff.put("hat")
@@ -424,7 +424,7 @@ ngn provides two built-in enums for common patterns: `Result` for error handling
 #### Examples
 
 ```ngn
-fn divide(a: number, b: number): Result<number, string> {
+fn divide(a: i64, b: i64): Result<i64, string> {
   if b == 0 return Error("Division by zero not allowed")
   return Ok(a / b)
 }
@@ -450,7 +450,7 @@ fn main() {
 #### Examples
 
 ```ngn
-fn findUser(id: number): Maybe<string> {
+fn findUser(id: u64): Maybe<string> {
   if (id == 1) return Value("Jason")
   if (id == 2) return Value("Brad")
   return Null
@@ -664,7 +664,7 @@ fn doThing() {
 ## Closures
 Closures are similar to functions, but you can assign them to an identifier, then call it like a function. You can define any params within a pair of pipes, or have an empty set of pipes if not using params.
 ```ngn
-const add = |a: number, b: number| a + b
+const add = |a: i64, b: i64| a + b
 
 const sum = add(3, 4)
 
@@ -679,7 +679,7 @@ Unlike functions, closures give you access to the state of their surrounding sco
 ```ngn
 var base = 10
 
-const tally = |a: number| base + a
+const tally = |a: i64| base + a
 print(tally(3)) // 13
 ```
 
@@ -687,7 +687,7 @@ With borrowed variables, this access is a snapshot of the variable's value when 
 ```ngn
 var base = 10
 
-const tally = |a: number| base + a
+const tally = |a: i64| base + a
 print(tally(3)) // 13
 
 rebind base = 100 // does not change the value of `base` within the closure
@@ -702,7 +702,7 @@ However, the value within the closure can be kept in sync when using owned varia
 ```ngn
 var count =< 0 // owned, mutable by default
 
-const incrementBy = |a: number| count = count + a // `count`'s value is synced with the outside variable
+const incrementBy = |a: i64| count = count + a // `count`'s value is synced with the outside variable
 
 incrementBy(10)
 print(count) // 10
@@ -717,7 +717,7 @@ print(count) // 107
 ```ngn
 var count = 0 // borrrowed, but rebindable
 
-const incrementBy = |a: number| rebind count = count + a
+const incrementBy = |a: i64| rebind count = count + a
 
 incrementBy(10)
 print(count) // 10
@@ -794,11 +794,11 @@ You may also choose to create a constructor method and use it to create a new in
 ```ngn
 model User {
   name: string,
-  age: number
+  age: u32
 }
 
 extend User with {
-  fn new(name: string, age: number): User {
+  fn new(name: string, age: u32): User {
     return User { name, age }
   }
 }
@@ -814,7 +814,7 @@ There's no need to fear `this` in ngn. It's an implicit reference to the instanc
 ```ngn
 model User {
   name: string,
-  age: number
+  age: u32
 }
 
 extend User with {
@@ -847,7 +847,7 @@ Here are the ways to manipulate an object's fields, based on the above example c
 ## Types
 
 - `string`
-- `number`
+- `i64`, `i32`, `u64`, `u32`, `f64`, `f32`
 - `boolean`
 - `array`
 - `array<type>`
@@ -856,7 +856,7 @@ Here are the ways to manipulate an object's fields, based on the above example c
 ### explicit
 ```ngn
 const thing: string = "one"
-var answer: number = 42
+var answer: u64 = 42
 var truth: boolean = false
 const things: array = [1, 2, 3]
 const stuff: array<string> = ["shirt", "hat", "coat"]
@@ -870,12 +870,13 @@ fn sideEffects(): void {
 Supported for literals and expressions, as well as inside functions (requires explict types for fn params and return).
 
 ```ngn
-const thing = "one" // inferred to `string`
-const answer = 42 // inferred to `number`
+const thing = "one" // inferred as `string`
+const answer = 42 // inferred as `i64`
+const pi = 3.14 // inferred as `f64`
 
-const result = 3 + 2 // `result` inferred as `number`
+const result = 3 + 2 // inferred as `i64`
 
-fn add(a: number, b: number): number {
-  return a + b // inferred as numbers
+fn add(a: i32, b: i32): i32 {
+  return a + b // inferred as i32
 }
 ```
