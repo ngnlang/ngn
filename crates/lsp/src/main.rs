@@ -46,6 +46,7 @@ impl LanguageServer for Backend {
                                     "regex".into(), // 9
                                     "builtin".into(), // 10
                                     "boolean".into(), // 11
+                                    "class".into(), // 12
                                 ],
                                 token_modifiers: vec![
                                     "declaration".into(),
@@ -120,6 +121,9 @@ impl LanguageServer for Backend {
             let prev_is_class_keyword = matches!(prev_token, 
                 Some(ngn::Token::Enum | ngn::Token::Model | ngn::Token::Role | ngn::Token::Extend | ngn::Token::With));
 
+            let is_likely_class = matches!(token, ngn::Token::Ident(name) 
+                if name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false));
+
             let is_method_call = matches!(prev_token, Some(ngn::Token::Period)) 
                 && matches!(next_token, Some(ngn::Token::LParen));
 
@@ -134,20 +138,20 @@ impl LanguageServer for Backend {
 
                 ngn::Token::Float(_) | ngn::Token::Integer(_) => 1,  // number
                 ngn::Token::String(_) => 2,  // string
-                ngn::Token::Const | ngn::Token::Fn | ngn::Token::Lit | ngn::Token::Rebind | ngn::Token::Static | ngn::Token::Var => 3, // variable
                 ngn::Token::Echo | ngn::Token::Print => 8,  // builtin
                 ngn::Token::Ident(_) => {
                     // Check if next token is LParen (function call)
-                    if prev_is_class_keyword {
-                        8  // type
+                    if prev_is_class_keyword | is_likely_class {
+                        12  // class
+                    } else if is_likely_class {
+                        8
                     } else if matches!(next_token, Some(ngn::Token::LParen)) | is_method_call {
                         4  // function (call)
                     } else {
                         3  // variable (reference)
                     }
                 }
-
-                ngn::Token::False | ngn::Token::True => 11, // boolean
+                ngn::Token::Comment(_) => 7,
 
                 // Operators
                 ngn::Token::StarStar | ngn::Token::EqEq | ngn::Token::NotEq | ngn::Token::LessEq | ngn::Token::GreaterEq
@@ -171,7 +175,7 @@ impl LanguageServer for Backend {
             // Apply modifiers based on token type
             match &token {
                 ngn::Token::Const | ngn::Token::Fn | ngn::Token::Static | ngn::Token::Lit 
-                    | ngn::Token::Var | ngn::Token::Rebind => {
+                    | ngn::Token::Var | ngn::Token::Rebind | ngn::Token::False | ngn::Token::True => {
                     modifiers.push("readonly");
                 }
                 _ => {}

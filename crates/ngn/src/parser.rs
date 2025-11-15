@@ -12,8 +12,14 @@ pub struct Parser {
 
 impl Parser {
     pub fn new(tokens: Vec<(usize, Token, usize)>, enums: HashMap<String, EnumDef>) -> Self {
+        // remove comment tokens - only used for syntax highlighting
+        let filtered_tokens: Vec<_> = tokens
+            .into_iter()
+            .filter(|(_, token, _)| !matches!(token, Token::Comment(_)))
+            .collect();
+
         Parser {
-            tokens: tokens.into_iter().peekable(),
+            tokens: filtered_tokens.into_iter().peekable(),
             enums,
         }
     }

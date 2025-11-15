@@ -13,7 +13,7 @@ pub enum Token {
     Colon, Comma, Period,
     PlusEq, MinusEq, StarEq, SlashEq, PercentEq, StarStarEq, CaretEq, OwnedAssign,
     LParen, RParen, LBracket, RBracket, LBrace, RBrace,
-    Newline,
+    Newline, Comment(String),
     Fn, Return, ShortReturn,
     Ident(String), String(String), Float(f64), Integer(i64),
     Model, Role, Extend, With,
@@ -36,13 +36,19 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
             '/' => {
                 // Check for comment first
                 if chars.peek().map(|(_, c)| *c) == Some('/') {
-                    // Skip comment until end of line
+                    let start = pos;  // Start at first /
                     chars.next(); // consume second /
+                    let mut comment = String::from("//");  // Include the //
+                    
                     while let Some((_, c)) = chars.next() {
                         if c == '\n' || c == '\r' {
                             break;
                         }
+                        comment.push(c);
                     }
+                    
+                    let end = chars.peek().map(|(i, _)| *i).unwrap_or(input.len());
+                    tokens.push((start, Token::Comment(comment), end));
                     continue;
                 }
 
