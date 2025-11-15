@@ -1,2 +1,7 @@
 /target
+crates/lsp/vscode/out/
+crates/lsp/vscode/dist/
+crates/lsp/vscode/node_modules/
+.vscode/settings.json
+.vscode/*.log
 *.ngn

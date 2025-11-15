@@ -309,17 +309,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lsp"
-version = "0.1.0"
-dependencies = [
- "ngn",
- "serde",
- "serde_json",
- "tokio",
- "tower-lsp",
-]
-
-[[package]]
 name = "lsp-types"
 version = "0.94.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -354,6 +343,17 @@ name = "ngn"
 version = "0.1.0"
 dependencies = [
  "regex",
+]
+
+[[package]]
+name = "ngn-lsp"
+version = "0.1.0"
+dependencies = [
+ "ngn",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-lsp",
 ]
 
 [[package]]
