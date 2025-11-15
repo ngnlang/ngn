@@ -53,7 +53,12 @@ use crate::ast::{AssignKind, ControlFlow, MatchType, Value};
 
 fn format_type_for_error(t: &Type) -> String {
     match t {
-        Type::Number => "number".to_string(),
+        Type::I64 => "i64".to_string(),
+        Type::I32 => "i32".to_string(),
+        Type::U64 => "u64".to_string(),
+        Type::U32 => "u32".to_string(),
+        Type::F64 => "f64".to_string(),
+        Type::F32 => "f32".to_string(),
         Type::String => "string".to_string(),
         Type::Str => "string".to_string(),
         Type::Bool => "bool".to_string(),
@@ -87,7 +92,12 @@ fn format_type_for_error(t: &Type) -> String {
 
 fn format_value(v: &Value) -> String {
     match v {
-        Value::Number(n) => n.to_string(),
+        Value::I64(n) => n.to_string(),
+        Value::I32(n) => n.to_string(),
+        Value::U64(n) => n.to_string(),
+        Value::U32(n) => n.to_string(),
+        Value::F64(n) => n.to_string(),
+        Value::F32(n) => n.to_string(),
         Value::String(s) => s.clone(),
         Value::Bool(b) => b.to_string(),
         Value::Array(arr) => format!("[{}]", arr.iter().map(format_value).collect::<Vec<_>>().join(", ")),
@@ -226,7 +236,12 @@ fn can_mutate(var_name: &str, env: &HashMap<String, (AssignKind, Value, Ownershi
 fn is_truthy(v: &Value) -> bool {
     match v {
         Value::Bool(b) => *b,
-        Value::Number(n) => *n != 0.0,
+        Value::I64(n) => *n != 0,
+        Value::I32(n) => *n != 0,
+        Value::U64(n) => *n != 0,
+        Value::U32(n) => *n != 0,
+        Value::F64(n) => *n != 0.0,
+        Value::F32(n) => *n != 0.0,
         Value::String(s) => !s.is_empty(),
         Value::Array(arr) => !arr.is_empty(),
         Value::Function(_) => true,
@@ -240,11 +255,30 @@ fn is_truthy(v: &Value) -> bool {
 
 fn is_literal(e: &Expr) -> bool {
     matches!(e, 
-        Expr::Number(_) | 
-        Expr::String(_) | 
+        Expr::I64(_) |
+        Expr::I32(_) |
+        Expr::U64(_) |
+        Expr::U32(_) |
+        Expr::F64(_) |
+        Expr::F32(_) |
+        Expr::String(_) |
         Expr::Bool(_) |
         Expr::Array(_)
     )
+}
+
+fn is_numeric_type(t: &Type) -> bool {
+    matches!(t, Type::I64 | Type::I32 | Type::U64 | Type::U32 | Type::F64 | Type::F32)
+}
+
+fn to_usize(v: &Value) -> Result<usize, String> {
+    match v {
+        Value::I64(n) => Ok(*n as usize),
+        Value::I32(n) => Ok(*n as usize),
+        Value::U64(n) => Ok(*n as usize),
+        Value::U32(n) => Ok(*n as usize),
+        _ => Err("Index must be an integer".to_string()),
+    }
 }
 
 fn normalize_regex_pattern(pattern: &str) -> String {
@@ -259,7 +293,12 @@ fn normalize_regex_pattern(pattern: &str) -> String {
 
 fn values_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
-        (Value::Number(x), Value::Number(y)) => x == y,
+        (Value::I64(x), Value::I64(y)) => x == y,
+        (Value::I32(x), Value::I32(y)) => x == y,
+        (Value::U64(x), Value::U64(y)) => x == y,
+        (Value::U32(x), Value::U32(y)) => x == y,
+        (Value::F64(x), Value::F64(y)) => x == y,
+        (Value::F32(x), Value::F32(y)) => x == y,
         (Value::String(x), Value::String(y)) => x == y,
         (Value::Bool(x), Value::Bool(y)) => x == y,
         (Value::Array(x), Value::Array(y)) => x == y,
@@ -270,12 +309,17 @@ fn values_equal(a: &Value, b: &Value) -> bool {
 
 fn infer_value_type(v: &Value) -> Type {
     match v {
-        Value::Number(_) => Type::Number,
+        Value::I64(_) => Type::I64,
+        Value::I32(_) => Type::I32,
+        Value::U64(_) => Type::U64,
+        Value::U32(_) => Type::U32,
+        Value::F64(_) => Type::F64,
+        Value::F32(_) => Type::F32,
         Value::String(_) => Type::Str,
         Value::Bool(_) => Type::Bool,
         Value::Array(arr) => {
             if arr.is_empty() {
-                Type::Array(Box::new(Type::Number))
+                Type::Array(Box::new(Type::I64))
             } else {
                 let elem_type = infer_value_type(&arr[0]);
                 
@@ -336,13 +380,18 @@ fn infer_expr_type(
     enums: &HashMap<String, EnumDef>,
 ) -> Type {
     match e {
-        Expr::Number(_) => Type::Number,
+        Expr::I64(_) => Type::I64,
+        Expr::I32(_) => Type::I32,
+        Expr::U64(_) => Type::U64,
+        Expr::U32(_) => Type::U32,
+        Expr::F64(_) => Type::F64,
+        Expr::F32(_) => Type::F32,
         Expr::String(_) => Type::Str,
         Expr::InterpolatedString(_) => Type::String,
         Expr::Bool(_) => Type::Bool,
         Expr::Array(exprs) => {
             if exprs.is_empty() {
-                Type::Array(Box::new(Type::Number))
+                Type::Array(Box::new(Type::I64))
             } else {
                 let elem_type = infer_expr_type(&exprs[0], env, fns, models, model_methods, enums);
                 for expr in exprs.iter().skip(1) {
@@ -357,9 +406,14 @@ fn infer_expr_type(
         Expr::Add(a, b) => {
             let left = infer_expr_type(a, env, fns, models, model_methods, enums);
             let right = infer_expr_type(b, env, fns, models, model_methods, enums);
-            if types_compatible(&left, &Type::Number) && types_compatible(&right, &Type::Number) {
-                Type::Number
-            } else if types_compatible(&left, &Type::String) && types_compatible(&right, &Type::String) {
+            if is_numeric_type(&left) && is_numeric_type(&right) {
+                // Both numeric—return left type (they must match due to strict typing)
+                if left == right {
+                    left
+                } else {
+                    panic!("Type error: cannot add {:?} and {:?}", left, right);
+                }
+            } else if matches!(left, Type::String) && matches!(right, Type::String) {
                 Type::String
             } else {
                 panic!("Type error: cannot add {:?} and {:?}", left, right);
@@ -368,25 +422,28 @@ fn infer_expr_type(
         Expr::Subtract(a, b) | Expr::Multiply(a, b) | Expr::Divide(a, b) | Expr::Modulo(a, b) => {
             let left = infer_expr_type(a, env, fns, models, model_methods, enums);
             let right = infer_expr_type(b, env, fns, models, model_methods, enums);
-            if !types_compatible(&left, &Type::Number) || !types_compatible(&right, &Type::Number) {
-                panic!("Type error: arithmetic requires numbers");
+            
+            if !is_numeric_type(&left) || !is_numeric_type(&right) || left != right {
+                panic!("Type error: arithmetic requires matching numeric types");
             }
-            Type::Number
+            left
         }
         Expr::Power(a, b) => {
             let left = infer_expr_type(a, env, fns, models, model_methods, enums);
             let right = infer_expr_type(b, env, fns, models, model_methods, enums);
-            if !types_compatible(&left, &Type::Number) || !types_compatible(&right, &Type::Number) {
-                panic!("Type error: power requires numbers");
+            
+            if !is_numeric_type(&left) || !is_numeric_type(&right) || left != right {
+                panic!("Type error: power requires matching numeric types");
             }
-            Type::Number
+            left
         }
+
         Expr::Negative(e) => {
             let t = infer_expr_type(e, env, fns, models, model_methods, enums);
-            if !types_compatible(&t, &Type::Number) {
+            if !is_numeric_type(&t) {
                 panic!("Type error: cannot negate non-number");
             }
-            Type::Number
+            t
         }
         Expr::Equal(_, _) | Expr::NotEqual(_, _) | Expr::LessThan(_, _) | 
         Expr::LessThanOrEqual(_, _) | Expr::GreaterThan(_, _) | Expr::GreaterThanOrEqual(_, _) => {
@@ -405,13 +462,13 @@ fn infer_expr_type(
         Expr::Call { name, .. } => {
             // Check if it's a function value in the environment
             if let Some((_, Value::Function(fn_def), _ownership, _moved)) = env.get(name) {
-                fn_def.return_type.clone().unwrap_or(Type::Number)
+                fn_def.return_type.clone().unwrap_or(Type::Void)
             } else if let Some((_, Value::Closure(closure), _ownership, _moved)) = env.get(name) {
                 // Closure return type
-                closure.def.return_type.clone().unwrap_or(Type::Number)
+                closure.def.return_type.clone().unwrap_or(Type::Void)
             } else if let Some(fn_def) = fns.get(name) {
                 // Check if it's a global function
-                fn_def.return_type.clone().unwrap_or(Type::Number)
+                fn_def.return_type.clone().unwrap_or(Type::Void)
             } else {
                 panic!("Unknown function: {}", name);
             }
@@ -449,15 +506,16 @@ fn infer_expr_type(
 
             let obj_type = infer_expr_type(object, env, fns, models, model_methods, enums);
             match obj_type {
-                Type::Number => {
+                Type::I64 | Type::I32 | Type::U64 | Type::U32 | Type::F64 | Type::F32 => {
                     match method.as_str() {
-                        "abs" | "round" | "floor" | "ceil" => Type::Number,
+                        "abs" => obj_type.clone(),  // Returns same type as input
+                        "round" | "floor" | "ceil" => Type::I64,  // These convert to integer
                         _ => panic!("Unknown number method: {}", method),
                     }
                 }
                 Type::Array(inner_type) => {
                     match method.as_str() {
-                        "push" | "put" | "size" | "splice" => Type::Number,
+                        "push" | "put" | "size" | "splice" => Type::I64,
                         "pop" | "pull" => *inner_type,
                         "slice" | "copy" => Type::Array(inner_type),
                         _ => panic!("Unknown array method: {}", method),
@@ -468,7 +526,7 @@ fn infer_expr_type(
                         "includes" | "starts" | "ends" => Type::Bool,
                         "replace" | "slice" | "copy" | "upper" | "lower" | "trim" | "repeat" => Type::String,
                         "split" => Type::Array(Box::new(Type::String)),
-                        "index" | "length" => Type::Number,
+                        "index" | "length" => Type::I64,
                         _ => panic!("Unknown string method: {}", method),
                     }
                 }
@@ -495,7 +553,12 @@ fn infer_expr_type(
 
 fn types_compatible(expected: &Type, actual: &Type) -> bool {
     match (expected, actual) {
-        (Type::Number, Type::Number) => true,
+        (Type::I64, Type::I64) => true,
+        (Type::I32, Type::I32) => true,
+        (Type::U64, Type::U64) => true,
+        (Type::U32, Type::U32) => true,
+        (Type::F64, Type::F64) => true,
+        (Type::F32, Type::F32) => true,
         (Type::Str, Type::Str) => true,
         (Type::String, Type::String) => true,
         (Type::Bool, Type::Bool) => true,
@@ -532,7 +595,7 @@ fn get_arg_ownership(e: &Expr, env: &HashMap<String, (AssignKind, Value, Ownersh
             env.get(name).map(|(_, _, o, _)| o.clone()).unwrap_or(Ownership::Borrowed)
         }
         Expr::String(_) => Ownership::Borrowed,
-        Expr::Number(_) => Ownership::Borrowed,
+        Expr::I64(_) | Expr::I32(_) | Expr::U64(_) | Expr::U32(_) | Expr::F64(_) | Expr::F32(_) => Ownership::Borrowed,
         Expr::Bool(_) => Ownership::Borrowed,
         Expr::Add(_, _) => Ownership::Owned,  // String concat returns owned
         _ => Ownership::Borrowed,
@@ -540,7 +603,7 @@ fn get_arg_ownership(e: &Expr, env: &HashMap<String, (AssignKind, Value, Ownersh
 }
 
 fn is_copy_type(t: &Type) -> bool {
-    matches!(t, Type::Number | Type::Bool)
+    matches!(t, Type::Bool) || is_numeric_type(t)
 }
 
 fn match_pattern(
@@ -554,9 +617,44 @@ fn match_pattern(
         Pattern::Literal(expr) => {
             // Evaluate the pattern expression and compare
             match expr {
-                Expr::Number(n) => {
-                    if let Value::Number(val_n) = val {
+                Expr::I64(n) => {
+                    if let Value::I64(val_n) = val {
+                        if val_n == n {
+                            return Some(new_env);
+                        }
+                    }
+                }
+                Expr::I32(n) => {
+                    if let Value::I32(val_n) = val {
+                        if val_n == n {
+                            return Some(new_env);
+                        }
+                    }
+                }
+                Expr::U64(n) => {
+                    if let Value::U64(val_n) = val {
+                        if val_n == n {
+                            return Some(new_env);
+                        }
+                    }
+                }
+                Expr::U32(n) => {
+                    if let Value::U32(val_n) = val {
+                        if val_n == n {
+                            return Some(new_env);
+                        }
+                    }
+                }
+                Expr::F64(n) => {
+                    if let Value::F64(val_n) = val {
                         if (val_n - n).abs() < f64::EPSILON {
+                            return Some(new_env);
+                        }
+                    }
+                }
+                Expr::F32(n) => {
+                    if let Value::F32(val_n) = val {
+                        if (val_n - n).abs() < f32::EPSILON {
                             return Some(new_env);
                         }
                     }
@@ -884,7 +982,12 @@ fn eval_expr(
     enums: &HashMap<String, EnumDef>,
 ) -> Value {
     match e {
-        Expr::Number(n) => Value::Number(*n),
+        Expr::I64(n) => Value::I64(*n),
+        Expr::I32(n) => Value::I32(*n),
+        Expr::U64(n) => Value::U64(*n),
+        Expr::U32(n) => Value::U32(*n),
+        Expr::F64(n) => Value::F64(*n),
+        Expr::F32(n) => Value::F32(*n),
         Expr::InterpolatedString(parts) => {
             let mut result = String::new();
             for part in parts {
@@ -913,44 +1016,95 @@ fn eval_expr(
         },
         Expr::Add(a, b) => {
             match (eval_expr(a, env, fns, models, roles, model_methods, enums), eval_expr(b, env, fns, models, roles, model_methods, enums)) {
-                (Value::Number(x), Value::Number(y)) => Value::Number(x + y),
+                (Value::I64(x), Value::I64(y)) => Value::I64(x + y),
+                (Value::I32(x), Value::I32(y)) => Value::I32(x + y),
+                (Value::U64(x), Value::U64(y)) => Value::U64(x + y),
+                (Value::U32(x), Value::U32(y)) => Value::U32(x + y),
+                (Value::F64(x), Value::F64(y)) => Value::F64(x + y),
+                (Value::F32(x), Value::F32(y)) => Value::F32(x + y),
                 (Value::String(x), Value::String(y)) => Value::String(format!("{}{}", x, y)),
                 _ => panic!("Type error: cannot add these types"),
             }
         }
         Expr::Subtract(a, b) => {
             match (eval_expr(a, env, fns, models, roles, model_methods, enums), eval_expr(b, env, fns, models, roles, model_methods, enums)) {
-                (Value::Number(x), Value::Number(y)) => Value::Number(x - y),
+                (Value::I64(x), Value::I64(y)) => Value::I64(x - y),
+                (Value::I32(x), Value::I32(y)) => Value::I32(x - y),
+                (Value::U64(x), Value::U64(y)) => Value::U64(x - y),
+                (Value::U32(x), Value::U32(y)) => Value::U32(x - y),
+                (Value::F64(x), Value::F64(y)) => Value::F64(x - y),
+                (Value::F32(x), Value::F32(y)) => Value::F32(x - y),
                 _ => panic!("Type error: cannot subtract non-numbers"),
             }
         }
         Expr::Multiply(a, b) => {
             match (eval_expr(a, env, fns, models, roles, model_methods, enums), eval_expr(b, env, fns, models, roles, model_methods, enums)) {
-                (Value::Number(x), Value::Number(y)) => Value::Number(x * y),
+                (Value::I64(x), Value::I64(y)) => Value::I64(x * y),
+                (Value::I32(x), Value::I32(y)) => Value::I32(x * y),
+                (Value::U64(x), Value::U64(y)) => Value::U64(x * y),
+                (Value::U32(x), Value::U32(y)) => Value::U32(x * y),
+                (Value::F64(x), Value::F64(y)) => Value::F64(x * y),
+                (Value::F32(x), Value::F32(y)) => Value::F32(x * y),
                 _ => panic!("Type error: cannot multiply non-numbers"),
             }
         }
         Expr::Divide(a, b) => {
             match (eval_expr(a, env, fns, models, roles, model_methods, enums), eval_expr(b, env, fns, models, roles, model_methods, enums)) {
-                (Value::Number(x), Value::Number(y)) => Value::Number(x / y),
+                (Value::I64(x), Value::I64(y)) => Value::I64(x / y),
+                (Value::I32(x), Value::I32(y)) => Value::I32(x / y),
+                (Value::U64(x), Value::U64(y)) => Value::U64(x / y),
+                (Value::U32(x), Value::U32(y)) => Value::U32(x / y),
+                (Value::F64(x), Value::F64(y)) => Value::F64(x / y),
+                (Value::F32(x), Value::F32(y)) => Value::F32(x / y),
                 _ => panic!("Type error: cannot divide non-numbers"),
             }
         }
         Expr::Negative(e) => {
             match eval_expr(e, env, fns, models, roles, model_methods, enums) {
-                Value::Number(x) => Value::Number(-x),
+                Value::I64(x) => Value::I64(-x),
+                Value::I32(x) => Value::I32(-x),
+                Value::F64(x) => Value::F64(-x),
+                Value::F32(x) => Value::F32(-x),
+                Value::U64(_) | Value::U32(_) => {
+                    panic!("Type error: cannot negate unsigned integer")
+                },
                 _ => panic!("Type error: cannot negate non-number"),
             }
         }
         Expr::Power(a, b) => {
             match (eval_expr(a, env, fns, models, roles, model_methods, enums), eval_expr(b, env, fns, models, roles, model_methods, enums)) {
-                (Value::Number(x), Value::Number(y)) => Value::Number(x.powf(y)),
+                (Value::I64(x), Value::I64(y)) => {
+                    if y < 0 || y > u32::MAX as i64 {
+                        panic!("Exponent out of range for i64: {}", y);
+                    }
+                    Value::I64(x.pow(y as u32))
+                }
+                (Value::I32(x), Value::I32(y)) => {
+                    if y < 0 {
+                        panic!("Exponent cannot be negative for i32: {}", y);
+                    }
+                    Value::I32(x.pow(y as u32))
+                }
+                (Value::U64(x), Value::U64(y)) => {
+                    if y > u32::MAX as u64 {
+                        panic!("Exponent out of range for u64: {}", y);
+                    }
+                    Value::U64(x.pow(y as u32))
+                }
+                (Value::U32(x), Value::U32(y)) => Value::U32(x.pow(y as u32)),
+                (Value::F64(x), Value::F64(y)) => Value::F64(x.powf(y)),
+                (Value::F32(x), Value::F32(y)) => Value::F32(x.powf(y)),
                 _ => panic!("Type error: cannot exponentiate non-numbers"),
             }
         }
         Expr::Modulo(a, b) => {
             match (eval_expr(a, env, fns, models, roles, model_methods, enums), eval_expr(b, env, fns, models, roles, model_methods, enums)) {
-                (Value::Number(x), Value::Number(y)) => Value::Number(x % y),
+                (Value::I64(x), Value::I64(y)) => Value::I64(x % y),
+                (Value::I32(x), Value::I32(y)) => Value::I32(x % y),
+                (Value::U64(x), Value::U64(y)) => Value::U64(x % y),
+                (Value::U32(x), Value::U32(y)) => Value::U32(x % y),
+                (Value::F64(x), Value::F64(y)) => Value::F64(x % y),
+                (Value::F32(x), Value::F32(y)) => Value::F32(x % y),
                 _ => panic!("Type error: cannot modulo non-numbers"),
             }
         }
@@ -966,25 +1120,45 @@ fn eval_expr(
         }
         Expr::LessThan(a, b) => {
             match (eval_expr(a, env, fns, models, roles, model_methods, enums), eval_expr(b, env, fns, models, roles, model_methods, enums)) {
-                (Value::Number(x), Value::Number(y)) => Value::Bool(x < y),
+                (Value::I64(x), Value::I64(y)) => Value::Bool(x < y),
+                (Value::I32(x), Value::I32(y)) => Value::Bool(x < y),
+                (Value::U64(x), Value::U64(y)) => Value::Bool(x < y),
+                (Value::U32(x), Value::U32(y)) => Value::Bool(x < y),
+                (Value::F64(x), Value::F64(y)) => Value::Bool(x < y),
+                (Value::F32(x), Value::F32(y)) => Value::Bool(x < y),
                 _ => panic!("Type error: cannot compare non-numbers"),
             }
         }
         Expr::LessThanOrEqual(a, b) => {
             match (eval_expr(a, env, fns, models, roles, model_methods, enums), eval_expr(b, env, fns, models, roles, model_methods, enums)) {
-                (Value::Number(x), Value::Number(y)) => Value::Bool(x <= y),
+                (Value::I64(x), Value::I64(y)) => Value::Bool(x <= y),
+                (Value::I32(x), Value::I32(y)) => Value::Bool(x <= y),
+                (Value::U64(x), Value::U64(y)) => Value::Bool(x <= y),
+                (Value::U32(x), Value::U32(y)) => Value::Bool(x <= y),
+                (Value::F64(x), Value::F64(y)) => Value::Bool(x <= y),
+                (Value::F32(x), Value::F32(y)) => Value::Bool(x <= y),
                 _ => panic!("Type error: cannot compare non-numbers"),
             }
         }
         Expr::GreaterThan(a, b) => {
             match (eval_expr(a, env, fns, models, roles, model_methods, enums), eval_expr(b, env, fns, models, roles, model_methods, enums)) {
-                (Value::Number(x), Value::Number(y)) => Value::Bool(x > y),
+                (Value::I64(x), Value::I64(y)) => Value::Bool(x > y),
+                (Value::I32(x), Value::I32(y)) => Value::Bool(x > y),
+                (Value::U64(x), Value::U64(y)) => Value::Bool(x > y),
+                (Value::U32(x), Value::U32(y)) => Value::Bool(x > y),
+                (Value::F64(x), Value::F64(y)) => Value::Bool(x > y),
+                (Value::F32(x), Value::F32(y)) => Value::Bool(x > y),
                 _ => panic!("Type error: cannot compare non-numbers"),
             }
         }
         Expr::GreaterThanOrEqual(a, b) => {
             match (eval_expr(a, env, fns, models, roles, model_methods, enums), eval_expr(b, env, fns, models, roles, model_methods, enums)) {
-                (Value::Number(x), Value::Number(y)) => Value::Bool(x >= y),
+                (Value::I64(x), Value::I64(y)) => Value::Bool(x >= y),
+                (Value::I32(x), Value::I32(y)) => Value::Bool(x >= y),
+                (Value::U64(x), Value::U64(y)) => Value::Bool(x >= y),
+                (Value::U32(x), Value::U32(y)) => Value::Bool(x >= y),
+                (Value::F64(x), Value::F64(y)) => Value::Bool(x >= y),
+                (Value::F32(x), Value::F32(y)) => Value::Bool(x >= y),
                 _ => panic!("Type error: cannot compare non-numbers"),
             }
         }
@@ -1119,7 +1293,7 @@ fn eval_expr(
                 if let Some(expected_type) = param_type {
                     let actual_type = infer_value_type(&arg_val);
                     if !types_compatible(expected_type, &actual_type) {
-                        panic!("Type error: function param {}: expected {:?}, got {:?}", name, expected_type, actual_type);
+                        panic!("Type error: param for function {}: expected {:?}, got {:?}", name, expected_type, actual_type);
                     }
                 }
 
@@ -1274,32 +1448,62 @@ fn eval_expr(
 
             let obj_val = eval_expr(object, env, fns, models, roles, model_methods, enums);
 
-            // Handle number methods
-            if let Value::Number(n) = obj_val.clone() {
-                match method.as_str() {
-                    "abs" => {
-                        return Value::Number(n.abs());
-                    }
-                    "round" => {
-                        return Value::Number(n.round());
-                    }
-                    "floor" => {
-                        return Value::Number(n.floor());
-                    }
-                    "ceil" => {
-                        return Value::Number(n.ceil());
-                    }
-                    _ => {
-                        // Not a number method, continue to other types
+            // Handle numeric methods
+            match obj_val.clone() {
+                Value::I64(n) => {
+                    match method.as_str() {
+                        "abs" => return Value::I64(n.abs()),
+                        "round" | "floor" | "ceil" => return Value::I64(n),
+                        _ => {}
                     }
                 }
+                Value::I32(n) => {
+                    match method.as_str() {
+                        "abs" => return Value::I32(n.abs()),
+                        "round" | "floor" | "ceil" => return Value::I32(n),
+                        _ => {}
+                    }
+                }
+                Value::U64(n) => {
+                    match method.as_str() {
+                        "abs" => return Value::U64(n),
+                        "round" | "floor" | "ceil" => return Value::U64(n),
+                        _ => {}
+                    }
+                }
+                Value::U32(n) => {
+                    match method.as_str() {
+                        "abs" => return Value::U32(n),
+                        "round" | "floor" | "ceil" => return Value::U32(n),
+                        _ => {}
+                    }
+                }
+                Value::F64(n) => {
+                    match method.as_str() {
+                        "abs" => return Value::F64(n.abs()),
+                        "round" => return Value::F64(n.round()),
+                        "floor" => return Value::F64(n.floor()),
+                        "ceil" => return Value::F64(n.ceil()),
+                        _ => {}
+                    }
+                }
+                Value::F32(n) => {
+                    match method.as_str() {
+                        "abs" => return Value::F32(n.abs()),
+                        "round" => return Value::F32(n.round()),
+                        "floor" => return Value::F32(n.floor()),
+                        "ceil" => return Value::F32(n.ceil()),
+                        _ => {}
+                    }
+                }
+                _ => {} // Not a number, continue
             }
 
             // Handle array methods
             if let Value::Array(mut arr) = obj_val.clone() {
                 match method.as_str() {
                     "size" => {
-                        return Value::Number(arr.len() as f64);
+                        return Value::I64(arr.len() as i64);
                     }
                     "push" => {
                         // Check mutability
@@ -1318,7 +1522,7 @@ fn eval_expr(
                         
                         arr.push(arg_val);
                         
-                        let size = arr.len() as f64;
+                        let size = arr.len() as i64;
                         
                         // Update the original variable
                         if let Expr::Var(var_name) = object.as_ref() {
@@ -1327,7 +1531,7 @@ fn eval_expr(
                             }
                         }
                         
-                        return Value::Number(size);
+                        return Value::I64(size);
                     }
                     "pop" => {
                         // Check mutability
@@ -1366,12 +1570,10 @@ fn eval_expr(
                         
                         let arg_val = eval_expr(&args[0], env, fns, models, roles, model_methods, enums);
                         let index = if args.len() > 1 {
-                            match eval_expr(&args[1], env, fns, models, roles, model_methods, enums) {
-                                Value::Number(n) => n as usize,
-                                _ => panic!("put() index must be a number"),
-                            }
+                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums))
+                                .expect("put() index must be an integer")
                         } else {
-                            0 // Default to beginning
+                            0
                         };
                         
                         if index > arr.len() {
@@ -1380,7 +1582,7 @@ fn eval_expr(
                         
                         arr.insert(index, arg_val);
                         
-                        let size = arr.len() as f64;
+                        let size = arr.len() as i64;
                         
                         // Update the original variable
                         if let Expr::Var(var_name) = object.as_ref() {
@@ -1389,7 +1591,7 @@ fn eval_expr(
                             }
                         }
                         
-                        return Value::Number(size);
+                        return Value::I64(size);
                     }
                     "pull" => {
                         // Check mutability
@@ -1399,13 +1601,11 @@ fn eval_expr(
                             }
                         }
                         
-                        let index = if !args.is_empty() {
-                            match eval_expr(&args[0], env, fns, models, roles, model_methods, enums) {
-                                Value::Number(n) => n as usize,
-                                _ => panic!("pull() index must be a number"),
-                            }
+                        let index = if args.len() > 1 {
+                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums))
+                                .expect("pull() index must be an integer")
                         } else {
-                            0 // Default to beginning
+                            0
                         };
                         
                         if index >= arr.len() {
@@ -1435,16 +1635,12 @@ fn eval_expr(
                             panic!("slice() requires at least a start index");
                         }
                         
-                        let start = match eval_expr(&args[0], env, fns, models, roles, model_methods, enums) {
-                            Value::Number(n) => n as usize,
-                            _ => panic!("slice() start must be a number"),
-                        };
+                        let start = to_usize(&eval_expr(&args[0], env, fns, models, roles, model_methods, enums))
+                            .expect("slice() start must be an integer");
                         
                         let stop = if args.len() > 1 {
-                            match eval_expr(&args[1], env, fns, models, roles, model_methods, enums) {
-                                Value::Number(n) => n as usize,
-                                _ => panic!("slice() stop must be a number"),
-                            }
+                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums))
+                                .expect("slice() stop must be an integer")
                         } else {
                             arr.len()
                         };
@@ -1497,10 +1693,8 @@ fn eval_expr(
                         }
                         
                         let start_pos = if args.len() > 1 {
-                            match eval_expr(&args[1], env, fns, models, roles, model_methods, enums) {
-                                Value::Number(n) => n as usize,
-                                _ => panic!("splice() start position must be a number"),
-                            }
+                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums))
+                                .expect("splice() start position must be an integer")
                         } else {
                             arr.len()
                         };
@@ -1514,7 +1708,7 @@ fn eval_expr(
                             arr.insert(start_pos + i, item);
                         }
 
-                        let size = arr.len() as f64;
+                        let size = arr.len() as i64;
                         
                         // Update the original variable
                         if let Expr::Var(var_name) = object.as_ref() {
@@ -1523,25 +1717,21 @@ fn eval_expr(
                             }
                         }
 
-                        return Value::Number(size);
+                        return Value::I64(size);
                     }
                     "copy" => {
                         // copy() doesn't mutate, so no mutability check needed
                         
                         let start = if !args.is_empty() {
-                            match eval_expr(&args[0], env, fns, models, roles, model_methods, enums) {
-                                Value::Number(n) => n as usize,
-                                _ => panic!("copy() start must be a number"),
-                            }
+                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums))
+                                .expect("copy() start must be an integer")
                         } else {
                             0
                         };
                         
                         let stop = if args.len() > 1 {
-                            match eval_expr(&args[1], env, fns, models, roles, model_methods, enums) {
-                                Value::Number(n) => n as usize,
-                                _ => panic!("copy() stop must be a number"),
-                            }
+                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums))
+                                .expect("copy() stop must be an integer")
                         } else {
                             arr.len()
                         };
@@ -1564,7 +1754,7 @@ fn eval_expr(
             if let Value::String(mut s) = obj_val.clone() {
                 match method.as_str() {
                     "length" => {
-                        return Value::Number(s.len() as f64);
+                        return Value::I64(s.len() as i64);
                     }
                     "includes" => {
                         if args.is_empty() {
@@ -1676,16 +1866,12 @@ fn eval_expr(
                             panic!("slice() requires at least a start index");
                         }
                         
-                        let start = match eval_expr(&args[0], env, fns, models, roles, model_methods, enums) {
-                            Value::Number(n) => n as usize,
-                            _ => panic!("slice() start must be a number"),
-                        };
+                        let start = to_usize(&eval_expr(&args[0], env, fns, models, roles, model_methods, enums))
+                            .expect("slice() start must be an integer");
                         
                         let stop = if args.len() > 1 {
-                            match eval_expr(&args[1], env, fns, models, roles, model_methods, enums) {
-                                Value::Number(n) => n as usize,
-                                _ => panic!("slice() stop must be a number"),
-                            }
+                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums))
+                                .expect("slice() stop must be an integer")
                         } else {
                             s.len()
                         };
@@ -1738,20 +1924,16 @@ fn eval_expr(
                     "copy" => {
                         // copy() doesn't mutate, so no mutability check needed
                         
-                        let start = if !args.is_empty() {
-                            match eval_expr(&args[0], env, fns, models, roles, model_methods, enums) {
-                                Value::Number(n) => n as usize,
-                                _ => panic!("copy() start must be a number"),
-                            }
+                        let start = if args.is_empty() {
+                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums))
+                                .expect("copy() start must be an integer")
                         } else {
                             0
                         };
                         
                         let stop = if args.len() > 1 {
-                            match eval_expr(&args[1], env, fns, models, roles, model_methods, enums) {
-                                Value::Number(n) => n as usize,
-                                _ => panic!("copy() stop must be a number"),
-                            }
+                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums))
+                                .expect("copy() stop must be an integer")
                         } else {
                             s.len()
                         };
@@ -1791,21 +1973,19 @@ fn eval_expr(
                         }
                         
                         let start_pos = if args.len() > 1 {
-                            match eval_expr(&args[1], env, fns, models, roles, model_methods, enums) {
-                                Value::Number(n) => n as usize,
-                                _ => panic!("index() start position must be a number"),
-                            }
+                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums))
+                                .expect("index() start position must be an integer")
                         } else {
                             0
                         };
                         
                         if start_pos > s.len() {
-                            return Value::Number(-1.0);
+                            return Value::I64(-1);
                         }
                         
                         return match s[start_pos..].find(&search) {
-                            Some(pos) => Value::Number((start_pos + pos) as f64),
-                            None => Value::Number(-1.0),
+                            Some(pos) => Value::I64((start_pos + pos) as i64),
+                            None => Value::I64(-1),
                         };
                     }
                     "repeat" => {
@@ -1813,20 +1993,12 @@ fn eval_expr(
                             panic!("repeat() requires a count argument");
                         }
                         
-                        let count = match eval_expr(&args[0], env, fns, models, roles, model_methods, enums) {
-                            Value::Number(n) => n,
-                            _ => panic!("repeat() count argument must be a number"),
+                        let count = match to_usize(&eval_expr(&args[0], env, fns, models, roles, model_methods, enums)) {
+                            Ok(n) => n,
+                            _ => panic!("repeat() count argument must be an integer"),
                         };
                         
-                        if count < 0.0 {
-                            panic!("repeat() count cannot be negative");
-                        }
-                        
-                        if count.fract() != 0.0 {
-                            panic!("repeat() count must be an integer");
-                        }
-                        
-                        if count == 0.0 {
+                        if count == 0 {
                             return Value::String(String::new());
                         }
                         

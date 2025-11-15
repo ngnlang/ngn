@@ -630,9 +630,13 @@ impl Parser {
                 // Literal value (variable reference)
                 Ok(Pattern::Literal(Expr::Var(name)))
             }
-            Some(Token::Number(n)) => {
+            Some(Token::Integer(n)) => {
                 self.advance();
-                Ok(Pattern::Literal(Expr::Number(n)))
+                Ok(Pattern::Literal(Expr::I64(n)))
+            }
+            Some(Token::Float(n)) => {
+                self.advance();
+                Ok(Pattern::Literal(Expr::F64(n)))
             }
             Some(Token::String(s)) => {
                 self.advance();
@@ -899,7 +903,12 @@ impl Parser {
         }
         
         let base_type = match type_name.as_str() {
-            "number" => Type::Number,
+            "i64" => Type::I64,
+            "i32" => Type::I32,
+            "u64" => Type::U64,
+            "u32" => Type::U32,
+            "f64" => Type::F64,
+            "f32" => Type::F32,
             "string" => Type::Str,
             "bool" => Type::Bool,
             "array" => {
@@ -908,7 +917,7 @@ impl Parser {
                     Type::Array(Box::new(type_args[0].clone()))
                 } else {
                     // Default: array<number>
-                    Type::Array(Box::new(Type::Number))
+                    Type::Array(Box::new(Type::I64))
                 }
             }
             "void" => Type::Void,

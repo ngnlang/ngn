@@ -262,9 +262,13 @@ impl ExprParser {
 
     fn parse_primary(&mut self) -> Result<Expr, String> {
         match self.current_token() {
-            Some(Token::Number(n)) => {
+            Some(Token::Integer(n)) => {
                 self.advance();
-                Ok(Expr::Number(n))
+                Ok(Expr::I64(n))
+            }
+            Some(Token::Float(f)) => {
+                self.advance();
+                Ok(Expr::F64(f))
             }
             Some(Token::String(s)) => {
                 self.advance();

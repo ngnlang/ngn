@@ -15,7 +15,7 @@ pub enum Token {
     LParen, RParen, LBracket, RBracket, LBrace, RBrace,
     Newline,
     Fn, Return, ShortReturn,
-    Ident(String), String(String), Number(f64),
+    Ident(String), String(String), Float(f64), Integer(i64),
     Model, Role, Extend, With,
     Regex(String), Enum,
 }
@@ -294,8 +294,14 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
             c if c.is_numeric() => {
                 let start = pos;
                 let mut num_str = String::from(c);
+                let mut is_float = false;
+
                 while let Some((_, c)) = chars.peek() {
-                    if c.is_numeric() || *c == '.' {
+                    if c.is_numeric() {
+                        num_str.push(*c);
+                        chars.next();
+                    } else if *c == '.' && !is_float {
+                        is_float = true;
                         num_str.push(*c);
                         chars.next();
                     } else {
@@ -303,8 +309,13 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
                     }
                 }
                 let end = chars.peek().map(|(i, _)| *i).unwrap_or(input.len());
-                let num: f64 = num_str.parse().unwrap();
-                tokens.push((start, Token::Number(num), end));
+                if is_float {
+                    let num: f64 = num_str.parse().unwrap();
+                    tokens.push((start, Token::Float(num), end));
+                } else {
+                    let num: i64 = num_str.parse().unwrap();
+                    tokens.push((start, Token::Integer(num), end));
+                }
             }
             
             c => panic!("Unexpected character: {}", c),

@@ -3,7 +3,12 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)]
 pub enum Type {
-    Number,
+    I64,
+    I32,
+    U64,
+    U32,
+    F64,
+    F32,
     String, // owned
     Str, // borrowed
     Bool,
@@ -32,7 +37,12 @@ pub struct EnumDef {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
-    Number(f64),
+    I64(i64),
+    I32(i32),
+    U64(u64),
+    U32(u32),
+    F64(f64),
+    F32(f32),
     String(String),
     Bool(bool),
     Array(Vec<Value>),
@@ -47,7 +57,12 @@ pub enum Value {
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)]
 pub enum Expr {
-    Number(f64),
+    I64(i64),
+    I32(i32),
+    U64(u64),
+    U32(u32),
+    F64(f64),
+    F32(f32),
     String(String),
     Bool(bool),
     Array(Vec<Expr>),
