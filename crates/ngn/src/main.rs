@@ -1685,7 +1685,7 @@ fn eval_expr(
                         // copy() doesn't mutate, so no mutability check needed
                         
                         let start = if !args.is_empty() {
-                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums))
+                            to_usize(&eval_expr(&args[0], env, fns, models, roles, model_methods, enums))
                                 .expect("copy() start must be an integer")
                         } else {
                             0
@@ -1887,7 +1887,7 @@ fn eval_expr(
                         // copy() doesn't mutate, so no mutability check needed
                         
                         let start = if args.is_empty() {
-                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums))
+                            to_usize(&eval_expr(&args[0], env, fns, models, roles, model_methods, enums))
                                 .expect("copy() start must be an integer")
                         } else {
                             0
