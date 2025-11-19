@@ -180,7 +180,7 @@ const end = process.ends("ing") // true
 ```
 
 ### `split(pattern?)`
-Create an array of strings by splitting a string on a pattern of characters. If you do not pass a pattern, each character in the string is split individually. Preserves the original string.
+Create an array of strings by splitting on a pattern of characters within a string. If you do not pass a pattern, each character in the string is split individually. Preserves the original string.
 
 ```ngn
 const sent = "The quick brown fox jumped over the fence."
@@ -311,52 +311,32 @@ const mixed = ["hat", true, 7] ❌ // cannot mix types
 ### `size()`
 Return the size of the array.
 
-### `push(item)`
-Push, i.e. add, an item to the end of an array. Returns the new size of the array as an `i64`.
+### `push(item, index?)`
+Push, i.e. add, an item into an array. By default, it pushes at the end. To push into another location, provide the index number. Returns the new size of the array as an `i64`.
 ```
 var stuff =< ["guitar", "shirt"]
 const size = stuff.push("hat")
 
 print(size) // 3
 print(stuff) // ["guitar", "shirt", "hat"]
-```
 
-### `pop()`
-Pop, i.e. remove, the last item of an array. Returns the removed item's value.
-```
-var stuff =< ["guitar", "shirt", "hat"]
-const popped = stuff.pop()
-
-print(popped) // hat
-print(stuff) // ["guitar", "shirt"]
-```
-
-### `put(item, index?)`
-Put, i.e. add, an item into an array. By default, it puts at the beginning. To put in another location, provide the index number. Returns the new size of the array as an `i64`.
-```
-var stuff =< ["guitar", "shirt"]
-const size = stuff.put("hat")
-
-print(size) // 3
-print(stuff) // ["hat", "guitar", "shirt"]
-
-stuff.put("coat", 2)
-print(stuff) // ["hat", "guitar", "coat", "shirt"]
+stuff.push("coat", 0)
+print(stuff) // ["coat", "guitar", "shirt", "hat"]
 ```
 
 ### `pull(index?)`
-Pull, i.e. remove, an item from an array. By default, it removes from the beginning. To pull from another location, provide the index number. Returns the removed item's value.
+Pull, i.e. remove, an item from an array. By default, it removes from the end. To pull from another location, provide the index number. Returns the removed item's value.
 ```
-var stuff =< ["guitar", "shirt", "coat", "hat"]
+var stuff =< ["coat", "guitar", "shirt", "hat"]
 const pulled = stuff.pull()
 
-print(pulled) // guitar
-print(stuff) // ["shirt", "coat", "hat"]
+print(pulled) // hat
+print(stuff) // ["coat", "guitar", "shirt"]
 
 const pulled_one = stuff.pull(1)
 
-print(pulled_one) // ["coat"]
-print stuff // ["shirt", "hat"]
+print(pulled_one) // ["guitar"]
+print stuff // ["coat", "shirt", "hat"]
 ```
 
 ### `copy(start?, stop?)`
