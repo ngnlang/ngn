@@ -515,8 +515,8 @@ fn infer_expr_type(
                 }
                 Type::Array(inner_type) => {
                     match method.as_str() {
-                        "push" | "put" | "size" | "splice" => Type::I64,
-                        "pop" | "pull" => *inner_type,
+                        "push" | "size" | "splice" => Type::I64,
+                        "pull" => *inner_type,
                         "slice" | "copy" => Type::Array(inner_type),
                         _ => panic!("Unknown array method: {}", method),
                     }
@@ -1519,69 +1519,23 @@ fn eval_expr(
                         }
                         
                         let arg_val = eval_expr(&args[0], env, fns, models, roles, model_methods, enums);
-                        
-                        arr.push(arg_val);
-                        
-                        let size = arr.len() as i64;
-                        
-                        // Update the original variable
-                        if let Expr::Var(var_name) = object.as_ref() {
-                            if let Some((kind, _, ownership, _)) = env.get(var_name) {
-                                env.insert(var_name.clone(), (kind.clone(), Value::Array(arr), ownership.clone(), Moved::False));
-                            }
-                        }
-                        
-                        return Value::I64(size);
-                    }
-                    "pop" => {
-                        // Check mutability
-                        if let Expr::Var(var_name) = object.as_ref() {
-                            if !can_mutate(var_name, env) {
-                                panic!("Cannot call mutating method '{}' on immutable or borrowed array '{}'", method, var_name);
-                            }
-                        }
-                        
-                        if arr.is_empty() {
-                            panic!("Cannot pop from an empty array");
-                        }
-                        
-                        let popped = arr.pop().unwrap();
-                        
-                        // Update the original variable
-                        if let Expr::Var(var_name) = object.as_ref() {
-                            if let Some((kind, _, ownership, _)) = env.get(var_name) {
-                                env.insert(var_name.clone(), (kind.clone(), Value::Array(arr), ownership.clone(), Moved::False));
-                            }
-                        }
-                        
-                        return popped;
-                    }
-                    "put" => {
-                        // Check mutability
-                        if let Expr::Var(var_name) = object.as_ref() {
-                            if !can_mutate(var_name, env) {
-                                panic!("Cannot call mutating method '{}' on immutable or borrowed array '{}'", method, var_name);
-                            }
-                        }
-                        
-                        if args.is_empty() {
-                            panic!("put() requires at least one argument");
-                        }
-                        
-                        let arg_val = eval_expr(&args[0], env, fns, models, roles, model_methods, enums);
-                        let index = if args.len() > 1 {
-                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums))
-                                .expect("put() index must be an integer")
+                        let index: Option<usize> = if args.len() > 1 {
+                            Some(to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums))
+                                .expect("push() index must be an integer"))
                         } else {
-                            0
+                            None
                         };
                         
-                        if index > arr.len() {
-                            panic!("put() index {} out of bounds for array of length {}", index, arr.len());
+                        match index {
+                            Some(idx) => {
+                                if idx > arr.len() {
+                                    panic!("push() index {} out of bounds for array of length {}", idx, arr.len());
+                                }
+                                arr.insert(idx, arg_val);
+                            }
+                            None => arr.push(arg_val),
                         }
-                        
-                        arr.insert(index, arg_val);
-                        
+
                         let size = arr.len() as i64;
                         
                         // Update the original variable
@@ -1601,18 +1555,26 @@ fn eval_expr(
                             }
                         }
                         
-                        let index = if args.len() > 1 {
-                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums))
-                                .expect("pull() index must be an integer")
-                        } else {
-                            0
-                        };
-                        
-                        if index >= arr.len() {
-                            panic!("pull() index {} out of bounds for array of length {}", index, arr.len());
+                        if arr.is_empty() {
+                            panic!("Cannot pull from an empty array");
                         }
                         
-                        let pulled = arr.remove(index);
+                        let index: Option<usize> = if args.len() > 1 {
+                            Some(to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums))
+                                .expect("pull() index must be an integer"))
+                        } else {
+                            None
+                        };
+                        
+                        let pulled = match index {
+                            Some(idx) => {
+                                if idx >= arr.len() {
+                                    panic!("pull() index {} out of bounds for array of length {}", idx, arr.len());
+                                }
+                                arr.remove(idx)
+                            }
+                            None => arr.pop().unwrap(),
+                        };
                         
                         // Update the original variable
                         if let Expr::Var(var_name) = object.as_ref() {
