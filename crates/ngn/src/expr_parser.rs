@@ -1,5 +1,5 @@
 use crate::ast::{EnumDef, Expr, InterpolationPart};
-use crate::lexer::Token;
+use crate::lexer::{InterpolationToken, Token};
 use crate::utils::infer_enum_name;
 use std::collections::HashMap;
 use std::iter::Peekable;
@@ -272,13 +272,26 @@ impl ExprParser {
             }
             Some(Token::String(s)) => {
                 self.advance();
-                // Handle interpolation
-                if s.contains('{') {
-                    let parts = Self::parse_interpolated_string(&s, &self.enums)?;
-                    Ok(Expr::InterpolatedString(parts))
-                } else {
-                    Ok(Expr::String(s))
-                }
+                Ok(Expr::String(s))
+            }
+            Some(Token::InterpolatedString(parts)) => {
+                self.advance();
+                let expr_parts: Vec<_> = parts.iter().map(|p| {
+                    match p {
+                        InterpolationToken::Literal(s) => InterpolationPart::Literal(s.clone()),
+                        InterpolationToken::Variable(name) => {
+                            // Try to parse as expression first (handles "xx + 1")
+                            match Self::parse_expression_from_string(name, &self.enums) {
+                                Ok(expr) => InterpolationPart::Expression(Box::new(expr)),
+                                Err(_) => {
+                                    // Fall back to simple variable
+                                    InterpolationPart::Expression(Box::new(Expr::Var(name.clone())))
+                                }
+                            }
+                        }
+                    }
+                }).collect();
+                Ok(Expr::InterpolatedString(expr_parts))
             }
             Some(Token::True) => {
                 self.advance();
@@ -464,59 +477,6 @@ impl ExprParser {
         let mut parser = ExprParser::new(tokens, enums);
         parser.parse()
             .map_err(|e| format!("Failed to parse interpolated expression: {}", e))
-    }
-
-    fn parse_interpolated_string(s: &str, enums: &HashMap<String, EnumDef>) -> Result<Vec<InterpolationPart>, String> {
-        let mut parts = Vec::new();
-        let mut current = String::new();
-        let mut chars = s.chars().peekable();
-        
-        while let Some(c) = chars.next() {
-            if c == '{' {
-                if !current.is_empty() {
-                    parts.push(InterpolationPart::Literal(current.clone()));
-                    current.clear();
-                }
-                
-                let mut expr_str = String::new();
-                let mut brace_depth = 1;
-                while let Some(c) = chars.next() {
-                    if c == '{' {
-                        brace_depth += 1;
-                        expr_str.push(c);
-                    } else if c == '}' {
-                        brace_depth -= 1;
-                        if brace_depth == 0 { break; }
-                        expr_str.push(c);
-                    } else {
-                        expr_str.push(c);
-                    }
-                }
-                
-                // Parse the expression!
-                let expr = Self::parse_expression_from_string(&expr_str, enums)?;
-                parts.push(InterpolationPart::Expression(Box::new(expr)));
-            } else if c == '\\' {
-                if let Some(next) = chars.next() {
-                    match next {
-                        'n' => current.push('\n'),
-                        't' => current.push('\t'),
-                        'r' => current.push('\r'),
-                        '\\' => current.push('\\'),
-                        '"' => current.push('"'),
-                        _ => current.push(next),
-                    }
-                }
-            } else {
-                current.push(c);
-            }
-        }
-        
-        if !current.is_empty() {
-            parts.push(InterpolationPart::Literal(current));
-        }
-        
-        Ok(parts)
     }
 
     fn is_enum_variant(&self, name: &str) -> bool {

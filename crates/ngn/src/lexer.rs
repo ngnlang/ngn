@@ -17,7 +17,13 @@ pub enum Token {
     Fn, Return, ShortReturn,
     Ident(String), String(String), Float(f64), Integer(i64),
     Model, Role, Extend, With,
-    Regex(String), Enum,
+    Regex(String), Enum, InterpolatedString(Vec<InterpolationToken>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum InterpolationToken {
+    Literal(String),
+    Variable(String),
 }
 
 pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
@@ -226,31 +232,78 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
             
             '"' => {
                 let start = pos;
-                let mut string = String::new();
-                while let Some((_, c)) = chars.peek() {
-                    if *c == '"' {
-                        chars.next();
+                let mut parts = Vec::new();
+                let mut current_literal = String::new();
+                
+                while let Some((_, c)) = chars.next() {
+                    if c == '"' {
+                        // Push any remaining literal before the closing quote
+                        if !current_literal.is_empty() {
+                            parts.push(InterpolationToken::Literal(current_literal.clone()));
+                            current_literal.clear();
+                        } else {
+                            parts.push(InterpolationToken::Literal(current_literal.clone()));
+                            current_literal.clear();
+                        }
                         break;
                     }
-                    if *c == '\\' {
-                        chars.next();  // consume backslash
-                        if let Some((_, next_c)) = chars.peek() {
-                            match *next_c {
-                                'n' => { string.push('\n'); chars.next(); }
-                                't' => { string.push('\t'); chars.next(); }
-                                'r' => { string.push('\r'); chars.next(); }
-                                '\\' => { string.push('\\'); chars.next(); }
-                                '"' => { string.push('"'); chars.next(); }
-                                _ => string.push(*next_c),
+                    if c == '{' {
+                        // Save literal part if any
+                        if !current_literal.is_empty() {
+                            parts.push(InterpolationToken::Literal(current_literal.clone()));
+                            current_literal.clear();
+                        }
+                        
+                        // Parse variable name
+                        let mut var_name = String::new();
+                        while let Some((_, c)) = chars.next() {
+                            if c == '}' {
+                                break;
+                            }
+                            var_name.push(c);
+                        }
+                        
+                        if !var_name.is_empty() {
+                            parts.push(InterpolationToken::Variable(var_name));
+                        }
+                        continue;
+                    } else if c == '\\' {
+                        if let Some((_, next_c)) = chars.next() {
+                            match next_c {
+                                'n' => current_literal.push('\n'),
+                                't' => current_literal.push('\t'),
+                                'r' => current_literal.push('\r'),
+                                '\\' => current_literal.push('\\'),
+                                '"' => current_literal.push('"'),
+                                _ => current_literal.push(next_c),
                             }
                         }
                     } else {
-                        string.push(*c);
-                        chars.next();
+                        current_literal.push(c);
                     }
                 }
+                
+                // Push final literal if any
+                if !current_literal.is_empty() {
+                    parts.push(InterpolationToken::Literal(current_literal));
+                }
+                
                 let end = chars.peek().map(|(i, _)| *i).unwrap_or(input.len());
-                tokens.push((start, Token::String(string), end));
+
+                // Decide which token to push
+                if parts.iter().any(|p| matches!(p, InterpolationToken::Variable(_))) {
+                    tokens.push((start, Token::InterpolatedString(parts), end));
+                } else {
+                    // No variables, treat as regular string
+                    let literal = parts.into_iter()
+                        .filter_map(|p| match p {
+                            InterpolationToken::Literal(s) => Some(s),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("");
+                    tokens.push((start, Token::String(literal), end));
+                }
             }
             
             c if c.is_alphabetic() || c == '_' => {

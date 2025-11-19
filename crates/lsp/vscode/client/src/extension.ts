@@ -13,7 +13,7 @@ export function activate(context: vscode.ExtensionContext) {
       'target',
       'release',
       process.platform === 'win32' ? 'ngn-lsp.exe' : 'ngn-lsp'
-  );
+    );
     
     const serverOptions: ServerOptions = {
         run: { command: serverModule, transport: TransportKind.stdio },
