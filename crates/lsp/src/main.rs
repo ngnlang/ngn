@@ -21,6 +21,90 @@ fn modifier_to_bit(modifier: &str) -> u32 {
     }
 }
 
+// Helper function to map a token to type and modifiers
+fn get_semantic_type(
+    token: &ngn::Token,
+    prev_token: Option<&ngn::Token>,
+    next_token: Option<&ngn::Token>,
+) -> (u32, u32) {
+    let prev_is_class_keyword = matches!(prev_token, 
+        Some(ngn::Token::Enum | ngn::Token::Model | ngn::Token::Role | ngn::Token::Extend | ngn::Token::With));
+
+    let is_likely_class = matches!(token, ngn::Token::Ident(name) 
+        if name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false));
+
+    let is_method_call = matches!(prev_token, Some(ngn::Token::Period)) 
+        && matches!(next_token, Some(ngn::Token::LParen));
+
+    // We calculate this first so we can return it in the tuple
+    let mut modifiers = vec![];
+
+    // Declaration check
+    if let Some(ngn::Token::Var | ngn::Token::Const | ngn::Token::Lit | ngn::Token::Rebind | ngn::Token::Static) = prev_token {
+        if matches!(token, ngn::Token::Ident(_)) {
+            modifiers.push("declaration");
+        }
+    }
+
+    // Readonly check based on the token itself
+    match token {
+        ngn::Token::Const | ngn::Token::Fn | ngn::Token::Static | ngn::Token::Lit 
+        | ngn::Token::Var | ngn::Token::Rebind | ngn::Token::False | ngn::Token::True => {
+            modifiers.push("readonly");
+        },
+        ngn::Token::Ident(name) if name == "this" => {
+            modifiers.push("readonly");
+        }
+        _ => {}
+    }
+
+    let mod_bitset = modifiers
+        .iter()
+        .map(|m| modifier_to_bit(m))
+        .fold(0, |acc, bit| acc | bit);
+
+    let token_type = match token {
+        // Keywords
+        ngn::Token::Any | ngn::Token::Break | ngn::Token::Enum | ngn::Token::Extend | ngn::Token::If 
+            | ngn::Token::Match | ngn::Token::Model 
+            | ngn::Token::Next | ngn::Token::Not | ngn::Token::Return 
+            | ngn::Token::Role | ngn::Token::Until | ngn::Token::While 
+            | ngn::Token::With => 0,
+
+        ngn::Token::Float(_) | ngn::Token::Integer(_) => 1,  // number
+        ngn::Token::String(_) => 2,  // string
+        // Punctuation
+        ngn::Token::LParen | ngn::Token::RParen | ngn::Token::LBracket | ngn::Token::RBracket 
+            | ngn::Token::LBrace | ngn::Token::RBrace | ngn::Token::Colon | ngn::Token::Comma 
+            | ngn::Token::Period => 6,
+        ngn::Token::Echo | ngn::Token::Print => 8,  // type
+        ngn::Token::Ident(_) => {
+            if prev_is_class_keyword | is_likely_class {
+                12  // class
+            } else if is_likely_class {
+                8
+            } else if matches!(next_token, Some(ngn::Token::LParen)) | is_method_call {
+                4  // function (call)
+            } else {
+                3  // variable (reference)
+            }
+        }
+        ngn::Token::Comment(_) => 7, // Comment
+
+        // Operators
+        ngn::Token::StarStar | ngn::Token::EqEq | ngn::Token::NotEq | ngn::Token::LessEq | ngn::Token::GreaterEq
+        | ngn::Token::Or | ngn::Token::And | ngn::Token::Plus | ngn::Token::Minus | ngn::Token::Star | ngn::Token::Slash
+        | ngn::Token::Percent | ngn::Token::Caret | ngn::Token::Eq | ngn::Token::Less | ngn::Token::Greater
+        | ngn::Token::PlusEq | ngn::Token::MinusEq | ngn::Token::StarEq | ngn::Token::SlashEq 
+        | ngn::Token::PercentEq | ngn::Token::ShortReturn | ngn::Token::StarStarEq | ngn::Token::CaretEq | ngn::Token::OwnedAssign => 5,
+
+        ngn::Token::Regex(_) => 9,
+        _ => 3,
+    };
+
+    (token_type, mod_bitset)
+}
+
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
@@ -131,211 +215,132 @@ impl LanguageServer for Backend {
                 char
             };
 
-            let mut modifiers = vec![];
-    
-            // If previous token was a declaration keyword, mark this ident as declaration
-            if let Some(ngn::Token::Var | ngn::Token::Const | ngn::Token::Lit | ngn::Token::Rebind | ngn::Token::Static) = prev_token {
-                if matches!(token, ngn::Token::Ident(_)) {
-                    modifiers.push("declaration");
-                }
-            }
+            if let ngn::Token::InterpolatedString(parts) = token {
+                // 1. Push the opening quote
+                semantic_tokens.push(SemanticToken {
+                    delta_line,
+                    delta_start,
+                    length: 1,
+                    token_type: 2, // string
+                    token_modifiers_bitset: 0,
+                });
 
-            let prev_is_class_keyword = matches!(prev_token, 
-                Some(ngn::Token::Enum | ngn::Token::Model | ngn::Token::Role | ngn::Token::Extend | ngn::Token::With));
+                // We track the *start* position of the previously emitted sub-token
+                // relative to the start of the whole string.
+                // The opening quote started at index 0.
+                let mut last_sub_token_start = 0;
+                let mut current_pos = 1; // We are now past the opening quote
 
-            let is_likely_class = matches!(token, ngn::Token::Ident(name) 
-                if name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false));
-
-            let is_method_call = matches!(prev_token, Some(ngn::Token::Period)) 
-                && matches!(next_token, Some(ngn::Token::LParen));
-
-            // Map tokens to semantic token types
-            let token_type = match token {
-                // Keywords
-                ngn::Token::Any | ngn::Token::Break | ngn::Token::Enum | ngn::Token::Extend | ngn::Token::If 
-                    | ngn::Token::Match | ngn::Token::Model 
-                    | ngn::Token::Next | ngn::Token::Not | ngn::Token::Return 
-                    | ngn::Token::Role | ngn::Token::Until | ngn::Token::While 
-                    | ngn::Token::With => 0,
-
-                ngn::Token::Float(_) | ngn::Token::Integer(_) => 1,  // number
-                ngn::Token::String(_) => 2,  // string
-                // Punctuation
-                ngn::Token::LParen | ngn::Token::RParen | ngn::Token::LBracket | ngn::Token::RBracket 
-                    | ngn::Token::LBrace | ngn::Token::RBrace | ngn::Token::Colon | ngn::Token::Comma 
-                    | ngn::Token::Period => 6,
-
-                ngn::Token::InterpolatedString(parts) => {
-                    // 1. Push the opening quote
-                    semantic_tokens.push(SemanticToken {
-                        delta_line,
-                        delta_start,
-                        length: 1,
-                        token_type: 2, // string
-                        token_modifiers_bitset: 0,
-                    });
-
-                    // We track the *start* position of the previously emitted sub-token
-                    // relative to the start of the whole string.
-                    // The opening quote started at index 0.
-                    let mut last_sub_token_start = 0;
-                    let mut current_pos = 1; // We are now past the opening quote
-
-                    for part in parts {
-                        match part {
-                            ngn::lexer::InterpolationToken::Literal(s) => {
-                                let len = s.len() as u32;
-                                if len > 0 {
-                                    semantic_tokens.push(SemanticToken {
-                                        delta_line: 0,
-                                        delta_start: current_pos - last_sub_token_start,
-                                        length: len,
-                                        token_type: 2, // string
-                                        token_modifiers_bitset: 0,
-                                    });
-                                    last_sub_token_start = current_pos;
-                                    current_pos += len;
-                                }
-                            }
-                            ngn::lexer::InterpolationToken::Variable(name) => {
-                                // Opening brace '{'
+                for part in parts {
+                    match part {
+                        ngn::lexer::InterpolationToken::Literal(s) => {
+                            let len = s.len() as u32;
+                            if len > 0 {
                                 semantic_tokens.push(SemanticToken {
                                     delta_line: 0,
                                     delta_start: current_pos - last_sub_token_start,
-                                    length: 1,
-                                    token_type: 3, // variable
-                                    token_modifiers_bitset: 2,
+                                    length: len,
+                                    token_type: 2, // string
+                                    token_modifiers_bitset: 0,
                                 });
                                 last_sub_token_start = current_pos;
-                                current_pos += 1;
-
-                                // Variable Name
-                                let name_len = name.len() as u32;
-                                
-                                if name.starts_with("this.") {
-                                    // "this" keyword
-                                    semantic_tokens.push(SemanticToken {
-                                        delta_line: 0,
-                                        delta_start: current_pos - last_sub_token_start,
-                                        length: 4,
-                                        token_type: 3, // variable
-                                        token_modifiers_bitset: 2,
-                                    });
-                                    last_sub_token_start = current_pos;
-                                    current_pos += 4;
-
-                                    // "." punctuation
-                                    semantic_tokens.push(SemanticToken {
-                                        delta_line: 0,
-                                        delta_start: current_pos - last_sub_token_start,
-                                        length: 1,
-                                        token_type: 6, // punctuation
-                                        token_modifiers_bitset: 0,
-                                    });
-                                    last_sub_token_start = current_pos;
-                                    current_pos += 1;
-
-                                    // property name
-                                    semantic_tokens.push(SemanticToken {
-                                        delta_line: 0,
-                                        delta_start: current_pos - last_sub_token_start,
-                                        length: name_len - 5,
-                                        token_type: 3, // variable
-                                        token_modifiers_bitset: 0,
-                                    });
-                                    last_sub_token_start = current_pos;
-                                    current_pos += name_len - 5;
-                                } else {
-                                    // Standard variable
-                                    semantic_tokens.push(SemanticToken {
-                                        delta_line: 0,
-                                        delta_start: current_pos - last_sub_token_start,
-                                        length: name_len,
-                                        token_type: 3, // variable
-                                        token_modifiers_bitset: 0,
-                                    });
-                                    last_sub_token_start = current_pos;
-                                    current_pos += name_len;
-                                }
-
-                                // Closing brace '}'
-                                semantic_tokens.push(SemanticToken {
-                                    delta_line: 0,
-                                    delta_start: current_pos - last_sub_token_start,
-                                    length: 1,
-                                    token_type: 3, // variable
-                                    token_modifiers_bitset: 2,
-                                });
-                                last_sub_token_start = current_pos;
-                                current_pos += 1;
+                                current_pos += len;
                             }
                         }
+                        ngn::lexer::InterpolationToken::Variable(content) => {
+                            // Opening brace '{'
+                            semantic_tokens.push(SemanticToken {
+                                delta_line: 0,
+                                delta_start: current_pos - last_sub_token_start,
+                                length: 1,
+                                token_type: 3, // variable
+                                token_modifiers_bitset: 2,
+                            });
+                            last_sub_token_start = current_pos;
+                            current_pos += 1;
+
+                            // Tokenize content as normal code.
+                            let inner_tokens = ngn::lexer::tokenize(content);
+
+                            // The content starts at 'current_pos' relative to the string start
+                            let content_start_offset = current_pos;
+                            
+                            for i in 0..inner_tokens.len() {
+                                let (start, token, end) = &inner_tokens[i];
+                                
+                                // Look at the previous/next tokens inside this expression
+                                let inner_prev = if i > 0 { 
+                                    Some(&inner_tokens[i - 1].1) 
+                                } else { 
+                                    None // The first token has no 'previous' inside the string
+                                };
+                                
+                                let inner_next = inner_tokens.get(i + 1).map(|t| &t.1);
+
+                                // Use our helper to get the right color (Number, Op, etc.)
+                                let (token_type, token_modifiers_bitset) = get_semantic_type(&token, inner_prev, inner_next);
+
+                                semantic_tokens.push(SemanticToken {
+                                    delta_line: 0,
+                                    delta_start: (content_start_offset + *start as u32) - last_sub_token_start,
+                                    length: (end - start) as u32,
+                                    token_type,
+                                    token_modifiers_bitset,
+                                });
+
+                                last_sub_token_start = content_start_offset + *start as u32;
+                            }
+
+                            // Advance our cursor past the content we just Tokenized
+                            current_pos += content.len() as u32;
+
+                            // Closing brace '}'
+                            semantic_tokens.push(SemanticToken {
+                                delta_line: 0,
+                                delta_start: current_pos - last_sub_token_start,
+                                length: 1,
+                                token_type: 3, // variable
+                                token_modifiers_bitset: 2,
+                            });
+                            last_sub_token_start = current_pos;
+                            current_pos += 1;
+                        }
                     }
-
-                    // Closing quote
-                    semantic_tokens.push(SemanticToken {
-                        delta_line: 0,
-                        delta_start: current_pos - last_sub_token_start,
-                        length: 1,
-                        token_type: 2, // string
-                        token_modifiers_bitset: 0,
-                    });
-
-                    // CRITICAL: Synchronize the outer loop state.
-                    // The 'prev_char' for the NEXT token in the file (like a newline or semicolon)
-                    // must be the start position of the LAST token we just emitted.
-                    // The last token was the Closing Quote.
-                    // It started at 'char + current_pos'.
-                    prev_line = line;
-                    prev_char = char + current_pos; 
-                    
-                    // Ensure we update prev_token so logic relying on it works for the next item
-                    prev_token = Some(token.clone());
-                    
-                    continue; 
                 }
-                ngn::Token::Echo | ngn::Token::Print => 8,  // type
-                ngn::Token::Ident(_) => {
-                    if prev_is_class_keyword | is_likely_class {
-                        12  // class
-                    } else if is_likely_class {
-                        8
-                    } else if matches!(next_token, Some(ngn::Token::LParen)) | is_method_call {
-                        4  // function (call)
-                    } else {
-                        3  // variable (reference)
-                    }
-                }
-                ngn::Token::Comment(_) => 7, // Comment
 
-                // Operators
-                ngn::Token::StarStar | ngn::Token::EqEq | ngn::Token::NotEq | ngn::Token::LessEq | ngn::Token::GreaterEq
-                | ngn::Token::Or | ngn::Token::And | ngn::Token::Plus | ngn::Token::Minus | ngn::Token::Star | ngn::Token::Slash
-                | ngn::Token::Percent | ngn::Token::Caret | ngn::Token::Eq | ngn::Token::Less | ngn::Token::Greater
-                | ngn::Token::PlusEq | ngn::Token::MinusEq | ngn::Token::StarEq | ngn::Token::SlashEq 
-                | ngn::Token::PercentEq | ngn::Token::ShortReturn | ngn::Token::StarStarEq | ngn::Token::CaretEq | ngn::Token::OwnedAssign => 5,
+                // Closing quote
+                semantic_tokens.push(SemanticToken {
+                    delta_line: 0,
+                    delta_start: current_pos - last_sub_token_start,
+                    length: 1,
+                    token_type: 2, // string
+                    token_modifiers_bitset: 0,
+                });
 
-                ngn::Token::Newline => {
-                    prev_token = Some(token.clone());
-                    continue;
-                }, // Skip
-                ngn::Token::Regex(_) => 9,
-                _ => 3, // Variable
-            };
-
-            // Apply modifiers based on token type
-            match &token {
-                ngn::Token::Const | ngn::Token::Fn | ngn::Token::Static | ngn::Token::Lit 
-                    | ngn::Token::Var | ngn::Token::Rebind | ngn::Token::False | ngn::Token::True => {
-                    modifiers.push("readonly");
-                }
-                _ => {}
+                // CRITICAL: Synchronize the outer loop state.
+                // The 'prev_char' for the NEXT token in the file (like a newline or semicolon)
+                // must be the start position of the LAST token we just emitted.
+                // The last token was the Closing Quote.
+                // It started at 'char + current_pos'.
+                prev_line = line;
+                prev_char = char + current_pos; 
+                
+                // Ensure we update prev_token so logic relying on it works for the next item
+                prev_token = Some(token.clone());
+                
+                continue;
             }
 
-            let token_modifiers_bitset = modifiers
-                .iter()
-                .map(|m| modifier_to_bit(m))
-                .fold(0, |acc, bit| acc | bit);
+            if matches!(token, ngn::Token::Newline) {
+                prev_token = Some(token.clone());
+                continue;
+            }
+
+            let (token_type, token_modifiers_bitset) = get_semantic_type(
+                token, 
+                prev_token.as_ref(), 
+                next_token
+            );
             
             semantic_tokens.push(SemanticToken {
                 delta_line,
