@@ -4,7 +4,7 @@
   "description": "Language support for NGN",
   "version": "0.0.1",
   "engines": {
-    "vscode": "^1.90.0"
+    "vscode": "^1.106.0"
   },
   "main": "./out/extension",
   "contributes": {
@@ -28,8 +28,7 @@
     "@types/node": "^24.10.1",
     "@types/vscode": "^1.106.0",
     "@vscode/vsce": "^2.20.0",
-    "typescript": "^5.9.3",
-    "vscode": "^1.1.37"
+    "typescript": "^5.9.3"
   },
   "license": "MIT",
   "dependencies": {

@@ -203,7 +203,7 @@ impl LanguageServer for Backend {
                                     delta_line: 0,
                                     delta_start: current_pos - last_sub_token_start,
                                     length: 1,
-                                    token_type: 3,
+                                    token_type: 3, // variable
                                     token_modifiers_bitset: 2,
                                 });
                                 last_sub_token_start = current_pos;
@@ -296,7 +296,6 @@ impl LanguageServer for Backend {
                 }
                 ngn::Token::Echo | ngn::Token::Print => 8,  // type
                 ngn::Token::Ident(_) => {
-                    // Check if next token is LParen (function call)
                     if prev_is_class_keyword | is_likely_class {
                         12  // class
                     } else if is_likely_class {

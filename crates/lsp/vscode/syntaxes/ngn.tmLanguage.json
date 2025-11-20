@@ -1,4 +1,51 @@
 {
   "scopeName": "source.ngn",
-  "patterns": []
+  "patterns": [
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#comments"
+    }
+  ],
+  "repository": {
+    "strings": {
+      "name": "string.quoted.double.ngn",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "include": "#interpolation"
+        }
+      ]
+    },
+    "interpolation": {
+      "name": "meta.embedded.line.ngn",
+      "begin": "\\{",
+      "beginCaptures": {
+        "0": {
+          "name": "string.section.embedded.begin.ngn"
+        }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": {
+          "name": "string.section.embedded.end.ngn"
+        }
+      },
+      "patterns": [
+        {
+          "include": "source.ngn"
+        }
+      ]
+    },
+    "comments": {
+        "patterns": [
+            {
+                "match": "//.*$",
+                "name": "comment.line.double-slash.ngn"
+            }
+        ]
+    }
+  }
 }
