@@ -224,17 +224,17 @@ print(some) // "Some Stuff"
 ```
 
 ### `slice(start, stop?)`
-Remove a section of a string by providing a start index and an optional stop index. This changes the original string and returns the item(s) as a new string.
+Remove a section of a string by providing a start index and an optional stop index. This changes the original string and returns the sliced section as a new string.
 
 - If `stop` is provided, the slice excludes the item at that index.
 - If `stop` is not provided, it removes everything upto and including the last item.
 - Since you're mutating the original string, it must be owned.
 ```
-var stuff =< [10, 20, 30, 40, 50]
-const sliced = stuff.slice(1, 3)
+var quote =< "I flew too close to the sun on wings of pastrami."
+const sliced = orig.slice(24, 31)
 
-print(sliced) = [20, 30]
-print(stuff) // [10, 40, 50]
+print(orig) // I flew too close to the wings of pastrami.
+print(sliced) // "sun on "
 ```
 
 ### `upper()`
@@ -412,8 +412,8 @@ fn divide(a: i64, b: i64): Result<i64, string> {
 fn main() {
   const result = divide(10, 2)
   match (result) {
-    Ok(value) => print("Ok: {value}"),
-    Error(msg) => print("Error: {msg}"),
+    Ok(value) => print("Ok: {value}"), // Ok: 5
+    Error(msg) => print("Error: {msg}"), // Error: Division by zero not allowed
   }
 }
 ```
@@ -463,22 +463,16 @@ enum Status {
 }
 
 fn main() {
-    const c = Red
-    print(c)  // Color::Red
+    const color = Red
+    print(color)  // Color::Red
     
-    const s = Inactive("maintenance")
-    print(s)  // Status::Inactive (maintenance)
-}
-```
+    const status = Inactive("maintenance")
+    print(status)  // Status::Inactive (maintenance)
 
-### Pattern Matching
-
-Use `match` to work with enum values:
-
-```ngn
-match result {
-    Ok(value) => print("Success: {value}"),
-    Error(msg) => print("Failed: {msg}"),
+    match (status) {
+      Active => print("Status: Active!"),
+      Inactive(value) => print("Status: Inactive with reason, {value}")
+    }
 }
 ```
 
