@@ -209,6 +209,11 @@ impl ExprParser {
                 let expr = self.parse_unary()?; // Recursive to allow <- <- chan
                 Ok(Expr::Receive(Box::new(expr)))
             }
+            Some(Token::LArrowMaybe) => {
+                self.advance();
+                let expr = self.parse_unary()?;
+                Ok(Expr::MaybeReceive(Box::new(expr)))
+            }
             _ => self.parse_power(),
         }
     }

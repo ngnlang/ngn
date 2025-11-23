@@ -117,10 +117,11 @@ pub enum Expr {
     Closure(Box<ClosureDef>),
     Regex(String),
     EnumVariant { enum_name: String, variant: String, data: Option<Box<Expr>> },
-    Thread(Box<Expr>),            // thread { ... }
-    MakeChannel(Option<Type>),   // channel()
-    Send(Box<Expr>, Box<Expr>),  // channel <- val
-    Receive(Box<Expr>),          // <- channel
+    Thread(Box<Expr>),
+    MakeChannel(Option<Type>),
+    Send(Box<Expr>, Box<Expr>),
+    Receive(Box<Expr>),
+    MaybeReceive(Box<Expr>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

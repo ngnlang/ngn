@@ -635,6 +635,16 @@ fn infer_expr_type(
                 _ => panic!("Type Error: Right side of <- must be a channel"),
             }
         }
+
+        Expr::MaybeReceive(chan_expr) => {
+            let chan_type = infer_expr_type(chan_expr, env, fns, models, model_methods, enums);
+            if let Type::Channel(inner) = chan_type {
+                // Wrap inner type in Maybe
+                Type::Enum("Maybe".to_string(), vec![*inner])
+            } else {
+                panic!("Type Error: Right side of <-? must be a channel");
+            }
+        }
     }
 }
 
@@ -1060,6 +1070,9 @@ fn collect_vars_from_expr(e: &Expr, vars: &mut Vec<String>) {
         Expr::Receive(target) => {
             collect_vars_from_expr(target, vars);
         }
+        Expr::MaybeReceive(target) => {
+            collect_vars_from_expr(target, vars);
+        }
         Expr::Closure(def) => {
             for stmt in &def.body {
                 // Recursively find vars in nested closures
@@ -1443,6 +1456,25 @@ async fn eval_expr(
                 }
             } else {
                 panic!("Cannot receive from non-channel type");
+            }
+        }
+        Expr::MaybeReceive(chan_expr) => {
+            let chan_val = eval_expr(chan_expr, env, fns, models, roles, model_methods, enums).await;
+
+            if let Value::Channel(_, rx_arc, _) = chan_val {
+                let mut rx = rx_arc.lock().await;
+                match rx.recv().await {
+                    Some(val) => {
+                        // Maybe::Value(val)
+                        Value::EnumValue("Maybe".to_string(), "Value".to_string(), Some(Box::new(val)))
+                    },
+                    None => {
+                        // Maybe::Null
+                        Value::EnumValue("Maybe".to_string(), "Null".to_string(), None)
+                    }
+                }
+            } else {
+                panic!("Runtime Error: Cannot receive from non-channel type");
             }
         }
         Expr::Call { name, args } => {
