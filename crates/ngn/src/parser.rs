@@ -614,6 +614,12 @@ impl Parser {
                 cases.push((patterns, body));
                 
                 self.skip_newlines();
+
+                // Check if we are at the end (RBrace). If so, no comma needed.
+                if matches!(self.current_token(), Some(Token::RBrace)) {
+                    break; 
+                }
+
                 self.expect(Token::Comma)?;
                 self.skip_newlines();
             }
