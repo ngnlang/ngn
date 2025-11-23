@@ -666,6 +666,8 @@ fn types_compatible(expected: &Type, actual: &Type) -> bool {
         (Type::String, Type::String) => true,
         (Type::Bool, Type::Bool) => true,
         (Type::Array(e1), Type::Array(e2)) => types_compatible(e1, e2),
+        (Type::Channel(t1), Type::Channel(t2)) => types_compatible(t1, t2),
+        (Type::Function, Type::Function) => true,
         (Type::Void, Type::Void) => true,
         (Type::Model(a), Type::Model(b)) => a == b,
         (Type::Regex, Type::Regex) => true,
@@ -2582,7 +2584,7 @@ async fn execute_stmt(
                 match execute_block(body, env, fns, models, roles, model_methods, enums, None).await {
                     ControlFlow::Break => break,
                     ControlFlow::Next => continue,
-                    ControlFlow::Return(_) => return ControlFlow::None,
+                    ControlFlow::Return(v) => return ControlFlow::Return(v),
                     ControlFlow::None => {}
                 }
             }
@@ -2593,7 +2595,7 @@ async fn execute_stmt(
                 match execute_block(body, env, fns, models, roles, model_methods, enums, None).await {
                     ControlFlow::Break => break,
                     ControlFlow::Next => continue,
-                    ControlFlow::Return(_) => return ControlFlow::None,
+                    ControlFlow::Return(v) => return ControlFlow::Return(v),
                     ControlFlow::None => {}
                 }
 
@@ -2616,7 +2618,7 @@ async fn execute_stmt(
                 match execute_block(body, env, fns, models, roles, model_methods, enums, None).await {
                     ControlFlow::Break => break,
                     ControlFlow::Next => continue,
-                    ControlFlow::Return(_) => return ControlFlow::None,
+                    ControlFlow::Return(v) => return ControlFlow::Return(v),
                     ControlFlow::None => {}
                 }
             }
@@ -2627,7 +2629,7 @@ async fn execute_stmt(
                 match execute_block(body, env, fns, models, roles, model_methods, enums, None).await {
                     ControlFlow::Break => break,
                     ControlFlow::Next => continue,
-                    ControlFlow::Return(_) => return ControlFlow::None,
+                    ControlFlow::Return(v) => return ControlFlow::Return(v),
                     ControlFlow::None => {}
                 }
 
@@ -2653,9 +2655,9 @@ async fn execute_stmt(
                         
                         match (match_type, flow) {
                             (MatchType::One, ControlFlow::Next) => continue,
-                            (MatchType::One, _) => return ControlFlow::None,
-                            (MatchType::Any, ControlFlow::Break) => return ControlFlow::None,
-                            (MatchType::Any, _) => continue,
+                            (MatchType::One, f) => return f,
+                            (MatchType::Any, ControlFlow::None) => continue,
+                            (MatchType::Any, f) => return f,
                         }
                     }
                 }

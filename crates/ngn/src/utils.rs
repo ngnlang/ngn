@@ -47,6 +47,10 @@ where
             advance(tokens);
             name
         }
+        Some(Token::Fn) => {
+            advance(tokens);
+            "fn".to_string()
+        }
         other => return Err(format!("Expected type identifier, got {:?}", other)),
     };
 
@@ -87,6 +91,13 @@ where
                 Type::Array(Box::new(Type::I64))
             }
         }
+        "channel" => {
+            if type_args.is_empty() {
+                return Err("Channel type requires a type argument, e.g. channel<string>".to_string());
+            }
+            Type::Channel(Box::new(type_args[0].clone()))
+        },
+        "fn" => Type::Function,
         "void" => Type::Void,
         "Result" | "Maybe" => {
             Type::Enum(type_name.to_string(), type_args)
