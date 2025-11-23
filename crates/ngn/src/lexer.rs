@@ -18,6 +18,7 @@ pub enum Token {
     Ident(String), String(String), Float(f64), Integer(i64),
     Model, Role, Extend, With,
     Regex(String), Enum, InterpolatedString(Vec<InterpolationToken>),
+    LArrow,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -166,6 +167,9 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
                 if chars.peek().map(|(_, c)| *c) == Some('=') {
                     chars.next();
                     tokens.push((pos, Token::LessEq, pos + 2));
+                } else if chars.peek().map(|(_, c)| *c) == Some('-') {
+                    chars.next();
+                    tokens.push((pos, Token::LArrow, pos + 2));
                 } else {
                     tokens.push((pos, Token::Less, pos + 1));
                 }

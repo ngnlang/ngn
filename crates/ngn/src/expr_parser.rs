@@ -1,6 +1,6 @@
 use crate::ast::{EnumDef, Expr, InterpolationPart};
 use crate::lexer::{InterpolationToken, Token};
-use crate::utils::infer_enum_name;
+use crate::utils::{infer_enum_name, parse_type};
 use std::collections::HashMap;
 use std::iter::Peekable;
 use std::vec::IntoIter;
@@ -48,6 +48,12 @@ impl ExprParser {
                     } else {
                         return Err("Cannot assign to non-variable".to_string());
                     }
+                }
+                Some(Token::LArrow) => {
+                    self.advance();
+                    let value = self.parse_assignment()?;
+                    // This treats 'chan <- val' as an expression returning Void
+                    expr = Expr::Send(Box::new(expr), Box::new(value));
                 }
                 Some(op_token) if self.is_compound_op(&op_token) => {
                     // Compound assignment (+=, -=, etc.)
@@ -198,6 +204,11 @@ impl ExprParser {
                 self.advance();
                 self.parse_unary()
             }
+            Some(Token::LArrow) => {
+                self.advance();
+                let expr = self.parse_unary()?; // Recursive to allow <- <- chan
+                Ok(Expr::Receive(Box::new(expr)))
+            }
             _ => self.parse_power(),
         }
     }
@@ -302,6 +313,40 @@ impl ExprParser {
                 Ok(Expr::Bool(false))
             }
             Some(Token::Ident(name)) => {
+                if name == "channel" {
+                    self.advance();
+                    if matches!(self.current_token(), Some(Token::LParen)) {
+                        self.advance(); // (
+                        self.expect(Token::RParen)?; // )
+                        
+                        // Check for optional type : Type
+                        let type_hint = if matches!(self.current_token(), Some(Token::Colon)) {
+                            self.advance();
+                            
+                            let (ty, _ownership) = parse_type(&mut self.tokens)?;
+                            Some(ty)
+                        } else {
+                            None
+                        };
+                        return Ok(Expr::MakeChannel(type_hint));
+                    }
+                }
+
+                if name == "thread" {
+                    self.advance();
+                    if matches!(self.current_token(), Some(Token::LParen)) {
+                        self.advance();
+                        let args = self.parse_fn_args()?;
+                        self.expect(Token::RParen)?;
+                        
+                        // Create a Thread expr wrapping the closure call
+                        if args.len() == 1 {
+                            return Ok(Expr::Thread(Box::new(args[0].clone())));
+                        }
+                        return Ok(Expr::Call { name, args });
+                    }
+                }
+                
                 self.advance();
 
                 // Check if it's an enum variant (capitalized, or special like Ok, Error, Null, Value)

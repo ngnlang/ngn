@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::iter::Peekable;
 use std::vec::IntoIter;
 use crate::utils::infer_enum_name;
+use crate::utils::parse_type;
 
 pub struct Parser {
     tokens: Peekable<IntoIter<(usize, Token, usize)>>,
@@ -132,6 +133,29 @@ impl Parser {
             Some(Token::Role) => self.parse_role_def(),
             Some(Token::Extend) => self.parse_extend_stmt(),
             Some(Token::Return) => self.parse_return_stmt(),
+            Some(Token::LArrow) => {
+                let expr = self.parse_expr()?;
+                Ok(Stmt::ExprStmt(expr))
+            }
+            Some(Token::Ident(name)) if name == "thread" => {
+                self.advance(); // consume 'thread'
+                
+                // Check for invocation: ( closure )
+                if matches!(self.current_token(), Some(Token::LParen)) {
+                    self.advance(); // consume (
+                    
+                    // We use parse_expr because the argument is a closure expression
+                    let closure_expr = self.parse_expr()?;
+                    
+                    self.expect(Token::RParen)?; // consume )
+                    
+                    // Return as an ExprStmt wrapping your Expr::Thread
+                    return Ok(Stmt::ExprStmt(Expr::Thread(Box::new(closure_expr))));
+                }
+                
+                // If it's used as a variable, fall through (unlikely but safe)
+                Err("Expected '(' after thread keyword".to_string())
+            }
             Some(Token::Ident(_)) => {
                 // Could be: assignment, reassignment, or expression statement
                 self.parse_ident_statement()
@@ -148,7 +172,7 @@ impl Parser {
         
         let declared_type = if matches!(self.current_token(), Some(Token::Colon)) {
             self.advance();
-            let (ty, _ownership) = self.parse_type()?;  // Ignore ownership from type
+            let (ty, _ownership) = parse_type(&mut self.tokens)?;  // Ignore ownership from type
             Some(ty)
         } else {
             None
@@ -160,14 +184,35 @@ impl Parser {
                 Ownership::Borrowed
             },
             Some(Token::OwnedAssign) => {
+                // ownership is only allowed for var
+                if kind != AssignKind::Var {
+                    return Err("You can only declare ownership with 'var'".to_string());
+                }
+
                 self.advance();
                 Ownership::Owned
             },
-            _ => return Err("Expected '=' or '<-' in assignment".to_string()),
+            _ => return Err("Expected '=' or '=<' in assignment".to_string()),
         };
 
         self.skip_newlines();        
         let value = self.parse_expr()?;
+
+        if let Expr::MakeChannel(_) = value {
+            if kind != AssignKind::Const {
+                let kind_str = match kind {
+                    AssignKind::Var => "var",
+                    AssignKind::Lit => "lit",
+                    AssignKind::Static => "static",
+                    AssignKind::Const => "const", // Unreachable here, but satisfies the match
+                };
+
+                return Err(format!(
+                    "Channels must be declared with 'const'. Found '{}' for variable '{}'",
+                    kind_str, name
+                ));
+            }
+        }
         
         Ok(Stmt::Assign {
             kind,
@@ -276,6 +321,15 @@ impl Parser {
                 let args = self.parse_fn_args()?;
                 self.expect(Token::RParen)?;
                 Ok(Stmt::ExprStmt(Expr::Call { name, args }))
+            }
+            Some(Token::LArrow) => {
+                self.advance(); // consume <-
+                let value = self.parse_expr()?;
+                // Return it as an Expression Statement containing a Send expr
+                Ok(Stmt::ExprStmt(Expr::Send(
+                    Box::new(Expr::Var(name)),
+                    Box::new(value)
+                )))
             }
             _ => Err(format!(
                 "Expected '=', '(', or '.' after identifier, got {:?}",
@@ -670,7 +724,7 @@ impl Parser {
         
         let (return_type, _ownership_type) = if matches!(self.current_token(), Some(Token::Colon)) {
             self.advance();
-            let (ty, own) = self.parse_type()?;
+            let (ty, own) = parse_type(&mut self.tokens)?;
             (Some(ty), own)
         } else {
             (None, Ownership::Borrowed)
@@ -707,7 +761,7 @@ impl Parser {
                 
                 let (ty, ownership) = if matches!(self.current_token(), Some(Token::Colon)) {
                     self.advance();
-                    let (ty, own) = self.parse_type()?;
+                    let (ty, own) = parse_type(&mut self.tokens)?;
                     (Some(ty), own)
                 } else {
                     (None, Ownership:: Borrowed)
@@ -737,7 +791,7 @@ impl Parser {
         while !matches!(self.current_token(), Some(Token::RBrace)) {
             let field_name = self.expect_ident()?;
             self.expect(Token::Colon)?;
-            let (field_type, _field_ownership) = self.parse_type()?;
+            let (field_type, _field_ownership) = parse_type(&mut self.tokens)?;
             
             fields.push((field_name, field_type));
             
@@ -843,7 +897,7 @@ impl Parser {
             
             let data_type = if matches!(self.current_token(), Some(Token::LParen)) {
                 self.advance();
-                let (ty, _) = self.parse_type()?;
+                let (ty, _) = parse_type(&mut self.tokens)?;
                 self.expect(Token::RParen)?;
                 Some(ty)
             } else {
@@ -884,65 +938,6 @@ impl Parser {
         Ok(stmts)
     }
 
-    fn parse_type(&mut self) -> Result<(Type, Ownership), String> {
-        let owned = if matches!(self.current_token(), Some(Token::Less)) {
-            self.advance();
-            true
-        } else {
-            false
-        };
-        
-        let type_name = self.expect_ident()?;
-
-        // Now parse generic type parameters: TypeName<T, E>
-        let mut type_args = Vec::new();
-        if matches!(self.current_token(), Some(Token::Less)) {
-            self.advance();
-            let (arg_type, _) = self.parse_type()?;
-            type_args.push(arg_type);
-            while matches!(self.current_token(), Some(Token::Comma)) {
-                self.advance();
-                let (arg_type, _) = self.parse_type()?;
-                type_args.push(arg_type);
-            }
-            self.expect(Token::Greater)?;
-        }
-        
-        let base_type = match type_name.as_str() {
-            "i64" => Type::I64,
-            "i32" => Type::I32,
-            "u64" => Type::U64,
-            "u32" => Type::U32,
-            "f64" => Type::F64,
-            "f32" => Type::F32,
-            "string" => Type::Str,
-            "bool" => Type::Bool,
-            "array" => {
-                // Array is generic: array<T>
-                if !type_args.is_empty() {
-                    Type::Array(Box::new(type_args[0].clone()))
-                } else {
-                    // Default: array<number>
-                    Type::Array(Box::new(Type::I64))
-                }
-            }
-            "void" => Type::Void,
-            "Result" | "Maybe" => {
-                Type::Enum(type_name.to_string(), type_args)
-            }
-            model_or_enum_name => {
-                if !type_args.is_empty() {
-                    Type::Enum(model_or_enum_name.to_string(), type_args)
-                } else {
-                    Type::Model(model_or_enum_name.to_string())
-                }
-            }
-        };
-        
-        let ownership = if owned { Ownership::Owned } else { Ownership::Borrowed };
-        Ok((base_type, ownership))
-    }
-
     fn expect(&mut self, expected: Token) -> Result<(), String> {
         match self.current_token() {
             Some(token) if std::mem::discriminant(&token) == std::mem::discriminant(&expected) => {
@@ -974,6 +969,7 @@ impl Parser {
         let mut paren_depth = 0;
         let mut bracket_depth = 0;
         let mut brace_depth = 0;
+        let mut angle_depth = 0;
         
         while let Some((pos, token, end)) = self.tokens.peek().cloned() {
             match &token {
@@ -998,10 +994,17 @@ impl Parser {
                     }
                     brace_depth -= 1;
                 }
-                Token::Newline | Token::Comma | Token::Colon => {
-                    if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 {
-                        break;
-                    }
+                Token::Less => angle_depth += 1,
+                Token::Greater => {
+                    if angle_depth > 0 { angle_depth -= 1; }
+                }
+                Token::Newline | Token::Comma => {
+                    if paren_depth == 0 && 
+                        bracket_depth == 0 && 
+                        brace_depth == 0 && 
+                        angle_depth == 0 {
+                            break;
+                        }
                 }
                 _ => {}
             }
@@ -1094,7 +1097,7 @@ impl Parser {
             
             let param_type = if matches!(self.current_token(), Some(Token::Colon)) {
                 self.advance();
-                let (ty, _ownership) = self.parse_type()?;
+                let (ty, _ownership) = parse_type(&mut self.tokens)?;
                 Some(ty)
             } else {
                 None
@@ -1116,7 +1119,7 @@ impl Parser {
         // Parse optional return type
         let return_type = if matches!(self.current_token(), Some(Token::Colon)) {
             self.advance();
-            let (ty, _ownership) = self.parse_type()?;
+            let (ty, _ownership) = parse_type(&mut self.tokens)?;
             Some(ty)
         } else {
             None

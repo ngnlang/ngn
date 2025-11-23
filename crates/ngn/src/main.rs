@@ -14,7 +14,13 @@ use crate::ast::{
     ClosureValue, EnumDef, FnDef, InterpolationPart, MethodMutationType, ModelDef, Moved, Ownership, Pattern, RoleDef, Type
 };
 
-fn main() {
+use async_recursion::async_recursion;
+use tokio::sync::mpsc;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+#[tokio::main]
+async fn main() {
     let source = fs::read_to_string("main.ngn")
         .expect("Failed to read ngn file");
 
@@ -41,7 +47,7 @@ fn main() {
     let mut parser = Parser::new(tokens, enums.clone());
 
     match parser.parse_program() {
-        Ok(ast) => run(&ast),
+        Ok(ast) => run(&ast).await,
         Err(e) => eprintln!("Parse error: {}", e),
     }
 }
@@ -87,6 +93,7 @@ fn format_type_for_error(t: &Type) -> String {
                 format!("{}<{}>", name, args)
             }
         }
+        Type::Channel(inner) => format!("channel<{}>", format_type_for_error(inner)),
     }
 }
 
@@ -118,7 +125,8 @@ fn format_value(v: &Value) -> String {
             } else {
                 format!("{}::{}", enum_name, variant)
             }
-        }
+        },
+        Value::Channel(_, _, _) => "<channel>".to_string(),
     }
 }
 
@@ -250,6 +258,7 @@ fn is_truthy(v: &Value) -> bool {
         Value::Closure(_) => true,
         Value::Regex(_) => true,
         Value::EnumValue(_, _, _) => true,
+        Value::Channel(_, _, _) => true,
     }
 }
 
@@ -338,14 +347,18 @@ fn infer_value_type(v: &Value) -> Type {
         Value::Void => Type::Void,
         Value::Object(model_name, _) => Type::Model(model_name.clone()),
         Value::Regex(_) => Type::Regex,
-        Value::EnumValue(enum_name, _variant, data) => {
+        Value::EnumValue(enum_name, variant, data) => {
             match enum_name.as_str() {
                 "Result" => {
-                    // For Result, we'd need to know E type from context
-                    // For now, just return Ok with number type
                     if let Some(val) = data {
                         let data_type = infer_value_type(val);
-                        Type::Enum("Result".to_string(), vec![data_type, Type::Str])  // Assume error is string
+                        let wildcard = Type::Generic("_".to_string());
+
+                        if variant == "Ok" {
+                            Type::Enum("Result".to_string(), vec![data_type, wildcard])
+                        } else {
+                            Type::Enum("Result".to_string(), vec![wildcard, data_type])
+                        }
                     } else {
                         Type::Enum("Result".to_string(), vec![])
                     }
@@ -367,6 +380,12 @@ fn infer_value_type(v: &Value) -> Type {
                     }
                 }
             }
+        },
+        Value::Channel(_, _, inner_type) => {
+            // Runtime channels are type-erased (they hold `Value`), 
+            // so we can't know the strict inner type without storing extra metadata.
+            // For now, return a generic channel.
+            Type::Channel(Box::new(inner_type.clone()))
         }
     }
 }
@@ -459,7 +478,19 @@ fn infer_expr_type(
                 panic!("Unknown variable: {}", name);
             }
         }
-        Expr::Call { name, .. } => {
+        Expr::Thread(_) => Type::Void, // must be before Expr::Call
+        Expr::Call { name, args } => {
+            if name == "close" {
+                if args.len() != 1 {
+                    panic!("Type Error: close() takes exactly 1 argument");
+                }
+                let arg_type = infer_expr_type(&args[0], env, fns, models, model_methods, enums);
+                if !matches!(arg_type, Type::Channel(_)) {
+                    panic!("Type Error: close() expects a channel, got {:?}", arg_type);
+                }
+                return Type::Void;
+            }
+
             // Check if it's a function value in the environment
             if let Some((_, Value::Function(fn_def), _ownership, _moved)) = env.get(name) {
                 fn_def.return_type.clone().unwrap_or(Type::Void)
@@ -539,19 +570,81 @@ fn infer_expr_type(
             }
         }
         Expr::Closure(_) => Type::Function,
-        Expr::EnumVariant { enum_name, variant: _, data } => {
-            // Infer type of enum variant construction
-            if let Some(expr) = data {
-                let data_type = infer_expr_type(expr, env, fns, models, model_methods, enums);
-                Type::Enum(enum_name.clone(), vec![data_type])
-            } else {
-                Type::Enum(enum_name.clone(), vec![])
+        Expr::EnumVariant { enum_name, variant, data } => {
+            match enum_name.as_str() {
+                "Result" => {
+                    if let Some(expr) = data {
+                        let data_type = infer_expr_type(expr, env, fns, models, model_methods, enums);
+                        let wildcard = Type::Generic("_".to_string());
+
+                        if variant == "Ok" {
+                            Type::Enum("Result".to_string(), vec![data_type, wildcard])
+                        } else {
+                            Type::Enum("Result".to_string(), vec![wildcard, data_type])
+                        }
+                    } else {
+                        Type::Enum("Result".to_string(), vec![])
+                    }
+                }
+                "Maybe" => {
+                    if let Some(expr) = data {
+                        let data_type = infer_expr_type(expr, env, fns, models, model_methods, enums);
+                        Type::Enum("Maybe".to_string(), vec![data_type])
+                    } else {
+                        Type::Enum("Maybe".to_string(), vec![])
+                    }
+                }
+                _ => {
+                    if let Some(expr) = data {
+                        let data_type = infer_expr_type(expr, env, fns, models, model_methods, enums);
+                        Type::Enum(enum_name.clone(), vec![data_type])
+                    } else {
+                        Type::Enum(enum_name.clone(), vec![])
+                    }
+                }
             }
         },
+
+        Expr::MakeChannel(hint) => {
+            if let Some(t) = hint {
+                Type::Channel(Box::new(t.clone()))
+            } else {
+                panic!("Type Error: channel() requires a type annotation, e.g., channel(): string");
+            }
+        }
+
+        Expr::Send(chan_expr, val_expr) => {
+            let chan_type = infer_expr_type(chan_expr, env, fns, models, model_methods, enums);
+            let val_type = infer_expr_type(val_expr, env, fns, models, model_methods, enums);
+
+            match chan_type {
+                Type::Channel(inner) => {
+                    if !types_compatible(&inner, &val_type) {
+                        panic!("Type Error: Cannot send {:?} to channel of type {:?}", val_type, inner);
+                    }
+                },
+                _ => panic!("Type Error: Left side of <- must be a channel"),
+            }
+            Type::Void
+        }
+
+        Expr::Receive(chan_expr) => {
+            let chan_type = infer_expr_type(chan_expr, env, fns, models, model_methods, enums);
+            match chan_type {
+                Type::Channel(inner) => *inner,
+                _ => panic!("Type Error: Right side of <- must be a channel"),
+            }
+        }
     }
 }
 
 fn types_compatible(expected: &Type, actual: &Type) -> bool {
+    if let Type::Generic(name) = actual {
+        if name == "_" { return true; }
+    }
+    if let Type::Generic(name) = expected {
+        if name == "_" { return true; }
+    }
     match (expected, actual) {
         (Type::I64, Type::I64) => true,
         (Type::I32, Type::I32) => true,
@@ -737,7 +830,8 @@ fn validate_role_compliance(
     }
 }
 
-fn call_closure(
+#[async_recursion]
+async fn call_closure(
     closure: &ClosureValue,
     args: &[Expr],
     outer_env: &mut HashMap<String, (AssignKind, Value, Ownership, Moved)>,
@@ -761,7 +855,7 @@ fn call_closure(
     // Bind parameters
     for (i, (param_name, param_type)) in closure.def.params.iter().enumerate() {
         if i < args.len() {
-            let arg_val = eval_expr(&args[i], outer_env, fns, models, roles, model_methods, enums);
+            let arg_val = eval_expr(&args[i], outer_env, fns, models, roles, model_methods, enums).await;
 
             // Type check if parameter has a type annotation
             if let Some(expected_type) = param_type {
@@ -795,7 +889,7 @@ fn call_closure(
         model_methods,
         enums,
         closure.def.return_type.as_ref(),
-    );
+    ).await;
 
     // Sync all vars back (they're live references now)
     for rebound_var in &closure.live_vars {
@@ -959,6 +1053,13 @@ fn collect_vars_from_expr(e: &Expr, vars: &mut Vec<String>) {
                 }
             }
         }
+        Expr::Send(target, value) => {
+            collect_vars_from_expr(target, vars);
+            collect_vars_from_expr(value, vars);
+        }
+        Expr::Receive(target) => {
+            collect_vars_from_expr(target, vars);
+        }
         Expr::Closure(def) => {
             for stmt in &def.body {
                 // Recursively find vars in nested closures
@@ -972,7 +1073,8 @@ fn collect_vars_from_expr(e: &Expr, vars: &mut Vec<String>) {
     }
 }
 
-fn eval_expr(
+#[async_recursion]
+async fn eval_expr(
     e: &Expr,
     env: &mut HashMap<String, (AssignKind, Value, Ownership, Moved)>,
     fns: &mut HashMap<String, FnDef>,
@@ -994,7 +1096,7 @@ fn eval_expr(
                 match part {
                     InterpolationPart::Literal(s) => result.push_str(s),
                     InterpolationPart::Expression(expr) => {
-                        let val = eval_expr(expr, env, fns, models, roles, model_methods, enums);
+                        let val = eval_expr(expr, env, fns, models, roles, model_methods, enums).await;
                         result.push_str(&format_value(&val));
                     }
                 }
@@ -1006,16 +1108,16 @@ fn eval_expr(
         Expr::Array(exprs) => {
             let mut values: Vec<Value> = Vec::new();
             for e in exprs {
-                values.push(eval_expr(e, env, fns, models, roles, model_methods, enums));
+                values.push(eval_expr(e, env, fns, models, roles, model_methods, enums).await);
             }
             Value::Array(values)
         },
         Expr::Not(e) => {
-            let val = eval_expr(e, env, fns, models, roles, model_methods, enums);
+            let val = eval_expr(e, env, fns, models, roles, model_methods, enums).await;
             Value::Bool(!is_truthy(&val))
         },
         Expr::Add(a, b) => {
-            match (eval_expr(a, env, fns, models, roles, model_methods, enums), eval_expr(b, env, fns, models, roles, model_methods, enums)) {
+            match (eval_expr(a, env, fns, models, roles, model_methods, enums).await, eval_expr(b, env, fns, models, roles, model_methods, enums).await) {
                 (Value::I64(x), Value::I64(y)) => Value::I64(x + y),
                 (Value::I32(x), Value::I32(y)) => Value::I32(x + y),
                 (Value::U64(x), Value::U64(y)) => Value::U64(x + y),
@@ -1027,7 +1129,7 @@ fn eval_expr(
             }
         }
         Expr::Subtract(a, b) => {
-            match (eval_expr(a, env, fns, models, roles, model_methods, enums), eval_expr(b, env, fns, models, roles, model_methods, enums)) {
+            match (eval_expr(a, env, fns, models, roles, model_methods, enums).await, eval_expr(b, env, fns, models, roles, model_methods, enums).await) {
                 (Value::I64(x), Value::I64(y)) => Value::I64(x - y),
                 (Value::I32(x), Value::I32(y)) => Value::I32(x - y),
                 (Value::U64(x), Value::U64(y)) => Value::U64(x - y),
@@ -1038,7 +1140,7 @@ fn eval_expr(
             }
         }
         Expr::Multiply(a, b) => {
-            match (eval_expr(a, env, fns, models, roles, model_methods, enums), eval_expr(b, env, fns, models, roles, model_methods, enums)) {
+            match (eval_expr(a, env, fns, models, roles, model_methods, enums).await, eval_expr(b, env, fns, models, roles, model_methods, enums).await) {
                 (Value::I64(x), Value::I64(y)) => Value::I64(x * y),
                 (Value::I32(x), Value::I32(y)) => Value::I32(x * y),
                 (Value::U64(x), Value::U64(y)) => Value::U64(x * y),
@@ -1049,7 +1151,7 @@ fn eval_expr(
             }
         }
         Expr::Divide(a, b) => {
-            match (eval_expr(a, env, fns, models, roles, model_methods, enums), eval_expr(b, env, fns, models, roles, model_methods, enums)) {
+            match (eval_expr(a, env, fns, models, roles, model_methods, enums).await, eval_expr(b, env, fns, models, roles, model_methods, enums).await) {
                 (Value::I64(x), Value::I64(y)) => Value::I64(x / y),
                 (Value::I32(x), Value::I32(y)) => Value::I32(x / y),
                 (Value::U64(x), Value::U64(y)) => Value::U64(x / y),
@@ -1060,7 +1162,7 @@ fn eval_expr(
             }
         }
         Expr::Negative(e) => {
-            match eval_expr(e, env, fns, models, roles, model_methods, enums) {
+            match eval_expr(e, env, fns, models, roles, model_methods, enums).await {
                 Value::I64(x) => Value::I64(-x),
                 Value::I32(x) => Value::I32(-x),
                 Value::F64(x) => Value::F64(-x),
@@ -1072,7 +1174,7 @@ fn eval_expr(
             }
         }
         Expr::Power(a, b) => {
-            match (eval_expr(a, env, fns, models, roles, model_methods, enums), eval_expr(b, env, fns, models, roles, model_methods, enums)) {
+            match (eval_expr(a, env, fns, models, roles, model_methods, enums).await, eval_expr(b, env, fns, models, roles, model_methods, enums).await) {
                 (Value::I64(x), Value::I64(y)) => {
                     if y < 0 || y > u32::MAX as i64 {
                         panic!("Exponent out of range for i64: {}", y);
@@ -1098,7 +1200,7 @@ fn eval_expr(
             }
         }
         Expr::Modulo(a, b) => {
-            match (eval_expr(a, env, fns, models, roles, model_methods, enums), eval_expr(b, env, fns, models, roles, model_methods, enums)) {
+            match (eval_expr(a, env, fns, models, roles, model_methods, enums).await, eval_expr(b, env, fns, models, roles, model_methods, enums).await) {
                 (Value::I64(x), Value::I64(y)) => Value::I64(x % y),
                 (Value::I32(x), Value::I32(y)) => Value::I32(x % y),
                 (Value::U64(x), Value::U64(y)) => Value::U64(x % y),
@@ -1109,17 +1211,17 @@ fn eval_expr(
             }
         }
         Expr::Equal(a, b) => {
-            let av = eval_expr(a, env, fns, models, roles, model_methods, enums);
-            let bv = eval_expr(b, env, fns, models, roles, model_methods, enums);
+            let av = eval_expr(a, env, fns, models, roles, model_methods, enums).await;
+            let bv = eval_expr(b, env, fns, models, roles, model_methods, enums).await;
             Value::Bool(values_equal(&av, &bv))
         }
         Expr::NotEqual(a, b) => {
-            let av = eval_expr(a, env, fns, models, roles, model_methods, enums);
-            let bv = eval_expr(b, env, fns, models, roles, model_methods, enums);
+            let av = eval_expr(a, env, fns, models, roles, model_methods, enums).await;
+            let bv = eval_expr(b, env, fns, models, roles, model_methods, enums).await;
             Value::Bool(!values_equal(&av, &bv))
         }
         Expr::LessThan(a, b) => {
-            match (eval_expr(a, env, fns, models, roles, model_methods, enums), eval_expr(b, env, fns, models, roles, model_methods, enums)) {
+            match (eval_expr(a, env, fns, models, roles, model_methods, enums).await, eval_expr(b, env, fns, models, roles, model_methods, enums).await) {
                 (Value::I64(x), Value::I64(y)) => Value::Bool(x < y),
                 (Value::I32(x), Value::I32(y)) => Value::Bool(x < y),
                 (Value::U64(x), Value::U64(y)) => Value::Bool(x < y),
@@ -1130,7 +1232,7 @@ fn eval_expr(
             }
         }
         Expr::LessThanOrEqual(a, b) => {
-            match (eval_expr(a, env, fns, models, roles, model_methods, enums), eval_expr(b, env, fns, models, roles, model_methods, enums)) {
+            match (eval_expr(a, env, fns, models, roles, model_methods, enums).await, eval_expr(b, env, fns, models, roles, model_methods, enums).await) {
                 (Value::I64(x), Value::I64(y)) => Value::Bool(x <= y),
                 (Value::I32(x), Value::I32(y)) => Value::Bool(x <= y),
                 (Value::U64(x), Value::U64(y)) => Value::Bool(x <= y),
@@ -1141,7 +1243,7 @@ fn eval_expr(
             }
         }
         Expr::GreaterThan(a, b) => {
-            match (eval_expr(a, env, fns, models, roles, model_methods, enums), eval_expr(b, env, fns, models, roles, model_methods, enums)) {
+            match (eval_expr(a, env, fns, models, roles, model_methods, enums).await, eval_expr(b, env, fns, models, roles, model_methods, enums).await) {
                 (Value::I64(x), Value::I64(y)) => Value::Bool(x > y),
                 (Value::I32(x), Value::I32(y)) => Value::Bool(x > y),
                 (Value::U64(x), Value::U64(y)) => Value::Bool(x > y),
@@ -1152,7 +1254,7 @@ fn eval_expr(
             }
         }
         Expr::GreaterThanOrEqual(a, b) => {
-            match (eval_expr(a, env, fns, models, roles, model_methods, enums), eval_expr(b, env, fns, models, roles, model_methods, enums)) {
+            match (eval_expr(a, env, fns, models, roles, model_methods, enums).await, eval_expr(b, env, fns, models, roles, model_methods, enums).await) {
                 (Value::I64(x), Value::I64(y)) => Value::Bool(x >= y),
                 (Value::I32(x), Value::I32(y)) => Value::Bool(x >= y),
                 (Value::U64(x), Value::U64(y)) => Value::Bool(x >= y),
@@ -1163,12 +1265,12 @@ fn eval_expr(
             }
         }
         Expr::Assign { name, value } => {
-            let v = eval_expr(value, env, fns, models, roles, model_methods, enums);
+            let v = eval_expr(value, env, fns, models, roles, model_methods, enums).await;
             env.insert(name.clone(), (AssignKind::Var, v.clone(), Ownership::Borrowed, Moved::False));
             v
         }
         Expr::CompoundAssign { name, op: _, value } => {
-            let v = eval_expr(value, env, fns, models, roles, model_methods, enums);
+            let v = eval_expr(value, env, fns, models, roles, model_methods, enums).await;
             env.insert(name.clone(), (AssignKind::Var, v.clone(), Ownership::Borrowed, Moved::False));
             v
         }
@@ -1237,7 +1339,125 @@ fn eval_expr(
                 panic!("Undefined static: {}", name);
             }
         },
+        Expr::Call { name, args } if name == "thread" => {
+            if args.len() != 1 {
+                panic!("thread() expects exactly 1 argument (a closure)");
+            }
+            
+            let closure_val = eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await;
+            
+            if let Value::Closure(closure) = closure_val {
+                // 1. Clone the entire environment for the new thread
+                // This mimics a 'move' closure in Rust.
+                let mut thread_env = env.clone();
+                let mut thread_fns = fns.clone();
+                let mut thread_models = models.clone();
+                let mut thread_roles = roles.clone();
+                let mut thread_methods = model_methods.clone();
+                let thread_enums = enums.clone();
+                let thread_closure = closure.clone();
+
+                // 2. Spawn Tokio Task
+                tokio::spawn(async move {
+                    // Call the closure inside the new thread
+                    call_closure(
+                        &thread_closure,
+                        &[], // No args passed to thread fn
+                        &mut thread_env,
+                        &mut thread_fns,
+                        &mut thread_models,
+                        &mut thread_roles,
+                        &mut thread_methods,
+                        &thread_enums
+                    ).await; // call_closure must be async too!
+                });
+                
+                Value::Void
+            } else {
+                panic!("thread() argument must be a closure");
+            }
+        }
+        Expr::Thread(target) => {
+            // We expect the target to be a closure
+            let val = eval_expr(target, env, fns, models, roles, model_methods, enums).await;
+
+            if let Value::Closure(closure) = val {
+                // 1. Clone everything to move into the thread
+                let mut thread_env = env.clone();
+                let mut thread_fns = fns.clone();
+                let mut thread_models = models.clone();
+                let mut thread_roles = roles.clone();
+                let mut thread_methods = model_methods.clone();
+                let thread_enums = enums.clone();
+                let thread_closure = closure.clone();
+
+                // 2. Spawn the Tokio task
+                tokio::spawn(async move {
+                    // We need to call the closure.
+                    call_closure(
+                        &thread_closure,
+                        &[], // Spawned threads take no arguments
+                        &mut thread_env,
+                        &mut thread_fns,
+                        &mut thread_models,
+                        &mut thread_roles,
+                        &mut thread_methods,
+                        &thread_enums
+                    ).await; 
+                });
+
+                Value::Void
+            } else {
+                panic!("spawn/thread expects a closure");
+            }
+        }
+        Expr::MakeChannel(hint) => {
+            // We already know hint is Some(...) because of strict mode check in infer_expr_type
+            // But let's be safe and unwrap or default (strict mode logic handles panic elsewhere)
+            let inner_type = hint.clone().expect("Channel must be typed");
+
+            let (tx, rx) = mpsc::channel(32);
+            Value::Channel(tx, Arc::new(Mutex::new(rx)), inner_type)
+        }
+        Expr::Send(chan_expr, val_expr) => {
+            let chan_val = eval_expr(chan_expr, env, fns, models, roles, model_methods, enums).await;
+            let val = eval_expr(val_expr, env, fns, models, roles, model_methods, enums).await;
+
+            if let Value::Channel(tx, _, _) = chan_val {
+                match tx.send(val).await {
+                    Ok(_) => Value::Void,
+                    Err(_) => panic!("Cannot send: Channel closed"),
+                }
+            } else {
+                panic!("Cannot send to non-channel type");
+            }
+        }
+        Expr::Receive(chan_expr) => {
+            let chan_val = eval_expr(chan_expr, env, fns, models, roles, model_methods, enums).await;
+
+            if let Value::Channel(_, rx_mutex, _) = chan_val {
+                let mut rx = rx_mutex.lock().await;
+                match rx.recv().await {
+                    Some(v) => v,
+                    None => panic!("Channel closed and empty"),
+                }
+            } else {
+                panic!("Cannot receive from non-channel type");
+            }
+        }
         Expr::Call { name, args } => {
+            if name == "close" {
+                let arg_val = eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await;
+                
+                if let Value::Channel(_, rx_arc, _) = arg_val {
+                    let mut rx = rx_arc.lock().await;
+                    rx.close(); // Tokio method: closes channel, prevents new sends
+                    return Value::Void;
+                } else {
+                    panic!("Runtime Error: close() called on non-channel");
+                }
+            }
+
             if let Some((_, Value::Closure(closure), _ownership, _moved)) = env.get(name) {
                 let closure = closure.clone();
                 return call_closure(
@@ -1249,7 +1469,7 @@ fn eval_expr(
                     roles,
                     model_methods,
                     enums,
-                );
+                ).await;
             }
 
             let fn_def = if let Some((_, Value::Function(fn_def), _ownership, _moved)) = env.get(name) {
@@ -1270,7 +1490,7 @@ fn eval_expr(
                 let ownership = get_arg_ownership(arg_expr, env);  // Helper function
 
                 let arg_val = if i < args.len() {
-                    eval_expr(arg_expr, env, fns, models, roles, model_methods, enums)
+                    eval_expr(arg_expr, env, fns, models, roles, model_methods, enums).await
                 } else {
                     panic!("Function {} expects {} arguments, got {}", name, fn_arg_count, args.len())
                 };
@@ -1302,7 +1522,7 @@ fn eval_expr(
             
             // Execute function body
             if let Some(body) = &fn_def.body {
-                let flow = execute_block(body, &mut fn_env, fns, models, roles, model_methods, enums, fn_def.return_type.as_ref());
+                let flow = execute_block(body, &mut fn_env, fns, models, roles, model_methods, enums, fn_def.return_type.as_ref()).await;
                 match flow {
                     ControlFlow::Return(val) => val,
                     _ => Value::Void,
@@ -1319,7 +1539,7 @@ fn eval_expr(
                 
                 // Evaluate all field expressions
                 for (field_name, field_expr) in fields {
-                    let field_val = eval_expr(field_expr, env, fns, models, roles, model_methods, enums);
+                    let field_val = eval_expr(field_expr, env, fns, models, roles, model_methods, enums).await;
 
                     // Find the expected type for this field
                     if let Some((_, expected_type)) = model_def.fields.iter().find(|(n, _)| n == field_name) {
@@ -1351,13 +1571,13 @@ fn eval_expr(
             }
         }
         Expr::FieldAccess { object, field, value } => {
-            let obj_val = eval_expr(object, env, fns, models, roles, model_methods, enums);
+            let obj_val = eval_expr(object, env, fns, models, roles, model_methods, enums).await;
             
             match obj_val {
                 Value::Object(model_name, mut fields) => {
                     // Only update if value is provided
                     if let Some(new_val_expr) = value {
-                        let new_val = eval_expr(new_val_expr, env, fns, models, roles, model_methods, enums);
+                        let new_val = eval_expr(new_val_expr, env, fns, models, roles, model_methods, enums).await;
 
                         // Type check the field assignment
                         if let Some(model_def) = models.get(&model_name) {
@@ -1420,7 +1640,7 @@ fn eval_expr(
                         // Bind parameters
                         for (i, (param_name, _param_type, _)) in method_def.params.iter().enumerate() {
                             if i < args.len() {
-                                let arg_val = eval_expr(&args[i], env, fns, models, roles, model_methods, enums);
+                                let arg_val = eval_expr(&args[i], env, fns, models, roles, model_methods, enums).await;
                                 method_env.insert(
                                     param_name.clone(),
                                     (AssignKind::Var, arg_val, Ownership::Borrowed, Moved::False),
@@ -1432,7 +1652,7 @@ fn eval_expr(
                         
                         // Execute method body
                         if let Some(body) = &method_def.body {
-                            let flow = execute_block(body, &mut method_env, fns, models, roles, model_methods, enums, method_def.return_type.as_ref());
+                            let flow = execute_block(body, &mut method_env, fns, models, roles, model_methods, enums, method_def.return_type.as_ref()).await;
                             match flow {
                                 ControlFlow::Return(val) => return val,
                                 _ => return Value::Void,
@@ -1446,7 +1666,7 @@ fn eval_expr(
                 }
             }
 
-            let obj_val = eval_expr(object, env, fns, models, roles, model_methods, enums);
+            let obj_val = eval_expr(object, env, fns, models, roles, model_methods, enums).await;
 
             // Handle numeric methods
             match obj_val.clone() {
@@ -1518,9 +1738,9 @@ fn eval_expr(
                             panic!("push() requires at least one argument");
                         }
                         
-                        let arg_val = eval_expr(&args[0], env, fns, models, roles, model_methods, enums);
+                        let arg_val = eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await;
                         let index: Option<usize> = if args.len() > 1 {
-                            Some(to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums))
+                            Some(to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums).await)
                                 .expect("push() index must be an integer"))
                         } else {
                             None
@@ -1560,7 +1780,7 @@ fn eval_expr(
                         }
                         
                         let index: Option<usize> = if args.len() > 1 {
-                            Some(to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums))
+                            Some(to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums).await)
                                 .expect("pull() index must be an integer"))
                         } else {
                             None
@@ -1597,11 +1817,11 @@ fn eval_expr(
                             panic!("slice() requires at least a start index");
                         }
                         
-                        let start = to_usize(&eval_expr(&args[0], env, fns, models, roles, model_methods, enums))
+                        let start = to_usize(&eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await)
                             .expect("slice() start must be an integer");
                         
                         let stop = if args.len() > 1 {
-                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums))
+                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums).await)
                                 .expect("slice() stop must be an integer")
                         } else {
                             arr.len()
@@ -1634,7 +1854,7 @@ fn eval_expr(
                             panic!("splice() requires items to splice");
                         }
                         
-                        let items_to_splice = match eval_expr(&args[0], env, fns, models, roles, model_methods, enums) {
+                        let items_to_splice = match eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await {
                             Value::Array(items) => items,
                             _ => panic!("splice() first argument must be an array"),
                         };
@@ -1655,7 +1875,7 @@ fn eval_expr(
                         }
                         
                         let start_pos = if args.len() > 1 {
-                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums))
+                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums).await)
                                 .expect("splice() start position must be an integer")
                         } else {
                             arr.len()
@@ -1685,14 +1905,14 @@ fn eval_expr(
                         // copy() doesn't mutate, so no mutability check needed
                         
                         let start = if !args.is_empty() {
-                            to_usize(&eval_expr(&args[0], env, fns, models, roles, model_methods, enums))
+                            to_usize(&eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await)
                                 .expect("copy() start must be an integer")
                         } else {
                             0
                         };
                         
                         let stop = if args.len() > 1 {
-                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums))
+                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums).await)
                                 .expect("copy() stop must be an integer")
                         } else {
                             arr.len()
@@ -1723,7 +1943,7 @@ fn eval_expr(
                             panic!("includes() requires a search argument");
                         }
                         
-                        let search = match eval_expr(&args[0], env, fns, models, roles, model_methods, enums) {
+                        let search = match eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await {
                             Value::String(search_str) => search_str,
                             _ => panic!("includes() argument must be a string"),
                         };
@@ -1739,7 +1959,7 @@ fn eval_expr(
                             panic!("starts() requires a search argument");
                         }
                         
-                        let search = match eval_expr(&args[0], env, fns, models, roles, model_methods, enums) {
+                        let search = match eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await {
                             Value::String(search_str) => search_str,
                             _ => panic!("starts() argument must be a string"),
                         };
@@ -1755,7 +1975,7 @@ fn eval_expr(
                             panic!("ends() requires a search argument");
                         }
                         
-                        let search = match eval_expr(&args[0], env, fns, models, roles, model_methods, enums) {
+                        let search = match eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await {
                             Value::String(search_str) => search_str,
                             _ => panic!("ends() argument must be a string"),
                         };
@@ -1771,8 +1991,8 @@ fn eval_expr(
                             panic!("replace() requires search and replacement arguments");
                         }
                         
-                        let search_arg = eval_expr(&args[0], env, fns, models, roles, model_methods, enums);
-                        let replacement = match eval_expr(&args[1], env, fns, models, roles, model_methods, enums) {
+                        let search_arg = eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await;
+                        let replacement = match eval_expr(&args[1], env, fns, models, roles, model_methods, enums).await {
                             Value::String(replacement_str) => replacement_str,
                             _ => panic!("replace() replacement argument must be a string"),
                         };
@@ -1828,11 +2048,11 @@ fn eval_expr(
                             panic!("slice() requires at least a start index");
                         }
                         
-                        let start = to_usize(&eval_expr(&args[0], env, fns, models, roles, model_methods, enums))
+                        let start = to_usize(&eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await)
                             .expect("slice() start must be an integer");
                         
                         let stop = if args.len() > 1 {
-                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums))
+                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums).await)
                                 .expect("slice() stop must be an integer")
                         } else {
                             s.len()
@@ -1860,7 +2080,7 @@ fn eval_expr(
                     }
                     "split" => {
                         let separator = if !args.is_empty() {
-                            match eval_expr(&args[0], env, fns, models, roles, model_methods, enums) {
+                            match eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await {
                                 Value::String(sep) => {
                                     if sep.is_empty() {
                                         panic!("split() separator cannot be empty. Use split() with no arguments to split by character");
@@ -1887,14 +2107,14 @@ fn eval_expr(
                         // copy() doesn't mutate, so no mutability check needed
                         
                         let start = if args.is_empty() {
-                            to_usize(&eval_expr(&args[0], env, fns, models, roles, model_methods, enums))
+                            to_usize(&eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await)
                                 .expect("copy() start must be an integer")
                         } else {
                             0
                         };
                         
                         let stop = if args.len() > 1 {
-                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums))
+                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums).await)
                                 .expect("copy() stop must be an integer")
                         } else {
                             s.len()
@@ -1925,7 +2145,7 @@ fn eval_expr(
                             panic!("index() requires a search argument");
                         }
                         
-                        let search = match eval_expr(&args[0], env, fns, models, roles, model_methods, enums) {
+                        let search = match eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await {
                             Value::String(search_str) => search_str,
                             _ => panic!("index() search argument must be a string"),
                         };
@@ -1935,7 +2155,7 @@ fn eval_expr(
                         }
                         
                         let start_pos = if args.len() > 1 {
-                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums))
+                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums).await)
                                 .expect("index() start position must be an integer")
                         } else {
                             0
@@ -1955,7 +2175,7 @@ fn eval_expr(
                             panic!("repeat() requires a count argument");
                         }
                         
-                        let count = match to_usize(&eval_expr(&args[0], env, fns, models, roles, model_methods, enums)) {
+                        let count = match to_usize(&eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await) {
                             Ok(n) => n,
                             _ => panic!("repeat() count argument must be an integer"),
                         };
@@ -2031,7 +2251,7 @@ fn eval_expr(
                     // Bind explicit parameters (skip first param if it matches signature)
                     for (i, (param_name, _param_type, param_ownership)) in method_def.params.iter().enumerate() {
                         if i < args.len() {
-                            let arg_val = eval_expr(&args[i], env, fns, models, roles, model_methods, enums);
+                            let arg_val = eval_expr(&args[i], env, fns, models, roles, model_methods, enums).await;
                             method_env.insert(
                                 param_name.clone(),
                                 (AssignKind::Var, arg_val, param_ownership.clone(), Moved::False),
@@ -2041,7 +2261,7 @@ fn eval_expr(
                         
                     // Execute method body
                     let flow = if let Some(body) = &method_def.body {
-                        execute_block(body, &mut method_env, fns, models, roles, model_methods, enums, method_def.return_type.as_ref())
+                        execute_block(body, &mut method_env, fns, models, roles, model_methods, enums, method_def.return_type.as_ref()).await
                     } else {
                         panic!("Method '{}' has no body", method);
                     };
@@ -2112,7 +2332,7 @@ fn eval_expr(
         }
         Expr::EnumVariant { enum_name, variant, data } => {
             let data_val = if let Some(expr) = data {
-                Some(Box::new(eval_expr(expr, env, fns, models, roles, model_methods, enums)))
+                Some(Box::new(eval_expr(expr, env, fns, models, roles, model_methods, enums).await))
             } else {
                 None
             };
@@ -2122,7 +2342,8 @@ fn eval_expr(
     }
 }
 
-fn execute_stmt(
+#[async_recursion]
+async fn execute_stmt(
     stmt: &Stmt,
     env: &mut HashMap<String, (AssignKind, Value, Ownership, Moved)>,
     fns: &mut HashMap<String, FnDef>,
@@ -2135,19 +2356,19 @@ fn execute_stmt(
     match stmt {
         Stmt::Echo(e) => {
             let _type = infer_expr_type(e, env, fns, models, model_methods, enums);
-            let v = eval_expr(e, env, fns, models, roles, model_methods, enums);
+            let v = eval_expr(e, env, fns, models, roles, model_methods, enums).await;
             print!("{}", format_value(&v));
             ControlFlow::None
         }
         Stmt::Print(e) => {
             let _type = infer_expr_type(e, env, fns, models, model_methods, enums);
-            let v = eval_expr(e, env, fns, models, roles, model_methods, enums);
+            let v = eval_expr(e, env, fns, models, roles, model_methods, enums).await;
             println!("{}", format_value(&v));
             ControlFlow::None
         }
         Stmt::ExprStmt(e) => {
             let _type = infer_expr_type(e, env, fns, models, model_methods, enums);
-            eval_expr(e, env, fns, models, roles, model_methods, enums);
+            eval_expr(e, env, fns, models, roles, model_methods, enums).await;
             ControlFlow::None
         }
         Stmt::Assign { kind, declared_type, name, value, ownership} => {
@@ -2181,7 +2402,7 @@ fn execute_stmt(
                 _ => {}
             }
 
-            let v = eval_expr(value, env, fns, models, roles, model_methods, enums);
+            let v = eval_expr(value, env, fns, models, roles, model_methods, enums).await;
             let actual_type = infer_value_type(&v);
 
             // Type check against declared type if provided
@@ -2209,7 +2430,7 @@ fn execute_stmt(
 
             match kind {
                 AssignKind::Var => {
-                    let v = eval_expr(value, env, fns, models, roles, model_methods, enums);
+                    let v = eval_expr(value, env, fns, models, roles, model_methods, enums).await;
                     let actual_type = infer_value_type(&v);
 
                     // Only allow reassignment if value is mutable (owned)
@@ -2246,7 +2467,7 @@ fn execute_stmt(
                 panic!("Cannot rebind undefined variable '{}'", name);
             };
             
-            let v = eval_expr(value, env, fns, models, roles, model_methods, enums);
+            let v = eval_expr(value, env, fns, models, roles, model_methods, enums).await;
             env.insert(name.clone(), (kind, v, ownership, Moved::False));
             ControlFlow::None
         }
@@ -2274,7 +2495,7 @@ fn execute_stmt(
                     panic!("Unknown model: {}", model_name);
                 };
 
-                let new_val = eval_expr(value, env, fns, models, roles, model_methods, enums);
+                let new_val = eval_expr(value, env, fns, models, roles, model_methods, enums).await;
                 let actual_type = infer_value_type(&new_val);
                 
                 if !types_compatible(&expected_type, &actual_type) {
@@ -2298,21 +2519,21 @@ fn execute_stmt(
         Stmt::Next => ControlFlow::Next,
         Stmt::If { condition, then_block, else_ifs, else_block } => {
             let _cond_type = infer_expr_type(condition, env, fns, models, model_methods, enums);
-            let cond_value = eval_expr(condition, env, fns, models, roles, model_methods, enums);
+            let cond_value = eval_expr(condition, env, fns, models, roles, model_methods, enums).await;
 
             if is_truthy(&cond_value) {
-                execute_block(then_block, env, fns, models, roles, model_methods, enums, None)
+                execute_block(then_block, env, fns, models, roles, model_methods, enums, None).await
             } else {
                 for (else_if_cond, else_if_stmts) in else_ifs {
                     let _type = infer_expr_type(else_if_cond, env, fns, models, model_methods, enums);
-                    let else_if_value = eval_expr(else_if_cond, env, fns, models, roles, model_methods, enums);
+                    let else_if_value = eval_expr(else_if_cond, env, fns, models, roles, model_methods, enums).await;
                     if is_truthy(&else_if_value) {
-                        return execute_block(else_if_stmts, env, fns, models, roles, model_methods, enums, None);
+                        return execute_block(else_if_stmts, env, fns, models, roles, model_methods, enums, None).await;
                     }
                 }
                 
                 if let Some(else_stmts) = else_block {
-                    execute_block(else_stmts, env, fns, models, roles, model_methods, enums, None)
+                    execute_block(else_stmts, env, fns, models, roles, model_methods, enums, None).await
                 } else {
                     ControlFlow::None
                 }
@@ -2321,12 +2542,12 @@ fn execute_stmt(
         Stmt::While { condition, body } => {
             loop {
                 let _cond_type = infer_expr_type(condition, env, fns, models, model_methods, enums);
-                let cond_value = eval_expr(condition, env, fns, models, roles, model_methods, enums);
+                let cond_value = eval_expr(condition, env, fns, models, roles, model_methods, enums).await;
                 if !is_truthy(&cond_value) {
                     break;
                 }
                 
-                match execute_block(body, env, fns, models, roles, model_methods, enums, None) {
+                match execute_block(body, env, fns, models, roles, model_methods, enums, None).await {
                     ControlFlow::Break => break,
                     ControlFlow::Next => continue,
                     ControlFlow::Return(_) => return ControlFlow::None,
@@ -2337,7 +2558,7 @@ fn execute_stmt(
         }
         Stmt::WhileOnce { condition, body } => {
             loop {
-                match execute_block(body, env, fns, models, roles, model_methods, enums, None) {
+                match execute_block(body, env, fns, models, roles, model_methods, enums, None).await {
                     ControlFlow::Break => break,
                     ControlFlow::Next => continue,
                     ControlFlow::Return(_) => return ControlFlow::None,
@@ -2345,7 +2566,7 @@ fn execute_stmt(
                 }
 
                 let _cond_type = infer_expr_type(condition, env, fns, models, model_methods, enums);
-                let cond_value = eval_expr(condition, env, fns, models, roles, model_methods, enums);
+                let cond_value = eval_expr(condition, env, fns, models, roles, model_methods, enums).await;
                 if !is_truthy(&cond_value) {
                     break;
                 }
@@ -2355,12 +2576,12 @@ fn execute_stmt(
         Stmt::Until { condition, body } => {
             loop {
                 let _cond_type = infer_expr_type(condition, env, fns, models, model_methods, enums);
-                let cond_value = eval_expr(condition, env, fns, models, roles, model_methods, enums);
+                let cond_value = eval_expr(condition, env, fns, models, roles, model_methods, enums).await;
                 if is_truthy(&cond_value) {
                     break;
                 }
                 
-                match execute_block(body, env, fns, models, roles, model_methods, enums, None) {
+                match execute_block(body, env, fns, models, roles, model_methods, enums, None).await {
                     ControlFlow::Break => break,
                     ControlFlow::Next => continue,
                     ControlFlow::Return(_) => return ControlFlow::None,
@@ -2371,7 +2592,7 @@ fn execute_stmt(
         }
         Stmt::UntilOnce { condition, body } => {
             loop {
-                match execute_block(body, env, fns, models, roles, model_methods, enums, None) {
+                match execute_block(body, env, fns, models, roles, model_methods, enums, None).await {
                     ControlFlow::Break => break,
                     ControlFlow::Next => continue,
                     ControlFlow::Return(_) => return ControlFlow::None,
@@ -2379,7 +2600,7 @@ fn execute_stmt(
                 }
 
                 let _cond_type = infer_expr_type(condition, env, fns, models, model_methods, enums);
-                let cond_value = eval_expr(condition, env, fns, models, roles, model_methods, enums);
+                let cond_value = eval_expr(condition, env, fns, models, roles, model_methods, enums).await;
                 if is_truthy(&cond_value) {
                     break;
                 }
@@ -2388,7 +2609,7 @@ fn execute_stmt(
         }
         Stmt::Match { expr, cases, default, match_type } => {
             let _expr_type = infer_expr_type(expr, env, fns, models, model_methods, enums);
-            let val = eval_expr(expr, env, fns, models, roles, model_methods, enums);
+            let val = eval_expr(expr, env, fns, models, roles, model_methods, enums).await;
             let mut matched = false;
             
             for (patterns, stmts) in cases {
@@ -2396,7 +2617,7 @@ fn execute_stmt(
                     if let Some(new_env) = match_pattern(&val, pattern, env) {
                         matched = true;
                         let mut pattern_env = new_env;
-                        let flow = execute_block(stmts, &mut pattern_env, fns, models, roles, model_methods, enums, None);
+                        let flow = execute_block(stmts, &mut pattern_env, fns, models, roles, model_methods, enums, None).await;
                         
                         match (match_type, flow) {
                             (MatchType::One, ControlFlow::Next) => continue,
@@ -2411,7 +2632,7 @@ fn execute_stmt(
             // No match found, execute default if it exists
             if !matched || *match_type == MatchType::Any {
                 if let Some(default_stmts) = default {
-                    execute_block(default_stmts, env, fns, models, roles, model_methods, enums, None)
+                    execute_block(default_stmts, env, fns, models, roles, model_methods, enums, None).await
                 } else {
                     ControlFlow::None
                 }
@@ -2445,7 +2666,7 @@ fn execute_stmt(
             let val = match expr_opt {
                 Some(e) => {
                     let _type = infer_expr_type(e, env, fns, models, model_methods, enums);
-                    eval_expr(e, env, fns, models, roles, model_methods, enums)
+                    eval_expr(e, env, fns, models, roles, model_methods, enums).await
                 }
                 None => Value::Void,
             };
@@ -2466,7 +2687,8 @@ fn execute_stmt(
     }
 }
 
-fn execute_block(
+#[async_recursion]
+async fn execute_block(
     stmts: &[Stmt],
     env: &mut HashMap<String, (AssignKind, Value, Ownership, Moved)>,
     fns: &mut HashMap<String, FnDef>,
@@ -2477,7 +2699,19 @@ fn execute_block(
     expected_return_type: Option<&Type>,
 ) -> ControlFlow {
     for stmt in stmts {
-        let flow = execute_stmt(stmt, env, fns, models, roles, model_methods, enums, expected_return_type);
+        // Check for illegal top-level assignments
+        if let Stmt::Assign { kind, .. } = stmt {
+            if matches!(kind, AssignKind::Lit | AssignKind::Static) {
+                let kind_str = match kind {
+                    AssignKind::Lit => "lit",
+                    AssignKind::Static => "static",
+                    _ => unreachable!(),
+                };
+                panic!("Can only assign with '{}' at the top-level of a file.", kind_str);
+            }
+        }
+
+        let flow = execute_stmt(stmt, env, fns, models, roles, model_methods, enums, expected_return_type).await;
         match flow {
             ControlFlow::Break | ControlFlow::Next | ControlFlow::Return(_) => return flow,
             ControlFlow::None => {}
@@ -2486,7 +2720,7 @@ fn execute_block(
     ControlFlow::None
 }
 
-fn run(stmts: &[Stmt]) {
+async fn run(stmts: &[Stmt]) {
     let mut env: HashMap<String, (AssignKind, Value, Ownership, Moved)> = HashMap::new();
     let mut fns: HashMap<String, FnDef> = HashMap::new();
     let mut models: HashMap<String, ModelDef> = HashMap::new();
@@ -2553,7 +2787,7 @@ fn run(stmts: &[Stmt]) {
                     &mut model_methods,
                     &enums,
                     None
-                );
+                ).await;
             }
             _ => {
                 panic!("Top-level statements must be model/function definitions or lit/static assignments");
@@ -2577,7 +2811,7 @@ fn run(stmts: &[Stmt]) {
                 &mut model_methods,
                 &enums,
                 main_fn.return_type.as_ref()
-            );
+            ).await;
         } else {
             panic!("The main() function must have a body.");
         }

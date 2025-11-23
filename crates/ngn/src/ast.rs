@@ -1,4 +1,7 @@
 use std::collections::HashMap;
+use tokio::sync::mpsc;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)]
@@ -20,6 +23,7 @@ pub enum Type {
     Regex,
     Generic(String),
     Enum(String, Vec<Type>),
+    Channel(Box<Type>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -35,7 +39,7 @@ pub struct EnumDef {
     pub variants: Vec<EnumVariant>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Value {
     I64(i64),
     I32(i32),
@@ -52,6 +56,25 @@ pub enum Value {
     Void,
     Regex(String),
     EnumValue(String, String, Option<Box<Value>>),
+    Channel(mpsc::Sender<Value>, Arc<Mutex<mpsc::Receiver<Value>>>, Type),
+}
+
+// Implement PartialEq manually to skip Channel comparison
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Value::I64(a), Value::I64(b)) => a == b,
+            (Value::I32(a), Value::I32(b)) => a == b,
+            (Value::U64(a), Value::U64(b)) => a == b,
+            (Value::U32(a), Value::U32(b)) => a == b,
+            (Value::F64(a), Value::F64(b)) => a == b,
+            (Value::F32(a), Value::F32(b)) => a == b,
+            (Value::String(a), Value::String(b)) => a == b,
+            // ... implement for other simple types ...
+            (Value::Channel(_, _, _), Value::Channel(_, _, _)) => false, // Channels are never "equal"
+            _ => false, // Different types are not equal
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -94,6 +117,10 @@ pub enum Expr {
     Closure(Box<ClosureDef>),
     Regex(String),
     EnumVariant { enum_name: String, variant: String, data: Option<Box<Expr>> },
+    Thread(Box<Expr>),            // thread { ... }
+    MakeChannel(Option<Type>),   // channel()
+    Send(Box<Expr>, Box<Expr>),  // channel <- val
+    Receive(Box<Expr>),          // <- channel
 }
 
 #[derive(Debug, Clone, PartialEq)]
