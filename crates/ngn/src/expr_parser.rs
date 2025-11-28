@@ -317,41 +317,49 @@ impl ExprParser {
                 self.advance();
                 Ok(Expr::Bool(false))
             }
-            Some(Token::Ident(name)) => {
-                if name == "channel" {
-                    self.advance();
-                    if matches!(self.current_token(), Some(Token::LParen)) {
-                        self.advance(); // (
-                        self.expect(Token::RParen)?; // )
-                        
-                        // Check for optional type : Type
-                        let type_hint = if matches!(self.current_token(), Some(Token::Colon)) {
-                            self.advance();
-                            
-                            let (ty, _ownership) = parse_type(&mut self.tokens)?;
-                            Some(ty)
-                        } else {
-                            None
-                        };
-                        return Ok(Expr::MakeChannel(type_hint));
-                    }
-                }
-
-                if name == "thread" {
-                    self.advance();
-                    if matches!(self.current_token(), Some(Token::LParen)) {
+            Some(Token::Channel) => {
+                self.advance();
+                if matches!(self.current_token(), Some(Token::LParen)) {
+                    self.advance(); // (
+                    self.expect(Token::RParen)?; // )
+                    
+                    let type_hint = if matches!(self.current_token(), Some(Token::Colon)) {
                         self.advance();
-                        let args = self.parse_fn_args()?;
-                        self.expect(Token::RParen)?;
-                        
-                        // Create a Thread expr wrapping the closure call
-                        if args.len() == 1 {
-                            return Ok(Expr::Thread(Box::new(args[0].clone())));
-                        }
-                        return Ok(Expr::Call { name, args });
-                    }
+                        let (ty, _ownership) = parse_type(&mut self.tokens)?;
+                        Some(ty)
+                    } else {
+                        None
+                    };
+                    return Ok(Expr::MakeChannel(type_hint));
                 }
-
+                // Used as identifier (e.g., variable named channel)
+                Ok(Expr::Var("channel".to_string()))
+            }
+            Some(Token::Thread) => {
+                self.advance();
+                if matches!(self.current_token(), Some(Token::LParen)) {
+                    self.advance();
+                    let args = self.parse_fn_args()?;
+                    self.expect(Token::RParen)?;
+                    
+                    if args.len() == 1 {
+                        return Ok(Expr::Thread(Box::new(args[0].clone())));
+                    }
+                    return Ok(Expr::Call { name: "thread".to_string(), args });
+                }
+                Ok(Expr::Var("thread".to_string()))
+            }
+            Some(Token::Sleep) => {
+                self.advance();
+                if matches!(self.current_token(), Some(Token::LParen)) {
+                    self.advance();
+                    let args = self.parse_fn_args()?;
+                    self.expect(Token::RParen)?;
+                    return Ok(Expr::Call { name: "sleep".to_string(), args });
+                }
+                Ok(Expr::Var("sleep".to_string()))
+            }
+            Some(Token::Ident(name)) => {
                 if name == "state" {
                     self.advance();
                     if matches!(self.current_token(), Some(Token::LParen)) {

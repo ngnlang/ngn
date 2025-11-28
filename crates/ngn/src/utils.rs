@@ -51,6 +51,10 @@ where
             advance(tokens);
             "fn".to_string()
         }
+        Some(Token::Channel) => {
+            advance(tokens);
+            "channel".to_string()
+        }
         other => return Err(format!("Expected type identifier, got {:?}", other)),
     };
 

@@ -133,11 +133,11 @@ impl Parser {
             Some(Token::Role) => self.parse_role_def(),
             Some(Token::Extend) => self.parse_extend_stmt(),
             Some(Token::Return) => self.parse_return_stmt(),
-            Some(Token::LArrow) => {
+            Some(Token::LArrow) | Some(Token::Sleep) => {
                 let expr = self.parse_expr()?;
                 Ok(Stmt::ExprStmt(expr))
             }
-            Some(Token::Ident(name)) if name == "thread" => {
+            Some(Token::Thread) => {
                 self.advance(); // consume 'thread'
                 
                 // Check for invocation: ( closure )
@@ -959,6 +959,19 @@ impl Parser {
             Some(Token::Ident(name)) => {
                 self.advance();
                 Ok(name)
+            }
+            // Contextual keywords - valid as identifiers in some contexts
+            Some(Token::Sleep) => {
+                self.advance();
+                Ok("sleep".to_string())
+            }
+            Some(Token::Thread) => {
+                self.advance();
+                Ok("thread".to_string())
+            }
+            Some(Token::Channel) => {
+                self.advance();
+                Ok("channel".to_string())
             }
             other => Err(format!("Expected identifier, got {:?}", other)),
         }
