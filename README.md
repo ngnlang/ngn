@@ -818,6 +818,233 @@ Here are the ways to manipulate an object's fields, based on the above example c
 - method, by borrowed `var`s: `user.changeName("Stacie")` only if the method mutates via `rebind this.name = name`
 - by `const`, `lit`, `static` variables: ❌ not allowed, as these are all strictly immutable
 
+## Threads/Async
+
+
+## Channels
+Send and receive data. You must provide a data type for the channel.
+
+```ngn
+fn main() {
+    // You can only assign channels with "const"
+    const c = channel(): string
+
+    // Send a message
+    c <- "first"
+
+    // Close the channel
+    close(c)
+
+    // Assign channel output to a variable
+    // Receiving "first" will still work here, because of buffering
+    const msg = <- c
+    print("Received: {msg}")
+
+    // This should FAIL because the channel is closed and empty.
+    const fail = <- c
+}
+```
+
+Channels can even contain other channels, and you can send/receive data within those inner channels.
+```ngn
+fn main() {
+    const request_line = channel(): channel<string>
+
+    // (See next section for details on threads)
+    thread(|| {
+        // Thread waits for inbound data on the request_line channel,
+        // which happens to be another channel that we assign to a constant.
+        const reply_channel = <- request_line
+        
+        // Reply back on the private channel
+        reply_channel <- "Your order is ready!"
+    })
+
+    // Create a private response channel
+    const private_channel = channel(): string
+    
+    // Send private channel, which the worker is waiting for
+    request_line <- private_channel
+    
+    // Wait for the private reply
+    print(<- private_channel)
+}
+```
+
+You can even send a closure to a channel:
+```ngn
+fn main() {
+    const job_queue = channel(): fn
+    const done = channel(): bool
+
+    thread(|| {
+        print("Worker started")
+        while (true) {
+            match (<-? job_queue) {
+                Value(task) => task(42), 
+                Null => break
+            }
+        }
+        print("Worker finished")
+        
+        done <- true
+    })
+
+    job_queue <- |n: i64| { print("Task A executing with {n}") }
+    
+    job_queue <- |n: i64| { 
+        const res = n * 2
+        print("Task B executing: {n} * 2 = {res}") 
+    }
+    
+    close(job_queue)
+    print("Jobs sent")
+    
+    <- done
+    print("Main exiting")
+}
+```
+
+## Threads - Concurrency and Parallelism
+Allows you to do async work while, optionally, continuing to do work in the main thread. Threads take a closure with no parameters, but have access to their surrounding scope.
+
+Standalone threads are risky because as soon as the main program ends, all unfinished threads are killed. In the below example, `setData(value)` may never finish.
+```ngn
+fn main() {
+    const value = 100
+
+    thread(|| {
+        setData(value)
+    })
+
+    // Continue doing other work while the thread runs
+    print(value)
+}
+```
+In such cases, use a channel to await the thread.
+```ngn
+fn main() {
+    const value = 100
+    const done = channel(): bool
+
+    thread(|| {
+        setData(value)
+        done <- true
+    })
+
+    // Continue doing other work while the thread runs
+    print("Value: {value}")
+
+    // Now wait until we receive a message, indicating thread work is done
+    <- done
+}
+```
+Threads may run in parallel or sequentially unordered, but you can control the order in which you wait on their results.
+```ngn
+fn main() {
+    print("1. Main started")
+    
+    // Create a channel for each thread
+    const c = channel(): Result<string, string>
+    const d = channel(): Result<string, string>
+    
+    // Create a thread, to do some async work
+    thread(|| {
+        print("  2c. Thread c started (sleeping...)")
+        sleep(2000)
+        
+        print("  3c. Thread c sending message")
+        const result = Ok("Hello from channel c!")
+        c <- result
+
+        print("  4c. Thread c finished")
+    })
+
+    // Create a thread, to do some async work
+    thread(|| {
+        print("  2d. Thread d started (sleeping...)")
+        sleep(2000)
+        
+        print("  3d. Thread d sending message")
+
+        d <- Error("Oh this is bad channel d!")
+
+        print("  4d. Thread d finished")
+    })
+    
+    print("5. Main doing other work while thread runs...")
+
+    // This should block until the "c" thread sends a message
+    const msgc = <- c
+    print("6c. Main received, from thread c: {msgc}")
+
+    // This should block until the "d" thread sends a message
+    const msgd = <- d
+    print("6d. Main received, from thread d: {msgd}")
+}
+```
+
+If you're unsure how much data is coming, use a `while` loop and then close the channel at the end of the input. Here, we're simulating "unknown" amounts of data.
+
+> In future code, the way to close a channel will likely become `<channel-name>.close()`
+```ngn
+fn main() {
+    const c = channel(): string
+
+    thread(|| {
+        c <- "A"
+        c <- "B"
+        c <- "C"
+        close(c)
+    })
+
+    // Loop forever until break
+    // because we don't know how much data is coming
+    while (true) {
+        // adding the ? means we might receive data
+        match (<-? c) {
+            Value(msg) => print("Got: {msg}"),
+            Null => {
+                print("Channel closed. Exiting loop.")
+                break
+            },
+        }
+    }
+    
+    print("Done")
+}
+```
+
+### Shared, mutable state
+It's safe to sequentially mutate shared data outside of threads or within a single thread. However, if more than one thread can mutate shared data, use `state()` to declare the variable. This gives you safe, atomic operations within your threads by using variable methods.
+```ngn
+fn main() {
+    var counter =< state(0)
+    const done = channel(): bool
+    
+    thread(|| {
+        // Pass a closure that mutates the data.
+        // The closure receives the current value of the data via a param.
+        counter.update(|n| n + 10)
+        print("added 10")
+        done <- true
+    })
+    
+    thread(|| {
+        counter.update(|n| n + 5)
+        print("added 5")
+        done <- true
+    })
+    
+    <-done
+    <-done
+    print(counter)  // Always 15
+}
+```
+If needed, you also have access to these variable methods when using `state()`:
+- `.get()`, gets the current value
+- `.set()`, sets the current value - which replaces the existing one. Be careful, as it can be tricky to ensure proper mutation order when coupled with `.update()`.
+
 ## Types
 
 - `string`
