@@ -21,7 +21,7 @@ use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() {
-    let source = fs::read_to_string("sleep.ngn")
+    let source = fs::read_to_string("main.ngn")
         .expect("Failed to read ngn file");
 
     let tokens = lexer::tokenize(&source);
@@ -533,17 +533,6 @@ fn infer_expr_type(
                 return Type::Void;
             }
 
-            if name == "close" {
-                if args.len() != 1 {
-                    panic!("Type Error: close() takes exactly 1 argument");
-                }
-                let arg_type = infer_expr_type(&args[0], env, fns, models, model_methods, enums);
-                if !matches!(arg_type, Type::Channel(_)) {
-                    panic!("Type Error: close() expects a channel, got {:?}", arg_type);
-                }
-                return Type::Void;
-            }
-
             // Check if it's a function value in the environment
             if let Some((_, Value::Function(fn_def), _ownership, _moved)) = env.get(name) {
                 fn_def.return_type.clone().unwrap_or(Type::Void)
@@ -579,12 +568,17 @@ fn infer_expr_type(
             }
         }
         Expr::MethodCall { object, method, args: _ } => {
-            // Handle StateActor methods
+            // Handle StateActor and Channel methods
             if let Expr::Var(var_name) = object.as_ref() {
                 if let Some((_, Value::StateActor(_, _, inner_type), _, _)) = env.get(var_name) {
                     match method.as_str() {
                         "get" | "set" | "update" => return inner_type.clone(),
                         _ => panic!("Unknown state method: {}", method),
+                    }
+                } else if let Some((_, Value::Channel(_, _, inner_type), _, _)) = env.get(var_name) {
+                    match method.as_str() {
+                        "close" => return inner_type.clone(),
+                        _ => panic!("Unknown channel method: {}", method),
                     }
                 }
             }
@@ -1708,17 +1702,6 @@ async fn eval_expr(
                 tokio::time::sleep(tokio::time::Duration::from_millis(ms)).await;
                 return Value::Void;
             }
-            if name == "close" {
-                let arg_val = eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await;
-                
-                if let Value::Channel(_, rx_arc, _) = arg_val {
-                    let mut rx = rx_arc.lock().await;
-                    rx.close(); // Tokio method: closes channel, prevents new sends
-                    return Value::Void;
-                } else {
-                    panic!("Runtime Error: close() called on non-channel");
-                }
-            }
 
             if let Some((_, Value::Closure(closure), _ownership, _moved)) = env.get(name) {
                 let closure = closure.clone();
@@ -1891,7 +1874,7 @@ async fn eval_expr(
             }
         }
         Expr::MethodCall { object, method, args } => {
-            // Handle StateActor methods
+            // Handle StateActor and Channel methods
             if let Expr::Var(var_name) = object.as_ref() {
                 if let Some((_, Value::StateActor(tx, rx, inner_type), _, _)) = env.get(var_name) {
                     let tx = tx.clone();
@@ -1928,6 +1911,15 @@ async fn eval_expr(
                             return rx_guard.recv().await.expect("State actor closed");
                         }
                         _ => panic!("Unknown state method: {}", method),
+                    }
+                } else if let Some((_, Value::Channel(_, rx_arc, _), _, _)) = env.get(var_name) {
+                    match method.as_str() {
+                        "close" => {
+                            let mut rx = rx_arc.lock().await;
+                            rx.close(); // Tokio method: closes channel, prevents new sends
+                            return Value::Void;
+                        },
+                        _ => panic!("Unknown channel method: {}", method)
                     }
                 }
             }
