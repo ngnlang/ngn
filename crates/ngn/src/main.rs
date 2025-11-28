@@ -21,7 +21,7 @@ use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() {
-    let source = fs::read_to_string("main.ngn")
+    let source = fs::read_to_string("sleep.ngn")
         .expect("Failed to read ngn file");
 
     let tokens = lexer::tokenize(&source);
@@ -522,6 +522,17 @@ fn infer_expr_type(
         }
         Expr::Thread(_) => Type::Void, // must be before Expr::Call
         Expr::Call { name, args } => {
+            if name == "sleep" {
+                if args.len() != 1 {
+                    panic!("Type Error: sleep() takes exactly 1 argument");
+                }
+                let arg_type = infer_expr_type(&args[0], env, fns, models, model_methods, enums);
+                if !matches!(arg_type, Type::I64 | Type::I32 | Type::U64 | Type::U32) {
+                    panic!("Type Error: sleep() expects a number, got {:?}", arg_type);
+                }
+                return Type::Void;
+            }
+
             if name == "close" {
                 if args.len() != 1 {
                     panic!("Type Error: close() takes exactly 1 argument");
@@ -1682,6 +1693,21 @@ async fn eval_expr(
             Value::StateActor(cmd_tx, Arc::new(Mutex::new(resp_rx)), inner_type)
         }
         Expr::Call { name, args } => {
+            if name == "sleep" {
+                if args.is_empty() {
+                    panic!("sleep() requires a duration in milliseconds");
+                }
+                let duration = eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await;
+                let ms = match duration {
+                    Value::I64(n) => n as u64,
+                    Value::I32(n) => n as u64,
+                    Value::U64(n) => n,
+                    Value::U32(n) => n as u64,
+                    _ => panic!("sleep() requires an integer (milliseconds)"),
+                };
+                tokio::time::sleep(tokio::time::Duration::from_millis(ms)).await;
+                return Value::Void;
+            }
             if name == "close" {
                 let arg_val = eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await;
                 
