@@ -21,7 +21,7 @@ use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() {
-    let source = fs::read_to_string("sharedstate.ngn")
+    let source = fs::read_to_string("main.ngn")
         .expect("Failed to read ngn file");
 
     let tokens = lexer::tokenize(&source);
