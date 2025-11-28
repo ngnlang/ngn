@@ -833,7 +833,7 @@ fn main() {
     c <- "first"
 
     // Close the channel
-    close(c)
+    c.close()
 
     // Assign channel output to a variable
     // Receiving "first" will still work here, because of buffering
@@ -897,7 +897,7 @@ fn main() {
         print("Task B executing: {n} * 2 = {res}") 
     }
     
-    close(job_queue)
+    job_queue.close()
     print("Jobs sent")
     
     <- done
@@ -986,7 +986,6 @@ fn main() {
 
 If you're unsure how much data is coming, use a `while` loop and then close the channel at the end of the input. Here, we're simulating "unknown" amounts of data.
 
-> In future code, the way to close a channel will likely become `<channel-name>.close()`
 ```ngn
 fn main() {
     const c = channel(): string
@@ -995,7 +994,7 @@ fn main() {
         c <- "A"
         c <- "B"
         c <- "C"
-        close(c)
+        c.close()
     })
 
     // Loop forever until break
