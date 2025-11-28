@@ -57,6 +57,11 @@ pub enum Value {
     Regex(String),
     EnumValue(String, String, Option<Box<Value>>),
     Channel(mpsc::Sender<Value>, Arc<Mutex<mpsc::Receiver<Value>>>, Type),
+    StateActor(
+        mpsc::Sender<Value>,
+        Arc<Mutex<mpsc::Receiver<Value>>>,
+        Type,
+    ),
 }
 
 // Implement PartialEq manually to skip Channel comparison
@@ -122,6 +127,7 @@ pub enum Expr {
     Send(Box<Expr>, Box<Expr>),
     Receive(Box<Expr>),
     MaybeReceive(Box<Expr>),
+    MakeState(Box<Expr>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

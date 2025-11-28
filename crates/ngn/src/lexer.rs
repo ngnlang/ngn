@@ -56,6 +56,7 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
                     
                     let end = chars.peek().map(|(i, _)| *i).unwrap_or(input.len());
                     tokens.push((start, Token::Comment(comment), end));
+                    tokens.push((end, Token::Newline, end + 1));
                     continue;
                 }
 

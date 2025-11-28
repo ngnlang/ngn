@@ -11,7 +11,7 @@ use regex::Regex as RegexLib;
 use std::fs;
 use std::collections::HashSet;
 use crate::ast::{
-    ClosureValue, EnumDef, FnDef, InterpolationPart, MethodMutationType, ModelDef, Moved, Ownership, Pattern, RoleDef, Type
+    ClosureDef, ClosureValue, EnumDef, FnDef, InterpolationPart, MethodMutationType, ModelDef, Moved, Ownership, Pattern, RoleDef, Type
 };
 
 use async_recursion::async_recursion;
@@ -21,7 +21,7 @@ use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() {
-    let source = fs::read_to_string("main.ngn")
+    let source = fs::read_to_string("sharedstate.ngn")
         .expect("Failed to read ngn file");
 
     let tokens = lexer::tokenize(&source);
@@ -127,6 +127,7 @@ fn format_value(v: &Value) -> String {
             }
         },
         Value::Channel(_, _, _) => "<channel>".to_string(),
+        Value::StateActor(_, _, _) => "<state>".to_string(),
     }
 }
 
@@ -259,6 +260,7 @@ fn is_truthy(v: &Value) -> bool {
         Value::Regex(_) => true,
         Value::EnumValue(_, _, _) => true,
         Value::Channel(_, _, _) => true,
+        Value::StateActor(_, _, _) => true,
     }
 }
 
@@ -311,8 +313,47 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::String(x), Value::String(y)) => x == y,
         (Value::Bool(x), Value::Bool(y)) => x == y,
         (Value::Array(x), Value::Array(y)) => x == y,
+        (Value::StateActor(_, _, _), Value::StateActor(_, _, _)) => false, // Actors are never equal
         // Todo - models?
         _ => false,
+    }
+}
+
+fn make_identity_closure(inner_type: &Type) -> Value {
+    Value::Closure(ClosureValue {
+        def: Box::new(ClosureDef {
+            params: vec![("n".to_string(), Some(inner_type.clone()))],
+            body: vec![Stmt::Return(Some(Expr::Var("n".to_string())))],
+            return_type: Some(inner_type.clone()),
+        }),
+        captured_env: HashMap::new(),
+        live_vars: vec![],
+    })
+}
+
+fn make_const_closure(value: Value, inner_type: &Type) -> Value {
+    Value::Closure(ClosureValue {
+        def: Box::new(ClosureDef {
+            params: vec![("_".to_string(), Some(inner_type.clone()))],
+            body: vec![Stmt::Return(Some(value_to_expr(&value)))],
+            return_type: Some(inner_type.clone()),
+        }),
+        captured_env: HashMap::new(),
+        live_vars: vec![],
+    })
+}
+
+fn value_to_expr(v: &Value) -> Expr {
+    match v {
+        Value::I64(n) => Expr::I64(*n),
+        Value::I32(n) => Expr::I32(*n),
+        Value::U64(n) => Expr::U64(*n),
+        Value::U32(n) => Expr::U32(*n),
+        Value::F64(n) => Expr::F64(*n),
+        Value::F32(n) => Expr::F32(*n),
+        Value::String(s) => Expr::String(s.clone()),
+        Value::Bool(b) => Expr::Bool(*b),
+        _ => panic!("Cannot convert {:?} to expr", v),
     }
 }
 
@@ -387,6 +428,7 @@ fn infer_value_type(v: &Value) -> Type {
             // For now, return a generic channel.
             Type::Channel(Box::new(inner_type.clone()))
         }
+        Value::StateActor(_, _, inner_type) => inner_type.clone(),
     }
 }
 
@@ -526,6 +568,16 @@ fn infer_expr_type(
             }
         }
         Expr::MethodCall { object, method, args: _ } => {
+            // Handle StateActor methods
+            if let Expr::Var(var_name) = object.as_ref() {
+                if let Some((_, Value::StateActor(_, _, inner_type), _, _)) = env.get(var_name) {
+                    match method.as_str() {
+                        "get" | "set" | "update" => return inner_type.clone(),
+                        _ => panic!("Unknown state method: {}", method),
+                    }
+                }
+            }
+
             // Check for static method on model
             if let Expr::Var(model_name) = &**object {
                 if models.contains_key(model_name) {
@@ -644,6 +696,10 @@ fn infer_expr_type(
             } else {
                 panic!("Type Error: Right side of <-? must be a channel");
             }
+        }
+        Expr::MakeState(expr) => {
+            // Just infer the type of the inner expression - don't evaluate
+            infer_expr_type(expr, env, fns, models, model_methods, enums)
         }
     }
 }
@@ -929,6 +985,86 @@ async fn call_closure(
     }
 }
 
+#[async_recursion]
+async fn call_closure_with_values(
+    closure: &ClosureValue,
+    arg_values: &[Value],
+    outer_env: &mut HashMap<String, (AssignKind, Value, Ownership, Moved)>,
+    fns: &mut HashMap<String, FnDef>,
+    models: &mut HashMap<String, ModelDef>,
+    roles: &mut HashMap<String, RoleDef>,
+    model_methods: &mut HashMap<(String, String), FnDef>,
+    enums: &HashMap<String, EnumDef>,
+) -> Value {
+    let mut closure_env = closure.captured_env.clone();
+
+    for var_name in &closure.live_vars {
+        if let Some(current_value) = outer_env.get(var_name) {
+            closure_env.insert(var_name.clone(), current_value.clone());
+        }
+    }
+    
+    // Bind parameters from pre-evaluated values
+    for (i, (param_name, param_type)) in closure.def.params.iter().enumerate() {
+        if i < arg_values.len() {
+            let arg_val = arg_values[i].clone();
+
+            if let Some(expected_type) = param_type {
+                let actual_type = infer_value_type(&arg_val);
+                if !types_compatible(expected_type, &actual_type) {
+                    panic!(
+                        "Closure param '{}' expects {}, got {}",
+                        param_name,
+                        format_type_for_error(expected_type),
+                        format_type_for_error(&actual_type)
+                    );
+                }
+            }
+
+            closure_env.insert(
+                param_name.clone(),
+                (AssignKind::Var, arg_val, Ownership::Borrowed, Moved::False),
+            );
+        } else {
+            panic!("Closure expects {} arguments, got {}", closure.def.params.len(), arg_values.len());
+        }
+    }
+    
+    let flow = execute_block(
+        &closure.def.body,
+        &mut closure_env,
+        fns,
+        models,
+        roles,
+        model_methods,
+        enums,
+        closure.def.return_type.as_ref(),
+    ).await;
+
+    for rebound_var in &closure.live_vars {
+        if let Some(value) = closure_env.get(rebound_var) {
+            outer_env.insert(rebound_var.clone(), value.clone());
+        }
+    }
+    
+    match flow {
+        ControlFlow::Return(val) => {
+            if let Some(expected_return_type) = &closure.def.return_type {
+                let actual_type = infer_value_type(&val);
+                if !types_compatible(expected_return_type, &actual_type) {
+                    panic!(
+                        "Closure return type mismatch: expected {}, got {}",
+                        format_type_for_error(expected_return_type),
+                        format_type_for_error(&actual_type)
+                    );
+                }
+            }
+            val
+        },
+        _ => Value::Void,
+    }
+}
+
 fn find_rebound_vars(stmts: &[Stmt]) -> Vec<String> {
     let mut rebound = Vec::new();
     
@@ -1083,6 +1219,9 @@ fn collect_vars_from_expr(e: &Expr, vars: &mut Vec<String>) {
                     _ => {}
                 }
             }
+        }
+        Expr::MakeState(expr) => {
+            collect_vars_from_expr(expr, vars);
         }
         _ => {}
     }
@@ -1303,6 +1442,13 @@ async fn eval_expr(
                 if let Moved::True = *moved {
                     panic!("Variable '{}' has been moved", name);
                 }
+                // Auto-unwrap StateActor for reading (call get())
+                if let Value::StateActor(tx, rx, inner_type) = v {
+                    let identity = make_identity_closure(inner_type);
+                    tx.send(identity).await.expect("State actor closed");
+                    let mut rx_guard = rx.lock().await;
+                    return rx_guard.recv().await.expect("State actor closed");
+                }
                 v.clone()
             } else if let Some(fn_def) = fns.get(name) {
                 // If it's a function in fns, return it as a Value::Function
@@ -1464,20 +1610,76 @@ async fn eval_expr(
             let chan_val = eval_expr(chan_expr, env, fns, models, roles, model_methods, enums).await;
 
             if let Value::Channel(_, rx_arc, _) = chan_val {
-                let mut rx = rx_arc.lock().await;
-                match rx.recv().await {
-                    Some(val) => {
-                        // Maybe::Value(val)
-                        Value::EnumValue("Maybe".to_string(), "Value".to_string(), Some(Box::new(val)))
-                    },
-                    None => {
-                        // Maybe::Null
-                        Value::EnumValue("Maybe".to_string(), "Null".to_string(), None)
+                loop {
+                    let result = {
+                        let mut rx = rx_arc.lock().await;
+                        rx.try_recv()
+                    }; // Lock released here
+                    
+                    match result {
+                        Ok(val) => {
+                            return Value::EnumValue("Maybe".to_string(), "Value".to_string(), Some(Box::new(val)));
+                        }
+                        Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                            // Check if channel is closed
+                            let is_closed = {
+                                let rx = rx_arc.lock().await;
+                                rx.is_closed()
+                            };
+                            if is_closed {
+                                return Value::EnumValue("Maybe".to_string(), "Null".to_string(), None);
+                            }
+                            // Yield and retry
+                            tokio::task::yield_now().await;
+                        }
+                        Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                            return Value::EnumValue("Maybe".to_string(), "Null".to_string(), None);
+                        }
                     }
                 }
             } else {
                 panic!("Runtime Error: Cannot receive from non-channel type");
             }
+        }
+        Expr::MakeState(initial_expr) => {
+            let initial = eval_expr(initial_expr, env, fns, models, roles, model_methods, enums).await;
+            let inner_type = infer_value_type(&initial);
+            
+            // Create channels
+            let (cmd_tx, mut cmd_rx) = mpsc::channel::<Value>(32);
+            let (resp_tx, resp_rx) = mpsc::channel::<Value>(32);
+            
+            // Clone environment for actor
+            let mut actor_env = env.clone();
+            let mut actor_fns = fns.clone();
+            let mut actor_models = models.clone();
+            let mut actor_roles = roles.clone();
+            let mut actor_methods = model_methods.clone();
+            let actor_enums = enums.clone();
+            
+            // Spawn actor
+            tokio::spawn(async move {
+                let mut value = initial;
+                
+                while let Some(cmd) = cmd_rx.recv().await {
+                    if let Value::Closure(closure) = cmd {
+                        let new_val = call_closure_with_values(
+                            &closure,
+                            &[value.clone()],
+                            &mut actor_env,
+                            &mut actor_fns,
+                            &mut actor_models,
+                            &mut actor_roles,
+                            &mut actor_methods,
+                            &actor_enums,
+                        ).await;
+                        value = new_val.clone();
+                        let _ = resp_tx.send(new_val).await;
+                    }
+                }
+            });
+            
+            Value::StateActor(cmd_tx, Arc::new(Mutex::new(resp_rx)), inner_type)
         }
         Expr::Call { name, args } => {
             if name == "close" {
@@ -1663,6 +1865,47 @@ async fn eval_expr(
             }
         }
         Expr::MethodCall { object, method, args } => {
+            // Handle StateActor methods
+            if let Expr::Var(var_name) = object.as_ref() {
+                if let Some((_, Value::StateActor(tx, rx, inner_type), _, _)) = env.get(var_name) {
+                    let tx = tx.clone();
+                    let rx = rx.clone();
+                    let inner_type = inner_type.clone();
+                    
+                    match method.as_str() {
+                        "get" => {
+                            let identity = make_identity_closure(&inner_type);
+                            tx.send(identity).await.expect("State actor closed");
+                            let mut rx_guard = rx.lock().await;
+                            return rx_guard.recv().await.expect("State actor closed");
+                        }
+                        "set" => {
+                            if args.is_empty() {
+                                panic!("state.set() requires a value argument");
+                            }
+                            let val = eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await;
+                            let const_closure = make_const_closure(val, &inner_type);
+                            tx.send(const_closure).await.expect("State actor closed");
+                            let mut rx_guard = rx.lock().await;
+                            return rx_guard.recv().await.expect("State actor closed");
+                        }
+                        "update" => {
+                            if args.is_empty() {
+                                panic!("state.update() requires a closure argument");
+                            }
+                            let closure = eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await;
+                            if !matches!(closure, Value::Closure(_)) {
+                                panic!("state.update() requires a closure");
+                            }
+                            tx.send(closure).await.expect("State actor closed");
+                            let mut rx_guard = rx.lock().await;
+                            return rx_guard.recv().await.expect("State actor closed");
+                        }
+                        _ => panic!("Unknown state method: {}", method),
+                    }
+                }
+            }
+
             // Check if it's a static method call on a model type
             if let Expr::Var(model_name) = &**object {
                 if models.contains_key(model_name) {
@@ -2460,6 +2703,12 @@ async fn execute_stmt(
             }
 
             let (kind, existing_val, ownership, _moved) = env.get(name).unwrap().clone();
+            
+            // Disallow direct reassignment of StateActor
+            if matches!(existing_val, Value::StateActor(_, _, _)) {
+                panic!("Cannot reassign state directly. Use .set() or .update()");
+            }
+
             let existing_type = infer_value_type(&existing_val);
 
             match kind {
@@ -2653,6 +2902,13 @@ async fn execute_stmt(
                         let mut pattern_env = new_env;
                         let flow = execute_block(stmts, &mut pattern_env, fns, models, roles, model_methods, enums, None).await;
                         
+                        // Sync modified variables back to outer env
+                        for (name, value) in &pattern_env {
+                            if env.contains_key(name) {
+                                env.insert(name.clone(), value.clone());
+                            }
+                        }
+
                         match (match_type, flow) {
                             (MatchType::One, ControlFlow::Next) => continue,
                             (MatchType::One, f) => return f,

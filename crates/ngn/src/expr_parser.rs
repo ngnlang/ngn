@@ -351,6 +351,16 @@ impl ExprParser {
                         return Ok(Expr::Call { name, args });
                     }
                 }
+
+                if name == "state" {
+                    self.advance();
+                    if matches!(self.current_token(), Some(Token::LParen)) {
+                        self.advance(); // (
+                        let initial_value = self.parse_assignment()?;
+                        self.expect(Token::RParen)?;
+                        return Ok(Expr::MakeState(Box::new(initial_value)));
+                    }
+                }
                 
                 self.advance();
 
