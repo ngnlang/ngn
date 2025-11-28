@@ -19,6 +19,7 @@ pub enum Token {
     Model, Role, Extend, With,
     Regex(String), Enum, InterpolatedString(Vec<InterpolationToken>),
     LArrow, LArrowMaybe,
+    Thread, Channel, Sleep
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -357,6 +358,9 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
                     "extend" => Token::Extend,
                     "with" => Token::With,
                     "enum" => Token::Enum,
+                    "thread" => Token::Thread,
+                    "channel" => Token::Channel,
+                    "sleep" => Token::Sleep,
                     _ => Token::Ident(ident),
                 };
                 tokens.push((start, token, end));

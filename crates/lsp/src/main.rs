@@ -77,7 +77,7 @@ fn get_semantic_type(
         ngn::Token::LParen | ngn::Token::RParen | ngn::Token::LBracket | ngn::Token::RBracket 
             | ngn::Token::LBrace | ngn::Token::RBrace | ngn::Token::Colon | ngn::Token::Comma 
             | ngn::Token::Period => 6,
-        ngn::Token::Echo | ngn::Token::Print => 8,  // type
+        ngn::Token::Echo | ngn::Token::Print | ngn::Token::Thread | ngn::Token::Channel | ngn::Token::Sleep => 10,  // builtin
         ngn::Token::Ident(_) => {
             if prev_is_class_keyword | is_likely_class {
                 12  // class
