@@ -112,6 +112,43 @@ Therefore, it's best to use `lit` when assigning a small amount of data. If you'
 
 Think about it this way: if you had an array of 1000 numbers defined using `lit`, every single use of it in your code would be replaced with the entire array of data. This would be an inefficient use of memory. Whereas if you define the large array with `static`, ngn stores a single instance of the data in memory and any code references to it are just that, a reference, not the entire data set.
 
+## Types
+
+- `string`
+- `i64`, `i32`, `u64`, `u32`, `f64`, `f32`
+- `boolean`
+- `array`
+- `array<type>`
+- `void`
+
+### explicit
+```ngn
+const thing: string = "one"
+var answer: u64 = 42
+var truth: boolean = false
+const things: array = [1, 2, 3]
+const stuff: array<string> = ["shirt", "hat", "coat"]
+
+fn sideEffects(): void {
+  // do something
+}
+```
+
+### implicit
+Supported for literals and expressions, as well as inside functions (requires explict types for fn params and return).
+
+```ngn
+const thing = "one" // inferred as `string`
+const answer = 42 // inferred as `i64`
+const pi = 3.14 // inferred as `f64`
+
+const result = 3 + 2 // inferred as `i64`
+
+fn add(a: i32, b: i32): i32 {
+  return a + b // inferred as i32
+}
+```
+
 ## `echo`
 Log to the console, without formatting.
 ```ngn
@@ -984,7 +1021,7 @@ fn main() {
 }
 ```
 
-If you're unsure how much data is coming, use a `while` loop and then close the channel at the end of the input. Here, we're simulating "unknown" amounts of data.
+If you're unsure how much data is coming, use a `while` loop, and then close the channel at the end of the input in order to indicate there are no more messages coming. Here, we're simulating "unknown" amounts of data.
 
 ```ngn
 fn main() {
@@ -1043,40 +1080,3 @@ fn main() {
 If needed, you also have access to these variable methods when using `state()`:
 - `.get()`, gets the current value
 - `.set()`, sets the current value - which replaces the existing one. Be careful, as it can be tricky to ensure proper mutation order when coupled with `.update()`.
-
-## Types
-
-- `string`
-- `i64`, `i32`, `u64`, `u32`, `f64`, `f32`
-- `boolean`
-- `array`
-- `array<type>`
-- `void`
-
-### explicit
-```ngn
-const thing: string = "one"
-var answer: u64 = 42
-var truth: boolean = false
-const things: array = [1, 2, 3]
-const stuff: array<string> = ["shirt", "hat", "coat"]
-
-fn sideEffects(): void {
-  // do something
-}
-```
-
-### implicit
-Supported for literals and expressions, as well as inside functions (requires explict types for fn params and return).
-
-```ngn
-const thing = "one" // inferred as `string`
-const answer = 42 // inferred as `i64`
-const pi = 3.14 // inferred as `f64`
-
-const result = 3 + 2 // inferred as `i64`
-
-fn add(a: i32, b: i32): i32 {
-  return a + b // inferred as i32
-}
-```
