@@ -755,14 +755,11 @@ fn types_compatible(expected: &Type, actual: &Type) -> bool {
     }
 }
 
-fn get_arg_ownership(e: &Expr, env: &HashMap<String, (AssignKind, Value, Ownership, Moved)>) -> Ownership {
+fn get_ownership(e: &Expr, env: &HashMap<String, (AssignKind, Value, Ownership, Moved)>) -> Ownership {
     match e {
         Expr::Var(name) => {
             env.get(name).map(|(_, _, o, _)| o.clone()).unwrap_or(Ownership::Borrowed)
         }
-        Expr::String(_) => Ownership::Borrowed,
-        Expr::I64(_) | Expr::I32(_) | Expr::U64(_) | Expr::U32(_) | Expr::F64(_) | Expr::F32(_) => Ownership::Borrowed,
-        Expr::Bool(_) => Ownership::Borrowed,
         Expr::Add(_, _) => Ownership::Owned,  // String concat returns owned
         _ => Ownership::Borrowed,
     }
@@ -1732,7 +1729,7 @@ async fn eval_expr(
             // Bind parameters
             for (i, (param_name, param_type, param_ownership)) in fn_def.params.iter().enumerate() {
                 let arg_expr = &args[i];
-                let ownership = get_arg_ownership(arg_expr, env);  // Helper function
+                let ownership = get_ownership(arg_expr, env);
 
                 let arg_val = if i < args.len() {
                     eval_expr(arg_expr, env, fns, models, roles, model_methods, enums).await
