@@ -184,7 +184,7 @@ impl Parser {
                     _ => Ownership::Owned,
                 }
             },
-            _ => return Err("Expected '=' or '=<' in assignment".to_string()),
+            _ => return Err("Expected '=' in assignment".to_string()),
         };
 
         self.skip_newlines();        

@@ -1672,6 +1672,13 @@ async fn eval_expr(
                     if let Some(new_val_expr) = value {
                         let new_val = eval_expr(new_val_expr, env, fns, models, roles, model_methods, enums).await;
 
+                        // Check mutability
+                        if let Expr::Var(var_name) = object.as_ref() {
+                            if !can_mutate(var_name, env) {
+                                panic!("Cannot mutate field {:?} on immutable {:?}", field, var_name);
+                            }
+                        }
+
                         // Type check the field assignment
                         if let Some(model_def) = models.get(&model_name) {
                             if let Some((_, expected_type)) = model_def.fields.iter().find(|(n, _)| n == field) {
