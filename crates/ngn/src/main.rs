@@ -872,7 +872,7 @@ fn validate_role_compliance(
         let impl_method = methods.iter()
             .find(|m| m.name == required_method.name)
             .unwrap();
-        
+
         if impl_method.params.len() != required_method.params.len() {
             panic!(
                 "Method '{}' signature mismatch: expected {} params, got {}",
@@ -882,7 +882,72 @@ fn validate_role_compliance(
             );
         }
         
-        // TODO: Add return type validation
+        // Validate each param
+        for (i, req_param) in required_method.params.iter().enumerate() {
+            let (req_name, req_type, _) = req_param;
+            
+            // Check if impl has this param
+            let impl_param = match impl_method.params.get(i) {
+                Some(p) => p,
+                None => {
+                    panic!(
+                        "Method '{}' missing required param '{}' at position {}",
+                        required_method.name, req_name, i
+                    );
+                }
+            };
+            
+            let (impl_name, impl_type, _) = impl_param;
+            
+            // Check param name
+            if req_name != impl_name {
+                panic!(
+                    "Method '{}' param {} name mismatch: expected '{}', got '{}'",
+                    required_method.name, i, req_name, impl_name
+                );
+            }
+            
+            // Check param type (if role specifies one)
+            if let Some(expected_type) = req_type {
+                match impl_type {
+                    Some(actual_type) => {
+                        if expected_type != actual_type {
+                            panic!(
+                                "Method '{}' param '{}' type mismatch: expected {:?}, got {:?}",
+                                required_method.name, req_name, expected_type, actual_type
+                            );
+                        }
+                    }
+                    None => {
+                        panic!(
+                            "Method '{}' param '{}' missing type annotation, expected {:?}",
+                            required_method.name, req_name, expected_type
+                        );
+                    }
+                }
+            }
+        }
+        
+        // Validate return type
+        match (&required_method.return_type, &impl_method.return_type) {
+            (Some(expected), Some(actual)) => {
+                if expected != actual {
+                    panic!(
+                        "Method '{}' return type mismatch: expected {:?}, got {:?}",
+                        required_method.name, expected, actual
+                    );
+                }
+            }
+            (Some(expected), None) => {
+                panic!(
+                    "Method '{}' missing return type, expected {:?}",
+                    required_method.name, expected
+                );
+            }
+            (None, _) => {
+                // Role doesn't specify return type, any is fine
+            }
+        }
     }
 }
 
@@ -2887,6 +2952,72 @@ async fn run(stmts: &[Stmt]) {
                 
                 // Register methods
                 for method in methods {
+                    if method.name == "new" {
+                        // Get the model definition
+                        let model_def = models.get(model_name).unwrap_or_else(|| {
+                            panic!("Model '{}' not found", model_name);
+                        });
+                        
+                        // Build a map of method params: name -> type
+                        let method_params: HashMap<String, Option<Type>> = method.params
+                            .iter()
+                            .map(|(name, typ, _)| (name.clone(), typ.clone()))
+                            .collect();
+                        
+                        // Check each model field is represented in new() params
+                        for (field_name, field_type) in &model_def.fields {
+                            match method_params.get(field_name) {
+                                None => {
+                                    panic!(
+                                        "Model '{}' method 'new' missing required param '{}' of type {:?}",
+                                        model_name, field_name, field_type
+                                    );
+                                }
+                                Some(param_type) => {
+                                    match param_type {
+                                        Some(actual_type) => {
+                                            if actual_type != field_type {
+                                                panic!(
+                                                    "Model '{}' method 'new' param '{}' type mismatch: expected {:?}, got {:?}",
+                                                    model_name, field_name, field_type, actual_type
+                                                );
+                                            }
+                                        }
+                                        None => {
+                                            panic!(
+                                                "Model '{}' method 'new' param '{}' missing type annotation, expected {:?}",
+                                                model_name, field_name, field_type
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Check return type against model name
+                        match &method.return_type {
+                            Some(Type::Model(inner_name)) if inner_name != model_name => {
+                                panic!(
+                                    "Model '{}' method 'new' return type mismatch: expected {:?}, got {:?}",
+                                    model_name, model_name, inner_name
+                                );
+                            }
+                            _ => {}
+                        }
+                        
+                        // Warn about extra params not in model
+                        for (param_name, _) in &method_params {
+                            let field_exists = model_def.fields.iter().any(|(f, _)| f == param_name);
+                            if !field_exists {
+                                panic!(
+                                    "Warning: Model '{}' method 'new' has param '{}' not in model fields",
+                                    model_name, param_name
+                                );
+                            }
+                        }
+                    }
+                    
+                    
                     model_methods.insert(
                         (model_name.clone(), method.name.clone()),
                         method.clone(),
