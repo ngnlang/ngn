@@ -112,7 +112,6 @@ pub enum Expr {
     CompoundAssign { name: String, op: String, value: Box<Expr> },
     Var(String),
     Const(String), // dead code
-    Lit(String), // dead code
     Static(String), // dead code
     Call { name: String, args: Vec<Expr> },
     InterpolatedString(Vec<InterpolationPart>),
@@ -136,8 +135,6 @@ pub enum Stmt {
     Print(Expr),
     Assign { kind: AssignKind, declared_type: Option<Type>, name: String, value: Expr, ownership: Ownership },
     Reassign { name: String, value: Expr },
-    Rebind { name: String, value: Expr },
-    RebindField { object: String, field: String, value: Expr },
     ExprStmt(Expr),
     If { 
         condition: Expr, 
@@ -173,7 +170,6 @@ pub enum Stmt {
 pub enum AssignKind {
     Var,
     Const,
-    Lit,
     Static,
 }
 
@@ -231,7 +227,7 @@ pub struct RoleDef {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClosureDef {
-    pub params: Vec<(String, Option<Type>)>,
+    pub params: Vec<(String, Option<(Type, Ownership)>)>,
     pub body: Vec<Stmt>,
     pub return_type: Option<Type>,
 }
@@ -247,8 +243,6 @@ pub struct ClosureValue {
 pub enum MethodMutationType {
     None,
     DirectAssignment,  // this.field = value
-    Rebind,            // rebind this.field = value
-    Mixed,             // both types
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -133,7 +133,6 @@ fn format_value(v: &Value) -> String {
 
 fn method_mutation_type(body: &[Stmt]) -> MethodMutationType {
     let mut has_direct = false;
-    let mut has_rebind = false;
 
     for stmt in body {
         match stmt {
@@ -145,18 +144,12 @@ fn method_mutation_type(body: &[Stmt]) -> MethodMutationType {
                     }
                 }
             }
-            // Rebind on this
-            Stmt::RebindField { object, .. } if object == "this" => {
-                has_rebind = true;
-            }
             // Check nested blocks
             Stmt::If { then_block, else_ifs, else_block, .. } => {
                 let mut_type = method_mutation_type(then_block);
                 if mut_type != MethodMutationType::None {
                     match mut_type {
                         MethodMutationType::DirectAssignment => has_direct = true,
-                        MethodMutationType::Rebind => has_rebind = true,
-                        MethodMutationType::Mixed => return MethodMutationType::Mixed,
                         MethodMutationType::None => {}
                     }
                 }
@@ -166,8 +159,6 @@ fn method_mutation_type(body: &[Stmt]) -> MethodMutationType {
                     if mut_type != MethodMutationType::None {
                         match mut_type {
                             MethodMutationType::DirectAssignment => has_direct = true,
-                            MethodMutationType::Rebind => has_rebind = true,
-                            MethodMutationType::Mixed => return MethodMutationType::Mixed,
                             MethodMutationType::None => {}
                         }
                     }
@@ -178,8 +169,6 @@ fn method_mutation_type(body: &[Stmt]) -> MethodMutationType {
                     if mut_type != MethodMutationType::None {
                         match mut_type {
                             MethodMutationType::DirectAssignment => has_direct = true,
-                            MethodMutationType::Rebind => has_rebind = true,
-                            MethodMutationType::Mixed => return MethodMutationType::Mixed,
                             MethodMutationType::None => {}
                         }
                     }
@@ -191,8 +180,6 @@ fn method_mutation_type(body: &[Stmt]) -> MethodMutationType {
                 if mut_type != MethodMutationType::None {
                     match mut_type {
                         MethodMutationType::DirectAssignment => has_direct = true,
-                        MethodMutationType::Rebind => has_rebind = true,
-                        MethodMutationType::Mixed => return MethodMutationType::Mixed,
                         MethodMutationType::None => {}
                     }
                 }
@@ -203,8 +190,6 @@ fn method_mutation_type(body: &[Stmt]) -> MethodMutationType {
                     if mut_type != MethodMutationType::None {
                         match mut_type {
                             MethodMutationType::DirectAssignment => has_direct = true,
-                            MethodMutationType::Rebind => has_rebind = true,
-                            MethodMutationType::Mixed => return MethodMutationType::Mixed,
                             MethodMutationType::None => {}
                         }
                     }
@@ -214,8 +199,6 @@ fn method_mutation_type(body: &[Stmt]) -> MethodMutationType {
                     if mut_type != MethodMutationType::None {
                         match mut_type {
                             MethodMutationType::DirectAssignment => has_direct = true,
-                            MethodMutationType::Rebind => has_rebind = true,
-                            MethodMutationType::Mixed => return MethodMutationType::Mixed,
                             MethodMutationType::None => {}
                         }
                     }
@@ -225,11 +208,9 @@ fn method_mutation_type(body: &[Stmt]) -> MethodMutationType {
         }
     }
     
-    match (has_direct, has_rebind) {
-        (false, false) => MethodMutationType::None,
-        (true, false) => MethodMutationType::DirectAssignment,
-        (false, true) => MethodMutationType::Rebind,
-        (true, true) => MethodMutationType::Mixed,
+    match has_direct {
+        false => MethodMutationType::None,
+        true => MethodMutationType::DirectAssignment,
     }
 }
 
@@ -319,10 +300,10 @@ fn values_equal(a: &Value, b: &Value) -> bool {
     }
 }
 
-fn make_identity_closure(inner_type: &Type) -> Value {
+fn make_identity_closure(inner_type: &Type, ownership: &Ownership) -> Value {
     Value::Closure(ClosureValue {
         def: Box::new(ClosureDef {
-            params: vec![("n".to_string(), Some(inner_type.clone()))],
+            params: vec![("n".to_string(), Some((inner_type.clone(), ownership.clone())))],
             body: vec![Stmt::Return(Some(Expr::Var("n".to_string())))],
             return_type: Some(inner_type.clone()),
         }),
@@ -331,10 +312,10 @@ fn make_identity_closure(inner_type: &Type) -> Value {
     })
 }
 
-fn make_const_closure(value: Value, inner_type: &Type) -> Value {
+fn make_const_closure(value: Value, inner_type: &Type, ownership: &Ownership) -> Value {
     Value::Closure(ClosureValue {
         def: Box::new(ClosureDef {
-            params: vec![("_".to_string(), Some(inner_type.clone()))],
+            params: vec![("_".to_string(), Some((inner_type.clone(), ownership.clone())))],
             body: vec![Stmt::Return(Some(value_to_expr(&value)))],
             return_type: Some(inner_type.clone()),
         }),
@@ -511,7 +492,7 @@ fn infer_expr_type(
             Type::Bool
         }
         Expr::Not(_) => Type::Bool,
-        Expr::Var(name) | Expr::Const(name) | Expr::Lit(name) | Expr::Static(name) => {
+        Expr::Var(name) | Expr::Const(name) | Expr::Static(name) => {
             if let Some((_, v, _ownership, _moved)) = env.get(name) {
                 infer_value_type(v)
             } else if fns.contains_key(name) {
@@ -849,7 +830,7 @@ fn match_pattern(
                         if let Some(data_val) = data {
                             new_env.insert(
                                 binding_name.clone(),
-                                (AssignKind::Var, (**data_val).clone(), Ownership::Borrowed, Moved::False),
+                                (AssignKind::Var, (**data_val).clone(), Ownership::Owned, Moved::False),
                             );
                         }
                     }
@@ -923,26 +904,32 @@ async fn call_closure(
     }
     
     // Bind parameters
-    for (i, (param_name, param_type)) in closure.def.params.iter().enumerate() {
+    for (i, (param_name, param_type_ownership)) in closure.def.params.iter().enumerate() {
+        //eprintln!("Got closure param {:?} of type {:?}", param_name, param_type_ownership);
         if i < args.len() {
             let arg_val = eval_expr(&args[i], outer_env, fns, models, roles, model_methods, enums).await;
 
             // Type check if parameter has a type annotation
-            if let Some(expected_type) = param_type {
-                let actual_type = infer_value_type(&arg_val);
-                if !types_compatible(expected_type, &actual_type) {
-                    panic!(
-                        "Closure param '{}' expects {}, got {}",
-                        param_name,
-                        format_type_for_error(expected_type),
-                        format_type_for_error(&actual_type)
-                    );
+            let ownership = match param_type_ownership {
+                Some((expected_type, ownership)) => {
+                    // Type check if parameter has a type annotation
+                    let actual_type = infer_value_type(&arg_val);
+                    if !types_compatible(expected_type, &actual_type) {
+                        panic!(
+                            "Closure param '{}' expects {}, got {}",
+                            param_name,
+                            format_type_for_error(expected_type),
+                            format_type_for_error(&actual_type)
+                        );
+                    }
+                    ownership.clone()
                 }
-            }
+                None => Ownership::Borrowed,
+            };
 
             closure_env.insert(
                 param_name.clone(),
-                (AssignKind::Var, arg_val, Ownership::Borrowed, Moved::False),
+                (AssignKind::Const, arg_val, ownership, Moved::False),
             );
         } else {
             panic!("Closure expects {} arguments, got {}", closure.def.params.len(), args.len());
@@ -962,9 +949,9 @@ async fn call_closure(
     ).await;
 
     // Sync all vars back (they're live references now)
-    for rebound_var in &closure.live_vars {
-        if let Some(value) = closure_env.get(rebound_var) {
-            outer_env.insert(rebound_var.clone(), value.clone());
+    for updated_var in &closure.live_vars {
+        if let Some(value) = closure_env.get(updated_var) {
+            outer_env.insert(updated_var.clone(), value.clone());
         }
     }
     
@@ -987,132 +974,6 @@ async fn call_closure(
     }
 }
 
-#[async_recursion]
-async fn call_closure_with_values(
-    closure: &ClosureValue,
-    arg_values: &[Value],
-    outer_env: &mut HashMap<String, (AssignKind, Value, Ownership, Moved)>,
-    fns: &mut HashMap<String, FnDef>,
-    models: &mut HashMap<String, ModelDef>,
-    roles: &mut HashMap<String, RoleDef>,
-    model_methods: &mut HashMap<(String, String), FnDef>,
-    enums: &HashMap<String, EnumDef>,
-) -> Value {
-    let mut closure_env = closure.captured_env.clone();
-
-    for var_name in &closure.live_vars {
-        if let Some(current_value) = outer_env.get(var_name) {
-            closure_env.insert(var_name.clone(), current_value.clone());
-        }
-    }
-    
-    // Bind parameters from pre-evaluated values
-    for (i, (param_name, param_type)) in closure.def.params.iter().enumerate() {
-        if i < arg_values.len() {
-            let arg_val = arg_values[i].clone();
-
-            if let Some(expected_type) = param_type {
-                let actual_type = infer_value_type(&arg_val);
-                if !types_compatible(expected_type, &actual_type) {
-                    panic!(
-                        "Closure param '{}' expects {}, got {}",
-                        param_name,
-                        format_type_for_error(expected_type),
-                        format_type_for_error(&actual_type)
-                    );
-                }
-            }
-
-            closure_env.insert(
-                param_name.clone(),
-                (AssignKind::Var, arg_val, Ownership::Borrowed, Moved::False),
-            );
-        } else {
-            panic!("Closure expects {} arguments, got {}", closure.def.params.len(), arg_values.len());
-        }
-    }
-    
-    let flow = execute_block(
-        &closure.def.body,
-        &mut closure_env,
-        fns,
-        models,
-        roles,
-        model_methods,
-        enums,
-        closure.def.return_type.as_ref(),
-    ).await;
-
-    for rebound_var in &closure.live_vars {
-        if let Some(value) = closure_env.get(rebound_var) {
-            outer_env.insert(rebound_var.clone(), value.clone());
-        }
-    }
-    
-    match flow {
-        ControlFlow::Return(val) => {
-            if let Some(expected_return_type) = &closure.def.return_type {
-                let actual_type = infer_value_type(&val);
-                if !types_compatible(expected_return_type, &actual_type) {
-                    panic!(
-                        "Closure return type mismatch: expected {}, got {}",
-                        format_type_for_error(expected_return_type),
-                        format_type_for_error(&actual_type)
-                    );
-                }
-            }
-            val
-        },
-        _ => Value::Void,
-    }
-}
-
-fn find_rebound_vars(stmts: &[Stmt]) -> Vec<String> {
-    let mut rebound = Vec::new();
-    
-    for stmt in stmts {
-        match stmt {
-            Stmt::Rebind { name, .. } => {
-                if !rebound.contains(name) {
-                    rebound.push(name.clone());
-                }
-            }
-            Stmt::RebindField { object, .. } => {
-                if !rebound.contains(object) {
-                    rebound.push(object.clone());
-                }
-            }
-            Stmt::Echo(e) | Stmt::Print(e) => {
-                collect_vars_from_expr(e, &mut rebound);
-            }
-            Stmt::If { then_block, else_ifs, else_block, .. } => {
-                rebound.extend(find_rebound_vars(then_block));
-                for (_, block) in else_ifs {
-                    rebound.extend(find_rebound_vars(block));
-                }
-                if let Some(block) = else_block {
-                    rebound.extend(find_rebound_vars(block));
-                }
-            }
-            Stmt::While { body, .. } | Stmt::WhileOnce { body, .. } |
-            Stmt::Until { body, .. } | Stmt::UntilOnce { body, .. } => {
-                rebound.extend(find_rebound_vars(body));
-            }
-            Stmt::Match { cases, default, .. } => {
-                for (_, block) in cases {
-                    rebound.extend(find_rebound_vars(block));
-                }
-                if let Some(block) = default {
-                    rebound.extend(find_rebound_vars(block));
-                }
-            }
-            _ => {}
-        }
-    }
-    
-    rebound
-}
-
 fn find_referenced_vars(stmts: &[Stmt]) -> Vec<String> {
     let mut vars = Vec::new();
     
@@ -1124,7 +985,7 @@ fn find_referenced_vars(stmts: &[Stmt]) -> Vec<String> {
             Stmt::Return(Some(e)) => {
                 collect_vars_from_expr(e, &mut vars);
             }
-            Stmt::Assign { value, .. } | Stmt::Reassign { value, .. } | Stmt::Rebind { value, .. } => {
+            Stmt::Assign { value, .. } | Stmt::Reassign { value, .. } => {
                 collect_vars_from_expr(value, &mut vars);
             }
             Stmt::If { condition, then_block, else_ifs, else_block, .. } => {
@@ -1161,7 +1022,7 @@ fn find_referenced_vars(stmts: &[Stmt]) -> Vec<String> {
 
 fn collect_vars_from_expr(e: &Expr, vars: &mut Vec<String>) {
     match e {
-        Expr::Var(name) | Expr::Const(name) | Expr::Lit(name) | Expr::Static(name) => {
+        Expr::Var(name) | Expr::Const(name) | Expr::Static(name) => {
             if !vars.contains(name) {
                 vars.push(name.clone());
             }
@@ -1422,12 +1283,12 @@ async fn eval_expr(
         }
         Expr::Assign { name, value } => {
             let v = eval_expr(value, env, fns, models, roles, model_methods, enums).await;
-            env.insert(name.clone(), (AssignKind::Var, v.clone(), Ownership::Borrowed, Moved::False));
+            env.insert(name.clone(), (AssignKind::Var, v.clone(), Ownership::Owned, Moved::False));
             v
         }
         Expr::CompoundAssign { name, op: _, value } => {
             let v = eval_expr(value, env, fns, models, roles, model_methods, enums).await;
-            env.insert(name.clone(), (AssignKind::Var, v.clone(), Ownership::Borrowed, Moved::False));
+            env.insert(name.clone(), (AssignKind::Var, v.clone(), Ownership::Owned, Moved::False));
             v
         }
         Expr::Regex(pattern) => {
@@ -1440,13 +1301,13 @@ async fn eval_expr(
             }
         }
         Expr::Var(name) => {
-            if let Some((_, v, _ownership, moved)) = env.get(name) {
+            if let Some((_, v, ownership, moved)) = env.get(name) {
                 if let Moved::True = *moved {
                     panic!("Variable '{}' has been moved", name);
                 }
                 // Auto-unwrap StateActor for reading (call get())
                 if let Value::StateActor(tx, rx, inner_type) = v {
-                    let identity = make_identity_closure(inner_type);
+                    let identity = make_identity_closure(inner_type, ownership);
                     tx.send(identity).await.expect("State actor closed");
                     let mut rx_guard = rx.lock().await;
                     return rx_guard.recv().await.expect("State actor closed");
@@ -1488,13 +1349,6 @@ async fn eval_expr(
                 panic!("Undefined constant: {}", name);
             }
         },
-        Expr::Lit(name) => {
-            if let Some((_, v, _ownership, _moved)) = env.get(name) {
-                v.clone()
-            } else {
-                panic!("Undefined literal: {}", name);
-            }
-        },
         Expr::Static(name) => {
             if let Some((_, v, _ownership, _moved)) = env.get(name) {
                 v.clone()
@@ -1532,7 +1386,7 @@ async fn eval_expr(
                         &mut thread_roles,
                         &mut thread_methods,
                         &thread_enums
-                    ).await; // call_closure must be async too!
+                    ).await;
                 });
                 
                 Value::Void
@@ -1645,7 +1499,6 @@ async fn eval_expr(
         }
         Expr::MakeState(initial_expr) => {
             let initial = eval_expr(initial_expr, env, fns, models, roles, model_methods, enums).await;
-            let inner_type = infer_value_type(&initial);
             
             // Create channels
             let (cmd_tx, mut cmd_rx) = mpsc::channel::<Value>(32);
@@ -1658,16 +1511,16 @@ async fn eval_expr(
             let mut actor_roles = roles.clone();
             let mut actor_methods = model_methods.clone();
             let actor_enums = enums.clone();
+            let inner_type = infer_value_type(&initial);
+            let args: Vec<Expr> = vec![*(*initial_expr).clone()];
             
             // Spawn actor
             tokio::spawn(async move {
-                let mut value = initial;
-                
                 while let Some(cmd) = cmd_rx.recv().await {
                     if let Value::Closure(closure) = cmd {
-                        let new_val = call_closure_with_values(
+                        let new_val = call_closure(
                             &closure,
-                            &[value.clone()],
+                            &args,
                             &mut actor_env,
                             &mut actor_fns,
                             &mut actor_models,
@@ -1675,7 +1528,6 @@ async fn eval_expr(
                             &mut actor_methods,
                             &actor_enums,
                         ).await;
-                        value = new_val.clone();
                         let _ = resp_tx.send(new_val).await;
                     }
                 }
@@ -1851,7 +1703,7 @@ async fn eval_expr(
                                         env.insert(var_name.clone(), (kind.clone(), updated_obj, ownership.clone(), Moved::False));
                                     }
                                     Ownership::Borrowed => {
-                                        panic!("Cannot directly assign field on borrowed instance '{}'. Use 'rebind'", var_name);
+                                        panic!("Cannot directly assign field on borrowed instance '{}'.", var_name);
                                     }
                                 }
                             }
@@ -1873,14 +1725,15 @@ async fn eval_expr(
         Expr::MethodCall { object, method, args } => {
             // Handle StateActor and Channel methods
             if let Expr::Var(var_name) = object.as_ref() {
-                if let Some((_, Value::StateActor(tx, rx, inner_type), _, _)) = env.get(var_name) {
+                if let Some((_, Value::StateActor(tx, rx, inner_type), ownership, _)) = env.get(var_name) {
                     let tx = tx.clone();
                     let rx = rx.clone();
                     let inner_type = inner_type.clone();
+                    let ownership = ownership.clone();
                     
                     match method.as_str() {
                         "get" => {
-                            let identity = make_identity_closure(&inner_type);
+                            let identity = make_identity_closure(&inner_type, &ownership);
                             tx.send(identity).await.expect("State actor closed");
                             let mut rx_guard = rx.lock().await;
                             return rx_guard.recv().await.expect("State actor closed");
@@ -1890,7 +1743,7 @@ async fn eval_expr(
                                 panic!("state.set() requires a value argument");
                             }
                             let val = eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await;
-                            let const_closure = make_const_closure(val, &inner_type);
+                            let const_closure = make_const_closure(val, &inner_type, &ownership);
                             tx.send(const_closure).await.expect("State actor closed");
                             let mut rx_guard = rx.lock().await;
                             return rx_guard.recv().await.expect("State actor closed");
@@ -1926,16 +1779,31 @@ async fn eval_expr(
                 if models.contains_key(model_name) {
                     // Static method call: Model.method(...)
                     if let Some(method_def) = model_methods.get(&(model_name.clone(), method.clone())).cloned() {
+                        eprintln!("called model method with {:?}", method_def);
                         // Create new scope for the static method (no `this`)
                         let mut method_env: HashMap<String, (AssignKind, Value, Ownership, Moved)> = HashMap::new();
                         
                         // Bind parameters
-                        for (i, (param_name, _param_type, _)) in method_def.params.iter().enumerate() {
+                        for (i, (param_name, param_type, param_ownership)) in method_def.params.iter().enumerate() {
                             if i < args.len() {
                                 let arg_val = eval_expr(&args[i], env, fns, models, roles, model_methods, enums).await;
+
+                                // Type check if parameter has a type annotation
+                                let actual_type = infer_value_type(&arg_val);
+                                if let Some(expected_type) = param_type {
+                                    if !types_compatible(expected_type, &actual_type) {
+                                        panic!(
+                                            "Method param '{}' expects {}, got {}",
+                                            param_name,
+                                            format_type_for_error(expected_type),
+                                            format_type_for_error(&actual_type)
+                                        );
+                                    }
+                                }
+
                                 method_env.insert(
                                     param_name.clone(),
-                                    (AssignKind::Var, arg_val, Ownership::Borrowed, Moved::False),
+                                    (AssignKind::Const, arg_val, param_ownership.clone(), Moved::False),
                                 );
                             } else {
                                 panic!("Method {} expects {} arguments, got {}", method, method_def.params.len(), args.len());
@@ -2510,22 +2378,10 @@ async fn eval_expr(
                                         (AssignKind::Var, Ownership::Borrowed) => {
                                             panic!("Cannot call method with direct field assignment on borrowed instance '{}'", var_name);
                                         }
-                                        (AssignKind::Const, _) | (AssignKind::Static, _) | (AssignKind::Lit, _) => {
+                                        (AssignKind::Const, _) | (AssignKind::Static, _) => {
                                             panic!("Cannot call mutating method on immutable instance '{}'", var_name);
                                         }
                                     }
-                                }
-                                MethodMutationType::Rebind => {
-                                    // Can work on any var
-                                    match kind {
-                                        AssignKind::Var => {}
-                                        AssignKind::Const | AssignKind::Static | AssignKind::Lit => {
-                                            panic!("Cannot call mutating method on immutable instance '{}'", var_name);
-                                        }
-                                    }
-                                }
-                                MethodMutationType::Mixed => {
-                                    panic!("Method uses both direct assignment and rebind on this—pick one");
                                 }
                             }
                         }
@@ -2578,12 +2434,14 @@ async fn eval_expr(
         }
         Expr::Closure(closure_def) => {
             let param_names: Vec<String> = closure_def.params
-            .iter()
-            .map(|(name, _)| name.clone())
-            .collect();
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect();
 
-            let rebound_vars: Vec<String> = find_rebound_vars(&closure_def.body);
-            let referenced_vars: Vec<String> = find_referenced_vars(&closure_def.body);
+            let referenced_vars: Vec<String> = find_referenced_vars(&closure_def.body)
+                .into_iter()
+                .filter(|p| !param_names.contains(p))
+                .collect();
 
             let owned_vars: Vec<String> = env
                 .iter()
@@ -2596,13 +2454,13 @@ async fn eval_expr(
             // Referenced variables should not include ones that are rebound, owned, or defined in closure params
             let read_vars: Vec<String> = referenced_vars.clone()
                 .into_iter()
-                .filter(|ref_var| !rebound_vars.contains(ref_var) && !owned_vars.contains(ref_var) && !param_names.contains(ref_var))
+                .filter(|ref_var| !owned_vars.contains(ref_var) && !param_names.contains(ref_var))
                 .collect();
             
-            // Both rebound vars and owned vars should be live
-            let mut live_vars = rebound_vars;
+            // Owned vars should be live
+            let mut live_vars = Vec::new();
             for owned_var in owned_vars {
-                if !live_vars.contains(&owned_var) && referenced_vars.contains(&owned_var) {
+                if referenced_vars.contains(&owned_var) {
                     live_vars.push(owned_var);
                 }
             }
@@ -2678,13 +2536,12 @@ async fn execute_stmt(
                 }
             }
 
-            // For lit and static, only allow literals
+            // For static, only allow literals
             match kind {
-                AssignKind::Lit | AssignKind::Static => {
+                AssignKind::Static => {
                     if !is_literal(value) {
                         panic!("'{}' can only be used to assign literal values, not expressions or function calls", 
                             match kind {
-                                AssignKind::Lit => "lit",
                                 AssignKind::Static => "static",
                                 _ => "<Illegal initializer>",
                             }
@@ -2746,72 +2603,10 @@ async fn execute_stmt(
                 }
                 kind => panic!("Cannot reassign for {}", match kind {
                     AssignKind::Const => "const",
-                    AssignKind::Lit => "lit",
                     AssignKind::Static => "static",
                     _ => "an invalid initializer",
                 })
             }
-        }
-        Stmt::Rebind { name, value } => {
-            let (kind, ownership) = if let Some((k, _, o, moved)) = env.get(name) {
-                if *k != AssignKind::Var {
-                    panic!("Can only rebind var, not {:?}", k);
-                }
-                if let Moved::True = *moved {
-                    panic!("Cannot rebind moved variable '{}'", name);
-                }
-                (k.clone(), o.clone())
-            } else {
-                panic!("Cannot rebind undefined variable '{}'", name);
-            };
-            
-            let v = eval_expr(value, env, fns, models, roles, model_methods, enums).await;
-            env.insert(name.clone(), (kind, v, ownership, Moved::False));
-            ControlFlow::None
-        }
-        Stmt::RebindField { object, field, value } => {
-            if let Some((kind, _, _, moved)) = env.get(object) {
-                if *kind != AssignKind::Var {
-                    panic!("Can only rebind fields defined via var, not {:?}", format!("{:?}", kind).to_lowercase());
-                }
-                if let Moved::True = *moved {
-                    panic!("Cannot rebind moved variable '{}'", object);
-                }
-                
-                let (kind, Value::Object(model_name, mut fields), ownership, _) = env.get(object).unwrap().clone() else {
-                    panic!("Can only rebind fields on objects");
-                };
-                
-                // Look up the model definition to check field type
-                let expected_type = if let Some(model_def) = models.get(&model_name) {
-                    if let Some((_, t)) = model_def.fields.iter().find(|(n, _)| n == field) {
-                        t.clone()
-                    } else {
-                        panic!("Field '{}' not found on model '{}'", field, model_name);
-                    }
-                } else {
-                    panic!("Unknown model: {}", model_name);
-                };
-
-                let new_val = eval_expr(value, env, fns, models, roles, model_methods, enums).await;
-                let actual_type = infer_value_type(&new_val);
-                
-                if !types_compatible(&expected_type, &actual_type) {
-                    panic!(
-                        "Type error: field '{}' on model '{}' expects {:?}, got {:?}",
-                        field, model_name, expected_type, actual_type
-                    );
-                }
-                
-                fields.insert(field.clone(), new_val);
-                
-                let updated_obj = Value::Object(model_name, fields);
-                env.insert(object.clone(), (kind, updated_obj, ownership, Moved::False));
-            } else {
-                panic!("Cannot rebind undefined variable '{}'", object);
-            }
-            
-            ControlFlow::None
         }
         Stmt::Break => ControlFlow::Break,
         Stmt::Next => ControlFlow::Next,
@@ -3006,9 +2801,8 @@ async fn execute_block(
     for stmt in stmts {
         // Check for illegal top-level assignments
         if let Stmt::Assign { kind, .. } = stmt {
-            if matches!(kind, AssignKind::Lit | AssignKind::Static) {
+            if matches!(kind, AssignKind::Static) {
                 let kind_str = match kind {
-                    AssignKind::Lit => "lit",
                     AssignKind::Static => "static",
                     _ => unreachable!(),
                 };
@@ -3082,7 +2876,7 @@ async fn run(stmts: &[Stmt]) {
                     );
                 }
             }
-            Stmt::Assign { kind: AssignKind::Lit | AssignKind::Static, .. } => {
+            Stmt::Assign { kind: AssignKind::Static, .. } => {
                 execute_stmt(
                     stmt,
                     &mut env,
@@ -3095,7 +2889,7 @@ async fn run(stmts: &[Stmt]) {
                 ).await;
             }
             _ => {
-                panic!("Top-level statements must be model/function definitions or lit/static assignments");
+                panic!("Top-level statements must be model/function definitions or static assignments");
             }
         }
     }

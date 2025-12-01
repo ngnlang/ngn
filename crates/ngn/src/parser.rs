@@ -45,7 +45,7 @@ impl Parser {
             Some(Token::Print | Token::Echo | Token::Var | Token::Const 
                 | Token::If | Token::While | Token::Until | Token::Match 
                 | Token::Fn | Token::Model | Token::Role | Token::Extend 
-                | Token::Return | Token::Break | Token::Next | Token::Rebind)
+                | Token::Return | Token::Break | Token::Next)
         )
     }
 
@@ -121,9 +121,7 @@ impl Parser {
             }
             Some(Token::Var) => self.parse_assign_stmt(AssignKind::Var),
             Some(Token::Const) => self.parse_assign_stmt(AssignKind::Const),
-            Some(Token::Lit) => self.parse_assign_stmt(AssignKind::Lit),
             Some(Token::Static) => self.parse_assign_stmt(AssignKind::Static),
-            Some(Token::Rebind) => self.parse_rebind_stmt(),
             Some(Token::If) => self.parse_if_stmt(),
             Some(Token::While) => self.parse_while_stmt(),
             Some(Token::Until) => self.parse_until_stmt(),
@@ -166,7 +164,7 @@ impl Parser {
     }
 
     fn parse_assign_stmt(&mut self, kind: AssignKind) -> Result<Stmt, String> {
-        self.advance(); // consume var/const/lit/static
+        self.advance(); // consume var/const/static
         
         let name = self.expect_ident()?;
         
@@ -181,16 +179,10 @@ impl Parser {
         let ownership = match self.current_token() {
             Some(Token::Eq) => {
                 self.advance();
-                Ownership::Borrowed
-            },
-            Some(Token::OwnedAssign) => {
-                // ownership is only allowed for var
-                if kind != AssignKind::Var {
-                    return Err("You can only declare ownership with 'var'".to_string());
+                match kind {
+                    AssignKind::Static => Ownership::Borrowed,
+                    _ => Ownership::Owned,
                 }
-
-                self.advance();
-                Ownership::Owned
             },
             _ => return Err("Expected '=' or '=<' in assignment".to_string()),
         };
@@ -202,7 +194,6 @@ impl Parser {
             if kind != AssignKind::Const {
                 let kind_str = match kind {
                     AssignKind::Var => "var",
-                    AssignKind::Lit => "lit",
                     AssignKind::Static => "static",
                     AssignKind::Const => "const", // Unreachable here, but satisfies the match
                 };
@@ -221,41 +212,6 @@ impl Parser {
             value,
             ownership,
         })
-    }
-
-    fn parse_rebind_stmt(&mut self) -> Result<Stmt, String> {
-        self.advance(); // consume 'rebind'
-        
-        let name = self.expect_ident()?;
-        
-        // Check if it's a field rebind: rebind obj.field = value
-        if matches!(self.current_token(), Some(Token::Period)) {
-            let mut expr = Expr::Var(name.clone());
-            expr = self.parse_method_chain(expr)?;
-            
-            self.expect(Token::Eq)?;
-            let value = self.parse_expr()?;
-            
-            // expr should be a FieldAccess
-            if let Expr::FieldAccess { object, field, value: _ } = expr {
-                if let Expr::Var(obj_name) = *object {
-                    return Ok(Stmt::RebindField { 
-                        object: obj_name, 
-                        field, 
-                        value 
-                    });
-                } else {
-                    return Err("Can only rebind fields on direct variables".to_string());
-                }
-            } else {
-                return Err("Cannot rebind to non-field".to_string());
-            }
-        }
-        
-        // Simple rebind: rebind name = value
-        self.expect(Token::Eq)?;
-        let value = self.parse_expr()?;
-        Ok(Stmt::Rebind { name, value })
     }
 
     fn parse_ident_statement(&mut self) -> Result<Stmt, String> {
@@ -733,7 +689,7 @@ impl Parser {
             let (ty, own) = parse_type(&mut self.tokens)?;
             (Some(ty), own)
         } else {
-            (None, Ownership::Borrowed)
+            (None, Ownership::Owned)
         };
         
         let body = if matches!(self.current_token(), Some(Token::LBrace)) {
@@ -1116,8 +1072,8 @@ impl Parser {
             
             let param_type = if matches!(self.current_token(), Some(Token::Colon)) {
                 self.advance();
-                let (ty, _ownership) = parse_type(&mut self.tokens)?;
-                Some(ty)
+                let (ty, ownership) = parse_type(&mut self.tokens)?;
+                Some((ty, ownership))
             } else {
                 None
             };

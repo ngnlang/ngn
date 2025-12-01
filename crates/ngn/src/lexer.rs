@@ -6,7 +6,7 @@ impl std::fmt::Display for Token {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
-    Any, Var, Const, Lit, Static, Rebind,
+    Any, Var, Const, Static,
     If, Not, While, Until, Match, Echo, Print, Break, Next, True, False,
     StarStar, EqEq, NotEq, LessEq, GreaterEq, Or, And,
     Plus, Minus, One, Once, Star, Slash, Percent, Caret, Eq, Less, Greater,
@@ -334,9 +334,7 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
                 let token = match ident.as_str() {
                     "var" => Token::Var,
                     "const" => Token::Const,
-                    "lit" => Token::Lit,
                     "static" => Token::Static,
-                    "rebind" => Token::Rebind,
                     "if" => Token::If,
                     "not" => Token::Not,
                     "while" => Token::While,

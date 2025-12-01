@@ -40,7 +40,7 @@ fn get_semantic_type(
     let mut modifiers = vec![];
 
     // Declaration check
-    if let Some(ngn::Token::Var | ngn::Token::Const | ngn::Token::Lit | ngn::Token::Rebind | ngn::Token::Static) = prev_token {
+    if let Some(ngn::Token::Var | ngn::Token::Const | ngn::Token::Static) = prev_token {
         if matches!(token, ngn::Token::Ident(_)) {
             modifiers.push("declaration");
         }
@@ -48,8 +48,8 @@ fn get_semantic_type(
 
     // Readonly check based on the token itself
     match token {
-        ngn::Token::Const | ngn::Token::Fn | ngn::Token::Static | ngn::Token::Lit 
-        | ngn::Token::Var | ngn::Token::Rebind | ngn::Token::False | ngn::Token::True => {
+        ngn::Token::Const | ngn::Token::Fn | ngn::Token::Static 
+        | ngn::Token::Var | ngn::Token::False | ngn::Token::True => {
             modifiers.push("readonly");
         },
         ngn::Token::Ident(name) if name == "this" => {
