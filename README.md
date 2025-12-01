@@ -18,10 +18,8 @@ ngn follows in the footsteps of Rust's ownership model, but tries to make it eas
 
 | example | scope | binding | value | ownership |
 |-------|-------|-------|-------|-------|
-| `var x = "hello"` | local | mutable | immutable | borrowed |
-| `var z =< "world"` | local | mutable | mutable | owned |
-| `const status = "go"` | local | immutable | immutable | borrowed |
-| `lit VERSION = "2"` | global | immutable | immutable | borrowed |
+| `var z = "world"` | local | mutable | mutable | owned |
+| `const status = "go"` | local | immutable | immutable | owned |
 | `static DATA = [1..=1000]` | global | immutable | immutable | borrowed |
 
 > The `static` example uses psuedocode to mimic creating an array of numbers from 1 to 1000, inclusively.
@@ -29,29 +27,16 @@ ngn follows in the footsteps of Rust's ownership model, but tries to make it eas
 ### `var`
 
 ```ngn
-var x = "hello" // declares `x` as a borrowed string
-x = "goodbye" ❌ // value is immutable since it's borrowed
-rebind x = 0 ✅ // is rebindable, which allows you to change the value and type
-```
-```ngn
-var x =< "hello" // declares `x` as an owned string
+var x = "hello" // declares `x` as an owned string
 x = "goodbye" ✅ // value is mutable since it's owned
-rebind x = "cya" ✅ // is rebindable
 ```
+#### Owned params
+Marking a param as owned is necessary if you want to mutate the param within the function. Despite `const` being owned (since its data _could_ live on the heap), remember that it's not mutable. Marking a param as needing to be owned also moves ownership of the var or const into the function - which means it's no longer available after the function is called.
+
 ```ngn
-var x = "hello" // borrowed
+var x = "hello" // owned string
 
 fn doThing(thing: <string) { // the `<` means it requires an owned string
-  // do thing
-}
-
-doThing(x) ❌ // function requires an owned argument
-```
-```ngn
-var x =< "hello" // owned string
-
-// separate with a space, if that's more readable for you: `(thing: < string)`
-fn doThing(thing: <string) {
   // do thing
 }
 
@@ -59,14 +44,15 @@ doThing(x) ✅ // moves ownership of `x` to the function
 
 print(x) ❌ // `x` is no longer available, since it's ownership was moved
 ```
+
+Instantiate a model with `var` if you want to mutate fields. But even though it's owned, you can still pass it to a function that doesn't have an owned param (doesn't mutate). In this case, we "downgrade" what you pass, so that it doesn't transfer ownership.
 ```ngn
 model User {
   name: string,
   role: string
 }
 
-// use `=<` to ensure all relevant properties are owned
-var user =< User { // owned
+var user = User {
   name: "Sam",
   role: "Developer"
   years: 3
@@ -76,41 +62,37 @@ fn readUser(u: User) { // only require a borrowed User
   // take a read action on the reference to `u`; cannot mutate
 }
 
-// Can pass an owned variable to a function that expects a borrowed param
-// ngn ensures it's "downgraded" to borrowed within the function
+// Can pass a variable to a function that expects a borrowed param;
+// ngn ensures it's downgraded to "borrowed" within the function
+// and doesn't transfer ownership.
 readUser(user) ✅
 
 print(user) ✅ // can still do things with `user` here
 ```
 
 ### `const`
+Data could live on the heap, if only known at runtime, or in binary if it's a literal. You cannot mutate the data - even for objects and arrays.
 
 ```ngn
-const x = "hello" // borrowed
-x = "goodbye" ❌ // value is immutable since it's borrowed
-rebind x = "goodbye" ❌ // is not rebindable since it's a constant
+const x = "hello" // owned, even if ngn stores it in binary (which doesn't need memory cleanup)
+x = "goodbye" ❌ // value is immutable
 ```
 
-### `lit` vs `static`
+### `static`
 
-Used for global declarations. Must be delcared at the top-level of a file, not inside `main()`.
+Used for global declarations, which can only exist at the top-level of a file, not inside functions.
 
 ```ngn
-lit VERSION = "v3"
-static DATA = [1..=1000] // pseudocode to create an array of numbers from 1 to 1000
+static VERSION = "v3" // inlined at compile time
+
+// pseudocode to create an array of numbers from 1 to 1000
+static DATA = [1..=1000] // stored in binary, not inlined, since data is large
 
 fn main() {
   print(VERSION) // v3
   print(DATA) // (I'll spare you; you get it.)
 }
 ```
-
-- With `lit`, all instances are replaced with the literal value at compile time.
-- With `static`, all instances are a reference to a single memory address, of the stored data, at runtime.
-
-Therefore, it's best to use `lit` when assigning a small amount of data. If you're declaring a large amount of data - like an array with 1000 entries - then use `static`.
-
-Think about it this way: if you had an array of 1000 numbers defined using `lit`, every single use of it in your code would be replaced with the entire array of data. This would be an inefficient use of memory. Whereas if you define the large array with `static`, ngn stores a single instance of the data in memory and any code references to it are just that, a reference, not the entire data set.
 
 ## Types
 
@@ -145,7 +127,7 @@ const pi = 3.14 // inferred as `f64`
 const result = 3 + 2 // inferred as `i64`
 
 fn add(a: i32, b: i32): i32 {
-  return a + b // inferred as i32
+  return a + b
 }
 ```
 
@@ -220,11 +202,11 @@ const end = process.ends("ing") // true
 Create an array of strings by splitting on a pattern of characters within a string. If you do not pass a pattern, each character in the string is split individually. Preserves the original string.
 
 ```ngn
-const sent = "The quick brown fox jumped over the fence."
-const arr = sent.split("o") // ["The quick br", "wn f", "x jumped ", "ver the fence."]
+const sent = "What. On. Earth."
+const split_sent = sent.split(".") // ["What", " On", " Earth", ""]
 
 var greeting = "Hello"
-const arr = greeting.split() // ["H", "e", "l", "l", "o"]
+const split_greeting = greeting.split() // ["H", "e", "l", "l", "o"]
 ```
 
 ### `replace(search, replacement)`
@@ -248,8 +230,8 @@ Copies an entire string or a section of it, based on indices. This does not chan
 - If neither is provided, the entire string is copied.
 
 ```
-const some = "Some Stuff" // borrowed
-const copied = some.copy(5) // you can copy borrowed strings
+const some = "Some Stuff"
+const copied = some.copy(5)
 
 print(copied) // "Stuff"
 print(some) // "Some Stuff"
@@ -267,7 +249,7 @@ Remove a section of a string by providing a start index and an optional stop ind
 - If `stop` is not provided, it removes everything upto and including the last item.
 - Since you're mutating the original string, it must be owned.
 ```
-var quote =< "I flew too close to the sun on wings of pastrami."
+var quote = "I flew too close to the sun on wings of pastrami."
 const sliced = orig.slice(24, 31)
 
 print(orig) // I flew too close to the wings of pastrami.
@@ -275,26 +257,26 @@ print(sliced) // "sun on "
 ```
 
 ### `upper()`
-Transform a string to all uppercase. String must be owned.
+Transform a string to all uppercase; preserves original string.
 
 ```ngn
-var version =< "one"
+var version = "one"
 print(version.upper()) // ONE
 ```
 
 ### `lower()`
-Transform a string to all lowercase. String must be owned.
+Transform a string to all lowercase; preserves original string.
 
 ```ngn
-var version =< "ONE"
+var version = "ONE"
 print(version.lower()) // one
 ```
 
 ### `trim()`
-Remove whitespace from both ends of a string. String must be owned.
+Remove whitespace from both ends of a string; preserves original string.
 
 ```ngn
-var =< thing = " strong "
+var = thing = " strong "
 print(thing.trim()) // "strong"
 ```
 
@@ -336,7 +318,7 @@ print((3.7).floor()) // 3
 ```
 
 ## Arrays
-If you want to mutate arrays, be sure to declare them with `=<`
+If you want to mutate arrays, be sure to declare them with `var`
 
 ```ngn
 var stuff = ["hat", "coat", "gloves"]
@@ -351,7 +333,7 @@ Return the size of the array.
 ### `push(item, index?)`
 Push, i.e. add, an item into an array. By default, it pushes at the end. To push into another location, provide the index number. Returns the new size of the array as an `i64`.
 ```
-var stuff =< ["guitar", "shirt"]
+var stuff = ["guitar", "shirt"]
 const size = stuff.push("hat")
 
 print(size) // 3
@@ -364,7 +346,7 @@ print(stuff) // ["coat", "guitar", "shirt", "hat"]
 ### `pull(index?)`
 Pull, i.e. remove, an item from an array. By default, it removes from the end. To pull from another location, provide the index number. Returns the removed item's value.
 ```
-var stuff =< ["coat", "guitar", "shirt", "hat"]
+var stuff = ["coat", "guitar", "shirt", "hat"]
 const pulled = stuff.pull()
 
 print(pulled) // hat
@@ -401,9 +383,8 @@ Remove a section of the array by providing a start index and an optional stop in
 
 - If `stop` is provided, the slice excludes the item at that index.
 - If `stop` is not provided, it removes everything upto and including the last item.
-- Array must be owned.
 ```
-var stuff =< [10, 20, 30, 40, 50]
+var stuff = [10, 20, 30, 40, 50]
 const sliced = stuff.slice(1, 3)
 
 print(sliced) = [20, 30]
@@ -414,9 +395,8 @@ print(stuff) // [10, 40, 50]
 Add multiple items to an array; optionally, at a specific index. Returns the new size of the array.
 
 - If `start` is not provided, it adds the items at the end.
-- Array must be owned.
 ```
-var stuff =< [10, 20, 30]
+var stuff = [10, 20, 30]
 stuff.splice([40, 50]) // [10, 20, 30, 40, 50]
 
 const size = stuff.splice([45, 47], 4)
@@ -688,61 +668,45 @@ doThing()
 
 Unlike functions, closures give you access to the state of their surrounding scope.
 ```ngn
-var base = 10
+const base = 10
 
-const tally = |a: i64| base + a
-print(tally(3)) // 13
+const add_base = |a: i64| base + a
+print(add_base(3)) // 13
 ```
 
-With borrowed variables, this access is a snapshot of the variable's value when the closure is created; so, changing the value afterwards does not change it inside the closure.
+The value within the closure can be kept in sync with the outside environment when using vars.
 ```ngn
-var base = 10
+var count = 0
 
-const tally = |a: i64| base + a
-print(tally(3)) // 13
+const incrementBy = |a: i64| count + a // calculate and return
 
-rebind base = 100 // does not change the value of `base` within the closure
-print(tally(3)) // still 13
+print(incrementBy(10)) // 10
+
+print(incrementBy(5)) // 5
+
+count = 100
+print(incrementBy(7)) // 107, not 7
 ```
 
-However, the value within the closure can be kept in sync when using owned variables or using `rebind`. This also mutates the variable outside the closure.
-
-- implicit mutability for owned variables
-- explicit mutability for rebindable variables, via `rebind`
-
+The closure can even mutate the outside var, if you'd like.
 ```ngn
-var count =< 0 // owned, mutable by default
+var count = 0
 
-const incrementBy = |a: i64| count = count + a // `count`'s value is synced with the outside variable
+const incrementBy = |a: i64| count = count + a // calculate, mutate, return
 
-incrementBy(10)
+incrementBy(10) // we're not capturing the returned value here, but you could
 print(count) // 10
 
 incrementBy(5)
 print(count) // 15
 
-rebind count = 100
-incremenBy(7)
-print(count) // 107
-```
-```ngn
-var count = 0 // borrrowed, but rebindable
-
-const incrementBy = |a: i64| rebind count = count + a
-
-incrementBy(10)
-print(count) // 10
-
-incrementBy(5)
-print(count) // 15
-
-rebind count = 100
-incremenBy(7)
+count = 100
+incrementBy(7)
 print(count) // 107
 ```
 
 ## Objects and Composability
-You can create typed objects using models, then create a new instance of a model. You can also extend a model's functionality with direct methods or groups of methods via roles.
+You can create typed objects using models, then create a new instance of a model.
 
 ### `model`
 Create object structures.
@@ -754,6 +718,7 @@ model Dog {
 }
 ```
 
+You can also extend a model's functionality with direct methods or groups of methods via roles.
 ### `role`
 Declare one or more method signatures and/or method implementations. Group methods into roles in order to implement their functionality for models.
 
@@ -845,18 +810,13 @@ user.greet()  // "Hello, I'm Jason"
 ### Mutating "object" data
 When you create an instance of a model, it's essentially an object - although it can have methods attached to it as well.
 
-The general rule is that you can mutate based on how the variable was declared (`var =`, `var =<`, `const`, etc). However, you can't change a field's type - which is typically allowed with `rebind`.
+The general rule is that you can mutate based on how the variable was declared (`var`, `const`). However, you can't change a field's type.
 
 Here are the ways to manipulate an object's fields, based on the above example code:
-- direct assignment, by owned `var`s: `user.age = 7`
-- rebind, by owned or borrowed `var`s: `rebind user.age = 7`
-- rebind entire object, by owned or borrowed `var`s: `rebind user = User { name: "Ben", age: 56 }`
-- method, by owned `var`s: `user.changeName("Stacie")`
-- method, by borrowed `var`s: `user.changeName("Stacie")` only if the method mutates via `rebind this.name = name`
-- by `const`, `lit`, `static` variables: ❌ not allowed, as these are all strictly immutable
-
-## Threads/Async
-
+- direct assignment, by `var`s: `user.age = 7`
+- entire object, by `var`s: `user = { name: "Ben", age: 56 }`
+- method, by `var`s: `user.changeName("Stacie")`
+- by `const`, `static` variables: ❌ not allowed, as these are all strictly immutable
 
 ## Channels
 Send and receive data. You must provide a data type for the channel.
@@ -1052,15 +1012,15 @@ fn main() {
 ```
 
 ### Shared, mutable state
-It's safe to sequentially mutate shared data outside of threads or within a single thread. However, if more than one thread can mutate shared data, use `state()` to declare the variable. This gives you safe, atomic operations within your threads by using variable methods.
+It's safe to sequentially mutate shared data outside of threads or within a single thread. However, if more than one thread can mutate shared data, use `state()` to declare the variable. This gives you safe, atomic operations within your threads by using state variable methods.
 ```ngn
 fn main() {
-    var counter =< state(0)
+    var counter = state(0)
     const done = channel(): bool
     
     thread(|| {
         // Pass a closure that mutates the data.
-        // The closure receives the current value of the data via a param.
+        // The closure receives the current value of the state variable via a param.
         counter.update(|n| n + 10)
         print("added 10")
         done <- true
