@@ -905,7 +905,6 @@ async fn call_closure(
     
     // Bind parameters
     for (i, (param_name, param_type_ownership)) in closure.def.params.iter().enumerate() {
-        //eprintln!("Got closure param {:?} of type {:?}", param_name, param_type_ownership);
         if i < args.len() {
             let arg_val = eval_expr(&args[i], outer_env, fns, models, roles, model_methods, enums).await;
 
@@ -1779,7 +1778,6 @@ async fn eval_expr(
                 if models.contains_key(model_name) {
                     // Static method call: Model.method(...)
                     if let Some(method_def) = model_methods.get(&(model_name.clone(), method.clone())).cloned() {
-                        eprintln!("called model method with {:?}", method_def);
                         // Create new scope for the static method (no `this`)
                         let mut method_env: HashMap<String, (AssignKind, Value, Ownership, Moved)> = HashMap::new();
                         
@@ -2147,6 +2145,13 @@ async fn eval_expr(
                         return Value::Bool(s.ends_with(&search));
                     }
                     "replace" => {
+                        // Check mutability
+                        if let Expr::Var(var_name) = object.as_ref() {
+                            if !can_mutate(var_name, env) {
+                                panic!("Cannot call mutating method '{}' on immutable or borrowed string '{}'", method, var_name);
+                            }
+                        }
+
                         if args.len() < 2 {
                             panic!("replace() requires search and replacement arguments");
                         }
@@ -2197,10 +2202,10 @@ async fn eval_expr(
                         return Value::String(result);
                     }
                     "slice" => {
-                        // Check mutability - only Var + Owned can mutate
+                        // Check mutability
                         if let Expr::Var(var_name) = object.as_ref() {
                             if !can_mutate(var_name, env) {
-                                panic!("Cannot call mutating method 'slice' on immutable or borrowed string '{}'", var_name);
+                                panic!("Cannot call mutating method '{}' on immutable or borrowed string '{}'", method, var_name);
                             }
                         }
                         
