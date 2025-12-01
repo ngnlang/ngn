@@ -599,10 +599,15 @@ fn infer_expr_type(
                         _ => panic!("Unknown string method: {}", method),
                     }
                 }
-                Type::Model(_model_name) => {
-                    // For now, assume method returns what we'll determine at runtime
-                    // In a full implementation, you'd look up the method signature
-                    Type::Void  // TODO: look up actual return type from implementations
+                Type::Model(model_name) => {
+                    if let Some(fn_def) = model_methods.get(&(model_name.clone(), method.clone())) {
+                        if let Some(return_type) = &fn_def.return_type {
+                            return return_type.clone()
+                        } else {
+                            return Type::Void
+                        }
+                    }
+                    Type::Void
                 }
                 _ => panic!("Cannot call method on type {:?}", obj_type),
             }
