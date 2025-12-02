@@ -36,7 +36,8 @@ use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() {
-    let source = fs::read_to_string("main.ngn")
+    let file_path = "main.ngn";
+    let source = fs::read_to_string(file_path)
         .expect("Failed to read ngn file");
 
     let tokens = lexer::tokenize(&source);
@@ -62,7 +63,7 @@ async fn main() {
     let mut parser = Parser::new(tokens, enums.clone());
 
     match parser.parse_program() {
-        Ok(ast) => run(&ast).await,
+        Ok(ast) => run(&ast, file_path).await,
         Err(e) => eprintln!("Parse error: {}", e),
     }
 }
@@ -2989,15 +2990,60 @@ async fn execute_block(
     ControlFlow::None
 }
 
+fn resolve_module_path(import_path: &str, current_file: &str) -> String {
+    use std::path::{Path, PathBuf};
+    
+    let current_dir = Path::new(current_file)
+        .parent()
+        .unwrap_or(Path::new("."));
+    
+    let resolved: PathBuf = if import_path.starts_with("./") || import_path.starts_with("../") {
+        // Relative import
+        current_dir.join(import_path)
+    } else {
+        // Bare import - treat as relative to current directory
+        current_dir.join(import_path)
+    };
+    
+    // Add .ngn extension if not present
+    let with_extension = if resolved.extension().is_some() {
+        resolved
+    } else {
+        resolved.with_extension("ngn")
+    };
+    
+    // Normalize the path (resolve .. and .)
+    normalize_path(&with_extension)
+}
+
+fn normalize_path(path: &std::path::Path) -> String {
+    let mut components = Vec::new();
+    
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                components.pop();
+            }
+            std::path::Component::CurDir => {}
+            c => components.push(c),
+        }
+    }
+    
+    let result: std::path::PathBuf = components.iter().collect();
+    result.to_string_lossy().to_string()
+}
+
 async fn load_module(
     path: &str,
+    current_file: &str,
     module_cache: &mut HashMap<String, ModuleExports>,
 ) -> ModuleExports {
     if let Some(exports) = module_cache.get(path) {
         return exports.clone();
     }
     
-    let file_path = format!("{}.ngn", path);
+    let file_path = resolve_module_path(path, current_file);
+
     let source = std::fs::read_to_string(&file_path)
         .unwrap_or_else(|_| panic!("Could not read module '{}'", file_path));
     
@@ -3022,7 +3068,7 @@ async fn load_module(
     
     module_cache.insert(path.to_string(), ModuleExports::default());
     
-    let exports = Box::pin(run_module(&stmts, module_cache, false)).await;
+    let exports = Box::pin(run_module(&stmts, current_file,  module_cache, false)).await;
     
     module_cache.insert(path.to_string(), exports.clone());
     
@@ -3031,6 +3077,7 @@ async fn load_module(
 
 async fn run_module(
     stmts: &[Stmt],
+    current_file: &str,
     module_cache: &mut HashMap<String, ModuleExports>,
     is_entry: bool, // true for main file, false for imported modules
 ) -> ModuleExports {
@@ -3040,7 +3087,11 @@ async fn run_module(
     for stmt in stmts {
         match stmt {
             Stmt::Import(import_stmt) => {
-                let module_exports = load_module(&import_stmt.source, module_cache).await;
+                let module_exports = load_module(
+                    &import_stmt.source, 
+                    current_file,
+                    module_cache
+                ).await;
                 
                 match &import_stmt.kind {
                     ImportKind::Named(names) => {
@@ -3287,7 +3338,7 @@ async fn run_module(
     ctx.exports
 }
 
-pub async fn run(stmts: &[Stmt]) {
+pub async fn run(stmts: &[Stmt], entry_file: &str) {
     let mut module_cache = HashMap::new();
-    run_module(stmts, &mut module_cache, true).await;
+    run_module(stmts, entry_file, &mut module_cache, true).await;
 }
