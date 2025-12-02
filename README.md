@@ -1042,3 +1042,58 @@ fn main() {
 If needed, you also have access to these variable methods when using `state()`:
 - `.get()`, gets the current value
 - `.set()`, sets the current value - which replaces the existing one. Be careful, as it can be tricky to ensure proper mutation order when coupled with `.update()`.
+
+## Modules
+You can use `export` and `import` to create modules in your project. This is a functions-only feature.
+
+```ngn
+// math.ngn
+export fn add(a: i64, b: i64): i64 {
+  return a + b
+}
+
+export fn subtract(a: i64, b: i64): i64 {
+  return a - b
+}
+```
+You don't have to include the .ngn file extension when importing, but you can. Here, we look for an `add` function from a `math.ngn` file within the same directory that your `main.ngn` file is in.
+```ngn
+// main.ngn
+import { add } from "math"
+
+fn main() {
+  print(add(21, 3)) // 24
+}
+```
+
+### Relative path imports
+```ngn
+import { add } from "./lib/math"
+```
+
+### Aliased imports
+```ngn
+import { add as adder } from "math"
+```
+
+### Module imports
+```ngn
+// main.ngn
+import * as Math from "math"
+
+print(Math.subtract(10, 2)) // 5
+```
+
+### Default export
+```ngn
+// math.ngn
+fn add(a: i64, b: i64): i64 {
+  return a + b
+}
+
+export default add
+```
+```ngn
+// main.ngn
+import add from "math"
+```
