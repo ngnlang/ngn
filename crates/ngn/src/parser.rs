@@ -892,13 +892,23 @@ impl Parser {
         self.advance(); // consume 'import'
         
         let kind = match self.current_token() {
-            // import { a, b } from 'module'
+            // import { a, b } or import { a as x } from 'module'
             Some(Token::LBrace) => {
                 self.advance();
                 let mut names = Vec::new();
                 
                 loop {
-                    names.push(self.expect_ident()?);
+                    let original = self.expect_ident()?;
+                    
+                    // Check for alias: `as localName`
+                    let local = if matches!(self.current_token(), Some(Token::As)) {
+                        self.advance(); // consume 'as'
+                        self.expect_ident()?
+                    } else {
+                        original.clone()
+                    };
+                    
+                    names.push((original, local));
                     
                     if !matches!(self.current_token(), Some(Token::Comma)) {
                         break;

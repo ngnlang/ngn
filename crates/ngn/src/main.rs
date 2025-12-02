@@ -2912,11 +2912,13 @@ async fn execute_stmt(
             
             match &import_stmt.kind {
                 ImportKind::Named(names) => {
-                    for name in names {
-                        if let Some(fn_def) = module_exports.functions.get(name) {
-                            ctx.fns.insert(name.clone(), fn_def.clone());
+                    for (original, local) in names {
+                        if let Some(fn_def) = module_exports.functions.get(original) {
+                            let mut imported_fn = fn_def.clone();
+                            imported_fn.name = local.clone();
+                            ctx.fns.insert(local.clone(), imported_fn);
                         } else {
-                            panic!("'{}' is not exported from '{}'", name, import_stmt.source);
+                            panic!("'{}' is not exported from '{}'", original, import_stmt.source);
                         }
                     }
                 }
@@ -3042,15 +3044,17 @@ async fn run_module(
                 
                 match &import_stmt.kind {
                     ImportKind::Named(names) => {
-                        for name in names {
-                            if let Some(fn_def) = module_exports.functions.get(name) {
-                                ctx.fns.insert(name.clone(), fn_def.clone());
-                            } else if let Some(model_def) = module_exports.models.get(name) {
-                                ctx.models.insert(name.clone(), model_def.clone());
-                            } else if let Some(enum_def) = module_exports.enums.get(name) {
-                                ctx.enums.insert(name.clone(), enum_def.clone());
+                        for (original, local) in names {
+                            if let Some(fn_def) = module_exports.functions.get(original) {
+                                let mut imported_fn = fn_def.clone();
+                                imported_fn.name = local.clone(); // Rename to local alias
+                                ctx.fns.insert(local.clone(), imported_fn);
+                            } else if let Some(model_def) = module_exports.models.get(original) {
+                                ctx.models.insert(local.clone(), model_def.clone());
+                            } else if let Some(enum_def) = module_exports.enums.get(original) {
+                                ctx.enums.insert(local.clone(), enum_def.clone());
                             } else {
-                                panic!("'{}' is not exported from '{}'", name, import_stmt.source);
+                                panic!("'{}' is not exported from '{}'", original, import_stmt.source);
                             }
                         }
                     }

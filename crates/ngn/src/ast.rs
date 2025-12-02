@@ -270,8 +270,8 @@ pub enum Pattern {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ImportKind {
-    /// import { a, b } from 'module'
-    Named(Vec<String>),
+    /// import { a, b } or import { a as x, b as y } from 'module'
+    Named(Vec<(String, String)>),
     /// import * as name from 'module'
     Namespace(String),
     /// import name from 'module'
