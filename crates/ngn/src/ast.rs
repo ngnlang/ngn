@@ -76,8 +76,20 @@ impl PartialEq for Value {
             (Value::F64(a), Value::F64(b)) => a == b,
             (Value::F32(a), Value::F32(b)) => a == b,
             (Value::String(a), Value::String(b)) => a == b,
-            // ... implement for other simple types ...
-            (Value::Channel(_, _, _), Value::Channel(_, _, _)) => false, // Channels are never "equal"
+            (Value::Bool(a), Value::Bool(b)) => a == b,
+            (Value::Array(a), Value::Array(b)) => a == b,
+            (Value::Function(a), Value::Function(b)) => a == b,
+            (Value::Closure(a), Value::Closure(b)) => a == b,
+            (Value::Object(name_a, fields_a), Value::Object(name_b, fields_b)) => {
+                name_a == name_b && fields_a == fields_b
+            }
+            (Value::Void, Value::Void) => true,
+            (Value::Regex(a), Value::Regex(b)) => a == b,
+            (Value::EnumValue(enum_a, var_a, data_a), Value::EnumValue(enum_b, var_b, data_b)) => {
+                enum_a == enum_b && var_a == var_b && data_a == data_b
+            }
+            (Value::Channel(_, _, _), Value::Channel(_, _, _)) => false,
+            (Value::StateActor(_, _, _), Value::StateActor(_, _, _)) => false,
             (Value::Namespace(a), Value::Namespace(b)) => a == b,
             _ => false, // Different types are not equal
         }

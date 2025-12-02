@@ -300,23 +300,6 @@ fn normalize_regex_pattern(pattern: &str) -> String {
     normal
 }
 
-fn values_equal(a: &Value, b: &Value) -> bool {
-    match (a, b) {
-        (Value::I64(x), Value::I64(y)) => x == y,
-        (Value::I32(x), Value::I32(y)) => x == y,
-        (Value::U64(x), Value::U64(y)) => x == y,
-        (Value::U32(x), Value::U32(y)) => x == y,
-        (Value::F64(x), Value::F64(y)) => x == y,
-        (Value::F32(x), Value::F32(y)) => x == y,
-        (Value::String(x), Value::String(y)) => x == y,
-        (Value::Bool(x), Value::Bool(y)) => x == y,
-        (Value::Array(x), Value::Array(y)) => x == y,
-        (Value::StateActor(_, _, _), Value::StateActor(_, _, _)) => false, // Actors are never equal
-        // Todo - models?
-        _ => false,
-    }
-}
-
 fn make_identity_closure(inner_type: &Type, ownership: &Ownership) -> Value {
     Value::Closure(ClosureValue {
         def: Box::new(ClosureDef {
@@ -1310,12 +1293,12 @@ async fn eval_expr(
         Expr::Equal(a, b) => {
             let av = eval_expr(a, ctx).await;
             let bv = eval_expr(b, ctx).await;
-            Value::Bool(values_equal(&av, &bv))
+            Value::Bool(av == bv)
         }
         Expr::NotEqual(a, b) => {
             let av = eval_expr(a, ctx).await;
             let bv = eval_expr(b, ctx).await;
-            Value::Bool(!values_equal(&av, &bv))
+            Value::Bool(av != bv)
         }
         Expr::LessThan(a, b) => {
             match (eval_expr(a, ctx).await, eval_expr(b, ctx).await) {
