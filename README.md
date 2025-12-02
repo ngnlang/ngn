@@ -2,7 +2,7 @@
 
 Pronounced "engine".
 
-An expressive and easy to use programming language, that's strongly and statically typed.
+An expressive and easy to use programming language.
 
 ## Status
 
@@ -13,8 +13,6 @@ Extremely early development.
 Your entrypoint file must define a `main()` function. It's found and run automatically. Most of your code will live inside of this function, but not everything.
 
 ## Declaring identifiers
-
-ngn follows in the footsteps of Rust's ownership model, but tries to make it easier to use and reason about.
 
 | example | scope | binding | value | ownership |
 |-------|-------|-------|-------|-------|
@@ -289,6 +287,7 @@ print(greeting.repeat(2)) // goodbyegoodbye
 ```
 
 ## Numbers
+These will be moved into a math module.
 
 ### `abs(number)`
 Get the absolute value of a number.
@@ -407,7 +406,7 @@ print(size) // 7
 
 ## Enums
 
-ngn provides two built-in enums for common patterns: `Result` for error handling and `Maybe` for possible values.
+ngn provides two built-in enums for common patterns: `Result` and `Maybe`
 
 ### Result<T, E>
 
@@ -457,13 +456,13 @@ const user1 = findUser(1)
 const user2 = findUser(99)
 
 match (user1) {
-  Value(name) => print("Found: {name}"),
+  Value(name) => print("Found: {name}"), // matches
   Null => print("User not found"),
 }
 
 match (user2) {
   Value(name) => print("Found: {name}"),
-  Null => print("User not found"),
+  Null => print("User not found"), // matches
 }
 ```
 
