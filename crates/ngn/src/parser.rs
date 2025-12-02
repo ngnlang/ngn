@@ -127,6 +127,8 @@ impl Parser {
             Some(Token::Until) => self.parse_until_stmt(),
             Some(Token::Match) => self.parse_match_stmt(),
             Some(Token::Fn) => self.parse_fn_def(),
+            Some(Token::Import) => self.parse_import_stmt(),
+            Some(Token::Export) => self.parse_export_stmt(),
             Some(Token::Model) => self.parse_model_def(),
             Some(Token::Role) => self.parse_role_def(),
             Some(Token::Extend) => self.parse_extend_stmt(),
@@ -886,7 +888,82 @@ impl Parser {
         }))
     }
 
-   fn parse_block(&mut self) -> Result<Vec<Stmt>, String> {
+    fn parse_import_stmt(&mut self) -> Result<Stmt, String> {
+        self.advance(); // consume 'import'
+        
+        let kind = match self.current_token() {
+            // import { a, b } from 'module'
+            Some(Token::LBrace) => {
+                self.advance();
+                let mut names = Vec::new();
+                
+                loop {
+                    names.push(self.expect_ident()?);
+                    
+                    if !matches!(self.current_token(), Some(Token::Comma)) {
+                        break;
+                    }
+                    self.advance();
+                    self.skip_newlines();
+                }
+                
+                self.expect(Token::RBrace)?;
+                ImportKind::Named(names)
+            }
+            
+            // import * as name from 'module'
+            Some(Token::Star) => {
+                self.advance();
+                self.expect(Token::As)?;
+                let name = self.expect_ident()?;
+                ImportKind::Namespace(name)
+            }
+            
+            // import name from 'module' (default)
+            Some(Token::Ident(_)) => {
+                let name = self.expect_ident()?;
+                ImportKind::Default(name)
+            }
+            
+            _ => return Err("Expected '{', '*', or identifier after import".into()),
+        };
+        
+        self.expect(Token::From)?;
+        
+        let source = match self.current_token() {
+            Some(Token::String(s)) => {
+                let s = s.clone();
+                self.advance();
+                s
+            }
+            _ => return Err("Expected string after 'from'".into()),
+        };
+        
+        Ok(Stmt::Import(ImportStmt { kind, source }))
+    }
+
+    fn parse_export_stmt(&mut self) -> Result<Stmt, String> {
+        self.advance(); // consume 'export'
+        
+        match self.current_token() {
+            // export default name
+            Some(Token::Default) => {
+                self.advance();
+                let name = self.expect_ident()?;
+                Ok(Stmt::Export(ExportKind::Default(name)))
+            }
+            
+            // export fn foo() {}
+            Some(Token::Fn) => {
+                let fn_def = self.parse_fn_def()?;
+                Ok(Stmt::Export(ExportKind::Named(Box::new(fn_def))))
+            }
+            
+            _ => Err("Expected 'default' or 'fn' after export".into()),
+        }
+    }
+
+    fn parse_block(&mut self) -> Result<Vec<Stmt>, String> {
         let mut stmts = Vec::new();
         
         while !matches!(self.current_token(), Some(Token::RBrace | Token::Colon)) && !self.is_at_end() {

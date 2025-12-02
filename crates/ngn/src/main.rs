@@ -11,7 +11,22 @@ use regex::Regex as RegexLib;
 use std::fs;
 use std::collections::HashSet;
 use crate::ast::{
-    ClosureDef, ClosureValue, EnumDef, FnDef, InterpolationPart, MethodMutationType, ModelDef, Moved, Ownership, Pattern, RoleDef, Type
+    ClosureDef, 
+    ClosureValue, 
+    EnumDef, 
+    FnDef, 
+    InterpolationPart, 
+    MethodMutationType, 
+    ModelDef, 
+    Moved, 
+    Ownership, 
+    Pattern, 
+    RoleDef, 
+    Type, 
+    ModuleExports, 
+    RuntimeContext, 
+    ExportKind, 
+    ImportKind, 
 };
 
 use async_recursion::async_recursion;
@@ -128,6 +143,7 @@ fn format_value(v: &Value) -> String {
         },
         Value::Channel(_, _, _) => "<channel>".to_string(),
         Value::StateActor(_, _, _) => "<state>".to_string(),
+        Value::Namespace(name) => format!("[namespace: {}]", name),
     }
 }
 
@@ -242,6 +258,7 @@ fn is_truthy(v: &Value) -> bool {
         Value::EnumValue(_, _, _) => true,
         Value::Channel(_, _, _) => true,
         Value::StateActor(_, _, _) => true,
+        Value::Namespace(_) => true,
     }
 }
 
@@ -410,6 +427,7 @@ fn infer_value_type(v: &Value) -> Type {
             Type::Channel(Box::new(inner_type.clone()))
         }
         Value::StateActor(_, _, inner_type) => inner_type.clone(),
+        Value::Namespace(_) => Type::Void,
     }
 }
 
@@ -456,6 +474,8 @@ fn infer_expr_type(
                     panic!("Type error: cannot add {:?} and {:?}", left, right);
                 }
             } else if matches!(left, Type::String) && matches!(right, Type::String) {
+                Type::String
+            } else if matches!(left, Type::Str) && matches!(right, Type::Str) {
                 Type::String
             } else {
                 panic!("Type error: cannot add {:?} and {:?}", left, right);
@@ -549,8 +569,14 @@ fn infer_expr_type(
             }
         }
         Expr::MethodCall { object, method, args: _ } => {
-            // Handle StateActor and Channel methods
+            // Handle StateActor and Channel methods, as well as Namespace function call
             if let Expr::Var(var_name) = object.as_ref() {
+                if let Some((_, Value::Namespace(ns), _, _)) = env.get(var_name) {
+                    let qualified_name = format!("{}.{}", ns, method);
+                    if let Some(fn_def) = fns.get(&qualified_name) {
+                        return fn_def.return_type.clone().unwrap_or(Type::Void);
+                    }
+                }
                 if let Some((_, Value::StateActor(_, _, inner_type), _, _)) = env.get(var_name) {
                     match method.as_str() {
                         "get" | "set" | "update" => return inner_type.clone(),
@@ -955,28 +981,23 @@ fn validate_role_compliance(
 async fn call_closure(
     closure: &ClosureValue,
     args: &[Expr],
-    outer_env: &mut HashMap<String, (AssignKind, Value, Ownership, Moved)>,
-    fns: &mut HashMap<String, FnDef>,
-    models: &mut HashMap<String, ModelDef>,
-    roles: &mut HashMap<String, RoleDef>,
-    model_methods: &mut HashMap<(String, String), FnDef>,
-    enums: &HashMap<String, EnumDef>,
+    ctx: &mut RuntimeContext,
 ) -> Value {
     // Create new scope starting with captured environment
-    let mut closure_env = closure.captured_env.clone();
+    let mut closure_ctx = ctx.fork_with_env(closure.captured_env.clone());
 
     // For vars, get current values from outer_env
     // (in case they've been updated since closure creation)
     for var_name in &closure.live_vars {
-        if let Some(current_value) = outer_env.get(var_name) {
-            closure_env.insert(var_name.clone(), current_value.clone());
+        if let Some(current_value) = ctx.env.get(var_name) {
+            closure_ctx.env.insert(var_name.clone(), current_value.clone());
         }
     }
     
     // Bind parameters
     for (i, (param_name, param_type_ownership)) in closure.def.params.iter().enumerate() {
         if i < args.len() {
-            let arg_val = eval_expr(&args[i], outer_env, fns, models, roles, model_methods, enums).await;
+            let arg_val = eval_expr(&args[i], ctx).await;
 
             // Type check if parameter has a type annotation
             let ownership = match param_type_ownership {
@@ -996,7 +1017,7 @@ async fn call_closure(
                 None => Ownership::Borrowed,
             };
 
-            closure_env.insert(
+            closure_ctx.env.insert(
                 param_name.clone(),
                 (AssignKind::Const, arg_val, ownership, Moved::False),
             );
@@ -1008,19 +1029,14 @@ async fn call_closure(
     // Execute closure body
     let flow = execute_block(
         &closure.def.body,
-        &mut closure_env,
-        fns,
-        models,
-        roles,
-        model_methods,
-        enums,
+        &mut closure_ctx,
         closure.def.return_type.as_ref(),
     ).await;
 
     // Sync all vars back (they're live references now)
     for updated_var in &closure.live_vars {
-        if let Some(value) = closure_env.get(updated_var) {
-            outer_env.insert(updated_var.clone(), value.clone());
+        if let Some(value) = closure_ctx.env.get(updated_var) {
+            ctx.env.insert(updated_var.clone(), value.clone());
         }
     }
     
@@ -1162,12 +1178,7 @@ fn collect_vars_from_expr(e: &Expr, vars: &mut Vec<String>) {
 #[async_recursion]
 async fn eval_expr(
     e: &Expr,
-    env: &mut HashMap<String, (AssignKind, Value, Ownership, Moved)>,
-    fns: &mut HashMap<String, FnDef>,
-    models: &mut HashMap<String, ModelDef>,
-    roles: &mut HashMap<String, RoleDef>,
-    model_methods: &mut HashMap<(String, String), FnDef>,
-    enums: &HashMap<String, EnumDef>,
+    ctx: &mut RuntimeContext,
 ) -> Value {
     match e {
         Expr::I64(n) => Value::I64(*n),
@@ -1182,7 +1193,7 @@ async fn eval_expr(
                 match part {
                     InterpolationPart::Literal(s) => result.push_str(s),
                     InterpolationPart::Expression(expr) => {
-                        let val = eval_expr(expr, env, fns, models, roles, model_methods, enums).await;
+                        let val = eval_expr(expr, ctx).await;
                         result.push_str(&format_value(&val));
                     }
                 }
@@ -1194,16 +1205,16 @@ async fn eval_expr(
         Expr::Array(exprs) => {
             let mut values: Vec<Value> = Vec::new();
             for e in exprs {
-                values.push(eval_expr(e, env, fns, models, roles, model_methods, enums).await);
+                values.push(eval_expr(e, ctx).await);
             }
             Value::Array(values)
         },
         Expr::Not(e) => {
-            let val = eval_expr(e, env, fns, models, roles, model_methods, enums).await;
+            let val = eval_expr(e, ctx).await;
             Value::Bool(!is_truthy(&val))
         },
         Expr::Add(a, b) => {
-            match (eval_expr(a, env, fns, models, roles, model_methods, enums).await, eval_expr(b, env, fns, models, roles, model_methods, enums).await) {
+            match (eval_expr(a, ctx).await, eval_expr(b, ctx).await) {
                 (Value::I64(x), Value::I64(y)) => Value::I64(x + y),
                 (Value::I32(x), Value::I32(y)) => Value::I32(x + y),
                 (Value::U64(x), Value::U64(y)) => Value::U64(x + y),
@@ -1215,7 +1226,7 @@ async fn eval_expr(
             }
         }
         Expr::Subtract(a, b) => {
-            match (eval_expr(a, env, fns, models, roles, model_methods, enums).await, eval_expr(b, env, fns, models, roles, model_methods, enums).await) {
+            match (eval_expr(a, ctx).await, eval_expr(b, ctx).await) {
                 (Value::I64(x), Value::I64(y)) => Value::I64(x - y),
                 (Value::I32(x), Value::I32(y)) => Value::I32(x - y),
                 (Value::U64(x), Value::U64(y)) => Value::U64(x - y),
@@ -1226,7 +1237,7 @@ async fn eval_expr(
             }
         }
         Expr::Multiply(a, b) => {
-            match (eval_expr(a, env, fns, models, roles, model_methods, enums).await, eval_expr(b, env, fns, models, roles, model_methods, enums).await) {
+            match (eval_expr(a, ctx).await, eval_expr(b, ctx).await) {
                 (Value::I64(x), Value::I64(y)) => Value::I64(x * y),
                 (Value::I32(x), Value::I32(y)) => Value::I32(x * y),
                 (Value::U64(x), Value::U64(y)) => Value::U64(x * y),
@@ -1237,7 +1248,7 @@ async fn eval_expr(
             }
         }
         Expr::Divide(a, b) => {
-            match (eval_expr(a, env, fns, models, roles, model_methods, enums).await, eval_expr(b, env, fns, models, roles, model_methods, enums).await) {
+            match (eval_expr(a, ctx).await, eval_expr(b, ctx).await) {
                 (Value::I64(x), Value::I64(y)) => Value::I64(x / y),
                 (Value::I32(x), Value::I32(y)) => Value::I32(x / y),
                 (Value::U64(x), Value::U64(y)) => Value::U64(x / y),
@@ -1248,7 +1259,7 @@ async fn eval_expr(
             }
         }
         Expr::Negative(e) => {
-            match eval_expr(e, env, fns, models, roles, model_methods, enums).await {
+            match eval_expr(e, ctx).await {
                 Value::I64(x) => Value::I64(-x),
                 Value::I32(x) => Value::I32(-x),
                 Value::F64(x) => Value::F64(-x),
@@ -1260,7 +1271,7 @@ async fn eval_expr(
             }
         }
         Expr::Power(a, b) => {
-            match (eval_expr(a, env, fns, models, roles, model_methods, enums).await, eval_expr(b, env, fns, models, roles, model_methods, enums).await) {
+            match (eval_expr(a, ctx).await, eval_expr(b, ctx).await) {
                 (Value::I64(x), Value::I64(y)) => {
                     if y < 0 || y > u32::MAX as i64 {
                         panic!("Exponent out of range for i64: {}", y);
@@ -1286,7 +1297,7 @@ async fn eval_expr(
             }
         }
         Expr::Modulo(a, b) => {
-            match (eval_expr(a, env, fns, models, roles, model_methods, enums).await, eval_expr(b, env, fns, models, roles, model_methods, enums).await) {
+            match (eval_expr(a, ctx).await, eval_expr(b, ctx).await) {
                 (Value::I64(x), Value::I64(y)) => Value::I64(x % y),
                 (Value::I32(x), Value::I32(y)) => Value::I32(x % y),
                 (Value::U64(x), Value::U64(y)) => Value::U64(x % y),
@@ -1297,17 +1308,17 @@ async fn eval_expr(
             }
         }
         Expr::Equal(a, b) => {
-            let av = eval_expr(a, env, fns, models, roles, model_methods, enums).await;
-            let bv = eval_expr(b, env, fns, models, roles, model_methods, enums).await;
+            let av = eval_expr(a, ctx).await;
+            let bv = eval_expr(b, ctx).await;
             Value::Bool(values_equal(&av, &bv))
         }
         Expr::NotEqual(a, b) => {
-            let av = eval_expr(a, env, fns, models, roles, model_methods, enums).await;
-            let bv = eval_expr(b, env, fns, models, roles, model_methods, enums).await;
+            let av = eval_expr(a, ctx).await;
+            let bv = eval_expr(b, ctx).await;
             Value::Bool(!values_equal(&av, &bv))
         }
         Expr::LessThan(a, b) => {
-            match (eval_expr(a, env, fns, models, roles, model_methods, enums).await, eval_expr(b, env, fns, models, roles, model_methods, enums).await) {
+            match (eval_expr(a, ctx).await, eval_expr(b, ctx).await) {
                 (Value::I64(x), Value::I64(y)) => Value::Bool(x < y),
                 (Value::I32(x), Value::I32(y)) => Value::Bool(x < y),
                 (Value::U64(x), Value::U64(y)) => Value::Bool(x < y),
@@ -1318,7 +1329,7 @@ async fn eval_expr(
             }
         }
         Expr::LessThanOrEqual(a, b) => {
-            match (eval_expr(a, env, fns, models, roles, model_methods, enums).await, eval_expr(b, env, fns, models, roles, model_methods, enums).await) {
+            match (eval_expr(a, ctx).await, eval_expr(b, ctx).await) {
                 (Value::I64(x), Value::I64(y)) => Value::Bool(x <= y),
                 (Value::I32(x), Value::I32(y)) => Value::Bool(x <= y),
                 (Value::U64(x), Value::U64(y)) => Value::Bool(x <= y),
@@ -1329,7 +1340,7 @@ async fn eval_expr(
             }
         }
         Expr::GreaterThan(a, b) => {
-            match (eval_expr(a, env, fns, models, roles, model_methods, enums).await, eval_expr(b, env, fns, models, roles, model_methods, enums).await) {
+            match (eval_expr(a, ctx).await, eval_expr(b, ctx).await) {
                 (Value::I64(x), Value::I64(y)) => Value::Bool(x > y),
                 (Value::I32(x), Value::I32(y)) => Value::Bool(x > y),
                 (Value::U64(x), Value::U64(y)) => Value::Bool(x > y),
@@ -1340,7 +1351,7 @@ async fn eval_expr(
             }
         }
         Expr::GreaterThanOrEqual(a, b) => {
-            match (eval_expr(a, env, fns, models, roles, model_methods, enums).await, eval_expr(b, env, fns, models, roles, model_methods, enums).await) {
+            match (eval_expr(a, ctx).await, eval_expr(b, ctx).await) {
                 (Value::I64(x), Value::I64(y)) => Value::Bool(x >= y),
                 (Value::I32(x), Value::I32(y)) => Value::Bool(x >= y),
                 (Value::U64(x), Value::U64(y)) => Value::Bool(x >= y),
@@ -1351,13 +1362,13 @@ async fn eval_expr(
             }
         }
         Expr::Assign { name, value } => {
-            let v = eval_expr(value, env, fns, models, roles, model_methods, enums).await;
-            env.insert(name.clone(), (AssignKind::Var, v.clone(), Ownership::Owned, Moved::False));
+            let v = eval_expr(value, ctx).await;
+            ctx.env.insert(name.clone(), (AssignKind::Var, v.clone(), Ownership::Owned, Moved::False));
             v
         }
         Expr::CompoundAssign { name, op: _, value } => {
-            let v = eval_expr(value, env, fns, models, roles, model_methods, enums).await;
-            env.insert(name.clone(), (AssignKind::Var, v.clone(), Ownership::Owned, Moved::False));
+            let v = eval_expr(value, ctx).await;
+            ctx.env.insert(name.clone(), (AssignKind::Var, v.clone(), Ownership::Owned, Moved::False));
             v
         }
         Expr::Regex(pattern) => {
@@ -1370,7 +1381,7 @@ async fn eval_expr(
             }
         }
         Expr::Var(name) => {
-            if let Some((_, v, ownership, moved)) = env.get(name) {
+            if let Some((_, v, ownership, moved)) = ctx.env.get(name) {
                 if let Moved::True = *moved {
                     panic!("Variable '{}' has been moved", name);
                 }
@@ -1382,7 +1393,7 @@ async fn eval_expr(
                     return rx_guard.recv().await.expect("State actor closed");
                 }
                 v.clone()
-            } else if let Some(fn_def) = fns.get(name) {
+            } else if let Some(fn_def) = ctx.fns.get(name) {
                 // If it's a function in fns, return it as a Value::Function
                 Value::Function(fn_def.clone())
             } else {
@@ -1390,7 +1401,7 @@ async fn eval_expr(
                 let mut found_enum = false;
                 let mut enum_name = String::new();
                 
-                for (enum_def_name, enum_def) in enums.iter() {
+                for (enum_def_name, enum_def) in ctx.enums.iter() {
                     if enum_def.variants.iter().any(|v| v.name == *name) {
                         found_enum = true;
                         enum_name = enum_def_name.clone();
@@ -1406,12 +1417,12 @@ async fn eval_expr(
             }
         }
         Expr::Const(name) => {
-            if let Some((_, v, _ownership, moved)) = env.get(name) {
+            if let Some((_, v, _ownership, moved)) = ctx.env.get(name) {
                 if let Moved::True = *moved {
                     panic!("Constant '{}' has been moved", name);
                 }
                 v.clone()
-            } else if let Some(fn_def) = fns.get(name) {
+            } else if let Some(fn_def) = ctx.fns.get(name) {
                 // If it's a function in fns, return it as a Value::Function
                 Value::Function(fn_def.clone())
             } else {
@@ -1419,7 +1430,7 @@ async fn eval_expr(
             }
         },
         Expr::Static(name) => {
-            if let Some((_, v, _ownership, _moved)) = env.get(name) {
+            if let Some((_, v, _ownership, _moved)) = ctx.env.get(name) {
                 v.clone()
             } else {
                 panic!("Undefined static: {}", name);
@@ -1430,17 +1441,12 @@ async fn eval_expr(
                 panic!("thread() expects exactly 1 argument (a closure)");
             }
             
-            let closure_val = eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await;
+            let closure_val = eval_expr(&args[0], ctx).await;
             
             if let Value::Closure(closure) = closure_val {
                 // 1. Clone the entire environment for the new thread
                 // This mimics a 'move' closure in Rust.
-                let mut thread_env = env.clone();
-                let mut thread_fns = fns.clone();
-                let mut thread_models = models.clone();
-                let mut thread_roles = roles.clone();
-                let mut thread_methods = model_methods.clone();
-                let thread_enums = enums.clone();
+                let mut thread_ctx = ctx.fork();
                 let thread_closure = closure.clone();
 
                 // 2. Spawn Tokio Task
@@ -1449,12 +1455,7 @@ async fn eval_expr(
                     call_closure(
                         &thread_closure,
                         &[], // No args passed to thread fn
-                        &mut thread_env,
-                        &mut thread_fns,
-                        &mut thread_models,
-                        &mut thread_roles,
-                        &mut thread_methods,
-                        &thread_enums
+                        &mut thread_ctx,
                     ).await;
                 });
                 
@@ -1465,16 +1466,11 @@ async fn eval_expr(
         }
         Expr::Thread(target) => {
             // We expect the target to be a closure
-            let val = eval_expr(target, env, fns, models, roles, model_methods, enums).await;
+            let val = eval_expr(target, ctx).await;
 
             if let Value::Closure(closure) = val {
                 // 1. Clone everything to move into the thread
-                let mut thread_env = env.clone();
-                let mut thread_fns = fns.clone();
-                let mut thread_models = models.clone();
-                let mut thread_roles = roles.clone();
-                let mut thread_methods = model_methods.clone();
-                let thread_enums = enums.clone();
+                let mut thread_ctx = ctx.fork();
                 let thread_closure = closure.clone();
 
                 // 2. Spawn the Tokio task
@@ -1483,12 +1479,7 @@ async fn eval_expr(
                     call_closure(
                         &thread_closure,
                         &[], // Spawned threads take no arguments
-                        &mut thread_env,
-                        &mut thread_fns,
-                        &mut thread_models,
-                        &mut thread_roles,
-                        &mut thread_methods,
-                        &thread_enums
+                        &mut thread_ctx,
                     ).await; 
                 });
 
@@ -1506,8 +1497,8 @@ async fn eval_expr(
             Value::Channel(tx, Arc::new(Mutex::new(rx)), inner_type)
         }
         Expr::Send(chan_expr, val_expr) => {
-            let chan_val = eval_expr(chan_expr, env, fns, models, roles, model_methods, enums).await;
-            let val = eval_expr(val_expr, env, fns, models, roles, model_methods, enums).await;
+            let chan_val = eval_expr(chan_expr, ctx).await;
+            let val = eval_expr(val_expr, ctx).await;
 
             if let Value::Channel(tx, _, _) = chan_val {
                 match tx.send(val).await {
@@ -1519,7 +1510,7 @@ async fn eval_expr(
             }
         }
         Expr::Receive(chan_expr) => {
-            let chan_val = eval_expr(chan_expr, env, fns, models, roles, model_methods, enums).await;
+            let chan_val = eval_expr(chan_expr, ctx).await;
 
             if let Value::Channel(_, rx_mutex, _) = chan_val {
                 let mut rx = rx_mutex.lock().await;
@@ -1532,7 +1523,7 @@ async fn eval_expr(
             }
         }
         Expr::MaybeReceive(chan_expr) => {
-            let chan_val = eval_expr(chan_expr, env, fns, models, roles, model_methods, enums).await;
+            let chan_val = eval_expr(chan_expr, ctx).await;
 
             if let Value::Channel(_, rx_arc, _) = chan_val {
                 loop {
@@ -1567,19 +1558,14 @@ async fn eval_expr(
             }
         }
         Expr::MakeState(initial_expr) => {
-            let initial = eval_expr(initial_expr, env, fns, models, roles, model_methods, enums).await;
+            let initial = eval_expr(initial_expr, ctx).await;
             
             // Create channels
             let (cmd_tx, mut cmd_rx) = mpsc::channel::<Value>(32);
             let (resp_tx, resp_rx) = mpsc::channel::<Value>(32);
             
             // Clone environment for actor
-            let mut actor_env = env.clone();
-            let mut actor_fns = fns.clone();
-            let mut actor_models = models.clone();
-            let mut actor_roles = roles.clone();
-            let mut actor_methods = model_methods.clone();
-            let actor_enums = enums.clone();
+            let mut actor_ctx = ctx.fork();
             let inner_type = infer_value_type(&initial);
             let args: Vec<Expr> = vec![*(*initial_expr).clone()];
             
@@ -1590,12 +1576,7 @@ async fn eval_expr(
                         let new_val = call_closure(
                             &closure,
                             &args,
-                            &mut actor_env,
-                            &mut actor_fns,
-                            &mut actor_models,
-                            &mut actor_roles,
-                            &mut actor_methods,
-                            &actor_enums,
+                            &mut actor_ctx,
                         ).await;
                         let _ = resp_tx.send(new_val).await;
                     }
@@ -1609,7 +1590,7 @@ async fn eval_expr(
                 if args.is_empty() {
                     panic!("sleep() requires a duration in milliseconds");
                 }
-                let duration = eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await;
+                let duration = eval_expr(&args[0], ctx).await;
                 let ms = match duration {
                     Value::I64(n) => n as u64,
                     Value::I32(n) => n as u64,
@@ -1621,23 +1602,18 @@ async fn eval_expr(
                 return Value::Void;
             }
 
-            if let Some((_, Value::Closure(closure), _ownership, _moved)) = env.get(name) {
+            if let Some((_, Value::Closure(closure), _ownership, _moved)) = ctx.env.get(name) {
                 let closure = closure.clone();
                 return call_closure(
                     &closure,
                     args,
-                    env,
-                    fns,
-                    models,
-                    roles,
-                    model_methods,
-                    enums,
+                    ctx,
                 ).await;
             }
 
-            let fn_def = if let Some((_, Value::Function(fn_def), _ownership, _moved)) = env.get(name) {
+            let fn_def = if let Some((_, Value::Function(fn_def), _ownership, _moved)) = ctx.env.get(name) {
                 fn_def.clone()
-            } else if let Some(fn_def) = fns.get(name) {
+            } else if let Some(fn_def) = ctx.fns.get(name) {
                 fn_def.clone()
             } else {
                 panic!("Unknown function: {}", name);
@@ -1650,10 +1626,10 @@ async fn eval_expr(
             // Bind parameters
             for (i, (param_name, param_type, param_ownership)) in fn_def.params.iter().enumerate() {
                 let arg_expr = &args[i];
-                let ownership = get_ownership(arg_expr, env);
+                let ownership = get_ownership(arg_expr, &ctx.env);
 
                 let arg_val = if i < args.len() {
-                    eval_expr(arg_expr, env, fns, models, roles, model_methods, enums).await
+                    eval_expr(arg_expr, ctx).await
                 } else {
                     panic!("Function {} expects {} arguments, got {}", name, fn_arg_count, args.len())
                 };
@@ -1666,8 +1642,8 @@ async fn eval_expr(
                 // Mark as moved if param expects Owned
                 if *param_ownership == Ownership::Owned {
                     if let Expr::Var(var_name) = arg_expr {
-                        if let Some((k, v, o, _)) = env.get(var_name) {
-                            env.insert(var_name.clone(), (k.clone(), v.clone(), o.clone(), Moved::True));
+                        if let Some((k, v, o, _)) = ctx.env.get(var_name) {
+                            ctx.env.insert(var_name.clone(), (k.clone(), v.clone(), o.clone(), Moved::True));
                         }
                     }
                 }
@@ -1685,7 +1661,8 @@ async fn eval_expr(
             
             // Execute function body
             if let Some(body) = &fn_def.body {
-                let flow = execute_block(body, &mut fn_env, fns, models, roles, model_methods, enums, fn_def.return_type.as_ref()).await;
+                let mut fn_ctx = ctx.fork_with_env(fn_env);
+                let flow = execute_block(body, &mut fn_ctx, fn_def.return_type.as_ref()).await;
                 match flow {
                     ControlFlow::Return(val) => val,
                     _ => Value::Void,
@@ -1697,12 +1674,12 @@ async fn eval_expr(
         }
         Expr::ModelInstance { name, fields } => {
             // Lookup model definition
-            if let Some(model_def) = models.get(name).cloned() {
+            if let Some(model_def) = ctx.models.get(name).cloned() {
                 let mut field_values = HashMap::new();
                 
                 // Evaluate all field expressions
                 for (field_name, field_expr) in fields {
-                    let field_val = eval_expr(field_expr, env, fns, models, roles, model_methods, enums).await;
+                    let field_val = eval_expr(field_expr, ctx).await;
 
                     // Find the expected type for this field
                     if let Some((_, expected_type)) = model_def.fields.iter().find(|(n, _)| n == field_name) {
@@ -1734,23 +1711,23 @@ async fn eval_expr(
             }
         }
         Expr::FieldAccess { object, field, value } => {
-            let obj_val = eval_expr(object, env, fns, models, roles, model_methods, enums).await;
+            let obj_val = eval_expr(object, ctx).await;
             
             match obj_val {
                 Value::Object(model_name, mut fields) => {
                     // Only update if value is provided
                     if let Some(new_val_expr) = value {
-                        let new_val = eval_expr(new_val_expr, env, fns, models, roles, model_methods, enums).await;
+                        let new_val = eval_expr(new_val_expr, ctx).await;
 
                         // Check mutability
                         if let Expr::Var(var_name) = object.as_ref() {
-                            if !can_mutate(var_name, env) {
+                            if !can_mutate(var_name, &ctx.env) {
                                 panic!("Cannot mutate field {:?} on immutable {:?}", field, var_name);
                             }
                         }
 
                         // Type check the field assignment
-                        if let Some(model_def) = models.get(&model_name) {
+                        if let Some(model_def) = ctx.models.get(&model_name) {
                             if let Some((_, expected_type)) = model_def.fields.iter().find(|(n, _)| n == field) {
                                 let actual_type = infer_value_type(&new_val);
                                 if !types_compatible(expected_type, &actual_type) {
@@ -1773,10 +1750,10 @@ async fn eval_expr(
                         
                         // Update the original variable
                         if let Expr::Var(var_name) = object.as_ref() {
-                            if let Some((kind, _, ownership, _)) = env.get(var_name) {
+                            if let Some((kind, _, ownership, _)) = ctx.env.get(var_name) {
                                 match ownership {
                                     Ownership::Owned => {
-                                        env.insert(var_name.clone(), (kind.clone(), updated_obj, ownership.clone(), Moved::False));
+                                        ctx.env.insert(var_name.clone(), (kind.clone(), updated_obj, ownership.clone(), Moved::False));
                                     }
                                     Ownership::Borrowed => {
                                         panic!("Cannot directly assign field on borrowed instance '{}'.", var_name);
@@ -1801,7 +1778,50 @@ async fn eval_expr(
         Expr::MethodCall { object, method, args } => {
             // Handle StateActor and Channel methods
             if let Expr::Var(var_name) = object.as_ref() {
-                if let Some((_, Value::StateActor(tx, rx, inner_type), ownership, _)) = env.get(var_name) {
+                if let Some((_, Value::Namespace(ns), _, _)) = ctx.env.get(var_name) {
+                    let qualified_name = format!("{}.{}", ns, method);
+                    
+                    let fn_def = ctx.fns.get(&qualified_name)
+                        .unwrap_or_else(|| panic!("Function '{}' not found in namespace '{}'", method, ns))
+                        .clone();
+                    
+                    // Evaluate arguments
+                    let mut eval_args = Vec::new();
+                    for arg in args {
+                        eval_args.push(eval_expr(arg, ctx).await);
+                    }
+                    
+                    // Build function environment
+                    let mut fn_env = HashMap::new();
+                    for ((param_name, param_type, ownership), arg_val) in fn_def.params.iter().zip(eval_args) {
+                        let arg_type = infer_value_type(&arg_val);
+                        if let Some(expected) = param_type {
+                            if !types_compatible(expected, &arg_type) {
+                                panic!(
+                                    "Argument type mismatch for '{}': expected {:?}, got {:?}",
+                                    param_name, expected, arg_type
+                                );
+                            }
+                        }
+                        fn_env.insert(
+                            param_name.clone(),
+                            (AssignKind::Var, arg_val, ownership.clone(), Moved::False)
+                        );
+                    }
+                    
+                    // Execute function body
+                    if let Some(body) = &fn_def.body {
+                        let mut fn_ctx = ctx.fork_with_env(fn_env);
+                        let flow = execute_block(body, &mut fn_ctx, fn_def.return_type.as_ref()).await;
+                        
+                        return match flow {
+                            ControlFlow::Return(v) => v,
+                            _ => Value::Void,
+                        };
+                    } else {
+                        panic!("Function '{}' has no body", qualified_name);
+                    }
+                } else if let Some((_, Value::StateActor(tx, rx, inner_type), ownership, _)) = ctx.env.get(var_name) {
                     let tx = tx.clone();
                     let rx = rx.clone();
                     let inner_type = inner_type.clone();
@@ -1818,7 +1838,7 @@ async fn eval_expr(
                             if args.is_empty() {
                                 panic!("state.set() requires a value argument");
                             }
-                            let val = eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await;
+                            let val = eval_expr(&args[0], ctx).await;
                             let const_closure = make_const_closure(val, &inner_type, &ownership);
                             tx.send(const_closure).await.expect("State actor closed");
                             let mut rx_guard = rx.lock().await;
@@ -1828,7 +1848,7 @@ async fn eval_expr(
                             if args.is_empty() {
                                 panic!("state.update() requires a closure argument");
                             }
-                            let closure = eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await;
+                            let closure = eval_expr(&args[0], ctx).await;
                             if !matches!(closure, Value::Closure(_)) {
                                 panic!("state.update() requires a closure");
                             }
@@ -1838,7 +1858,7 @@ async fn eval_expr(
                         }
                         _ => panic!("Unknown state method: {}", method),
                     }
-                } else if let Some((_, Value::Channel(_, rx_arc, _), _, _)) = env.get(var_name) {
+                } else if let Some((_, Value::Channel(_, rx_arc, _), _, _)) = ctx.env.get(var_name) {
                     match method.as_str() {
                         "close" => {
                             let mut rx = rx_arc.lock().await;
@@ -1852,16 +1872,16 @@ async fn eval_expr(
 
             // Check if it's a static method call on a model type
             if let Expr::Var(model_name) = &**object {
-                if models.contains_key(model_name) {
+                if ctx.models.contains_key(model_name) {
                     // Static method call: Model.method(...)
-                    if let Some(method_def) = model_methods.get(&(model_name.clone(), method.clone())).cloned() {
+                    if let Some(method_def) = ctx.model_methods.get(&(model_name.clone(), method.clone())).cloned() {
                         // Create new scope for the static method (no `this`)
                         let mut method_env: HashMap<String, (AssignKind, Value, Ownership, Moved)> = HashMap::new();
                         
                         // Bind parameters
                         for (i, (param_name, param_type, param_ownership)) in method_def.params.iter().enumerate() {
                             if i < args.len() {
-                                let arg_val = eval_expr(&args[i], env, fns, models, roles, model_methods, enums).await;
+                                let arg_val = eval_expr(&args[i], ctx).await;
 
                                 // Type check if parameter has a type annotation
                                 let actual_type = infer_value_type(&arg_val);
@@ -1887,7 +1907,8 @@ async fn eval_expr(
                         
                         // Execute method body
                         if let Some(body) = &method_def.body {
-                            let flow = execute_block(body, &mut method_env, fns, models, roles, model_methods, enums, method_def.return_type.as_ref()).await;
+                            let mut method_ctx = ctx.fork_with_env(method_env);
+                            let flow = execute_block(body, &mut method_ctx, method_def.return_type.as_ref()).await;
                             match flow {
                                 ControlFlow::Return(val) => return val,
                                 _ => return Value::Void,
@@ -1901,7 +1922,7 @@ async fn eval_expr(
                 }
             }
 
-            let obj_val = eval_expr(object, env, fns, models, roles, model_methods, enums).await;
+            let obj_val = eval_expr(object, ctx).await;
 
             // Handle numeric methods
             match obj_val.clone() {
@@ -1963,7 +1984,7 @@ async fn eval_expr(
                     "push" => {
                         // Check mutability
                         if let Expr::Var(var_name) = object.as_ref() {
-                            if !can_mutate(var_name, env) {
+                            if !can_mutate(var_name, &ctx.env) {
                                 panic!("Cannot call mutating method '{}' on immutable or borrowed array '{}'", method, var_name);
                             }
                         }
@@ -1973,9 +1994,9 @@ async fn eval_expr(
                             panic!("push() requires at least one argument");
                         }
                         
-                        let arg_val = eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await;
+                        let arg_val = eval_expr(&args[0], ctx).await;
                         let index: Option<usize> = if args.len() > 1 {
-                            Some(to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums).await)
+                            Some(to_usize(&eval_expr(&args[1], ctx).await)
                                 .expect("push() index must be an integer"))
                         } else {
                             None
@@ -1995,8 +2016,8 @@ async fn eval_expr(
                         
                         // Update the original variable
                         if let Expr::Var(var_name) = object.as_ref() {
-                            if let Some((kind, _, ownership, _)) = env.get(var_name) {
-                                env.insert(var_name.clone(), (kind.clone(), Value::Array(arr), ownership.clone(), Moved::False));
+                            if let Some((kind, _, ownership, _)) = ctx.env.get(var_name) {
+                                ctx.env.insert(var_name.clone(), (kind.clone(), Value::Array(arr), ownership.clone(), Moved::False));
                             }
                         }
                         
@@ -2005,7 +2026,7 @@ async fn eval_expr(
                     "pull" => {
                         // Check mutability
                         if let Expr::Var(var_name) = object.as_ref() {
-                            if !can_mutate(var_name, env) {
+                            if !can_mutate(var_name, &ctx.env) {
                                 panic!("Cannot call mutating method '{}' on immutable or borrowed array '{}'", method, var_name);
                             }
                         }
@@ -2015,7 +2036,7 @@ async fn eval_expr(
                         }
                         
                         let index: Option<usize> = if args.len() > 1 {
-                            Some(to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums).await)
+                            Some(to_usize(&eval_expr(&args[1], ctx).await)
                                 .expect("pull() index must be an integer"))
                         } else {
                             None
@@ -2033,8 +2054,8 @@ async fn eval_expr(
                         
                         // Update the original variable
                         if let Expr::Var(var_name) = object.as_ref() {
-                            if let Some((kind, _, ownership, _)) = env.get(var_name) {
-                                env.insert(var_name.clone(), (kind.clone(), Value::Array(arr), ownership.clone(), Moved::False));
+                            if let Some((kind, _, ownership, _)) = ctx.env.get(var_name) {
+                                ctx.env.insert(var_name.clone(), (kind.clone(), Value::Array(arr), ownership.clone(), Moved::False));
                             }
                         }
                         
@@ -2043,7 +2064,7 @@ async fn eval_expr(
                     "slice" => {
                         // Check mutability
                         if let Expr::Var(var_name) = object.as_ref() {
-                            if !can_mutate(var_name, env) {
+                            if !can_mutate(var_name, &ctx.env) {
                                 panic!("Cannot call mutating method '{}' on immutable or borrowed array '{}'", method, var_name);
                             }
                         }
@@ -2052,11 +2073,11 @@ async fn eval_expr(
                             panic!("slice() requires at least a start index");
                         }
                         
-                        let start = to_usize(&eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await)
+                        let start = to_usize(&eval_expr(&args[0], ctx).await)
                             .expect("slice() start must be an integer");
                         
                         let stop = if args.len() > 1 {
-                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums).await)
+                            to_usize(&eval_expr(&args[1], ctx).await)
                                 .expect("slice() stop must be an integer")
                         } else {
                             arr.len()
@@ -2070,8 +2091,8 @@ async fn eval_expr(
                         
                         // Update the original variable
                         if let Expr::Var(var_name) = object.as_ref() {
-                            if let Some((kind, _, ownership, _)) = env.get(var_name) {
-                                env.insert(var_name.clone(), (kind.clone(), Value::Array(arr), ownership.clone(), Moved::False));
+                            if let Some((kind, _, ownership, _)) = ctx.env.get(var_name) {
+                                ctx.env.insert(var_name.clone(), (kind.clone(), Value::Array(arr), ownership.clone(), Moved::False));
                             }
                         }
                         
@@ -2080,7 +2101,7 @@ async fn eval_expr(
                     "splice" => {
                         // Check mutability - only Var + Owned can mutate
                         if let Expr::Var(var_name) = object.as_ref() {
-                            if !can_mutate(var_name, env) {
+                            if !can_mutate(var_name, &ctx.env) {
                                 panic!("Cannot call mutating method 'splice' on immutable or borrowed array '{}'", var_name);
                             }
                         }
@@ -2089,7 +2110,7 @@ async fn eval_expr(
                             panic!("splice() requires items to splice");
                         }
                         
-                        let items_to_splice = match eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await {
+                        let items_to_splice = match eval_expr(&args[0], ctx).await {
                             Value::Array(items) => items,
                             _ => panic!("splice() first argument must be an array"),
                         };
@@ -2110,7 +2131,7 @@ async fn eval_expr(
                         }
                         
                         let start_pos = if args.len() > 1 {
-                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums).await)
+                            to_usize(&eval_expr(&args[1], ctx).await)
                                 .expect("splice() start position must be an integer")
                         } else {
                             arr.len()
@@ -2129,8 +2150,8 @@ async fn eval_expr(
                         
                         // Update the original variable
                         if let Expr::Var(var_name) = object.as_ref() {
-                            if let Some((kind, _, ownership, _)) = env.get(var_name) {
-                                env.insert(var_name.clone(), (kind.clone(), Value::Array(arr.clone()), ownership.clone(), Moved::False));
+                            if let Some((kind, _, ownership, _)) = ctx.env.get(var_name) {
+                                ctx.env.insert(var_name.clone(), (kind.clone(), Value::Array(arr.clone()), ownership.clone(), Moved::False));
                             }
                         }
 
@@ -2140,14 +2161,14 @@ async fn eval_expr(
                         // copy() doesn't mutate, so no mutability check needed
                         
                         let start = if !args.is_empty() {
-                            to_usize(&eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await)
+                            to_usize(&eval_expr(&args[0], ctx).await)
                                 .expect("copy() start must be an integer")
                         } else {
                             0
                         };
                         
                         let stop = if args.len() > 1 {
-                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums).await)
+                            to_usize(&eval_expr(&args[1], ctx).await)
                                 .expect("copy() stop must be an integer")
                         } else {
                             arr.len()
@@ -2178,7 +2199,7 @@ async fn eval_expr(
                             panic!("includes() requires a search argument");
                         }
                         
-                        let search = match eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await {
+                        let search = match eval_expr(&args[0], ctx).await {
                             Value::String(search_str) => search_str,
                             _ => panic!("includes() argument must be a string"),
                         };
@@ -2194,7 +2215,7 @@ async fn eval_expr(
                             panic!("starts() requires a search argument");
                         }
                         
-                        let search = match eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await {
+                        let search = match eval_expr(&args[0], ctx).await {
                             Value::String(search_str) => search_str,
                             _ => panic!("starts() argument must be a string"),
                         };
@@ -2210,7 +2231,7 @@ async fn eval_expr(
                             panic!("ends() requires a search argument");
                         }
                         
-                        let search = match eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await {
+                        let search = match eval_expr(&args[0], ctx).await {
                             Value::String(search_str) => search_str,
                             _ => panic!("ends() argument must be a string"),
                         };
@@ -2224,7 +2245,7 @@ async fn eval_expr(
                     "replace" => {
                         // Check mutability
                         if let Expr::Var(var_name) = object.as_ref() {
-                            if !can_mutate(var_name, env) {
+                            if !can_mutate(var_name, &ctx.env) {
                                 panic!("Cannot call mutating method '{}' on immutable or borrowed string '{}'", method, var_name);
                             }
                         }
@@ -2233,8 +2254,8 @@ async fn eval_expr(
                             panic!("replace() requires search and replacement arguments");
                         }
                         
-                        let search_arg = eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await;
-                        let replacement = match eval_expr(&args[1], env, fns, models, roles, model_methods, enums).await {
+                        let search_arg = eval_expr(&args[0], ctx).await;
+                        let replacement = match eval_expr(&args[1], ctx).await {
                             Value::String(replacement_str) => replacement_str,
                             _ => panic!("replace() replacement argument must be a string"),
                         };
@@ -2281,7 +2302,7 @@ async fn eval_expr(
                     "slice" => {
                         // Check mutability
                         if let Expr::Var(var_name) = object.as_ref() {
-                            if !can_mutate(var_name, env) {
+                            if !can_mutate(var_name, &ctx.env) {
                                 panic!("Cannot call mutating method '{}' on immutable or borrowed string '{}'", method, var_name);
                             }
                         }
@@ -2290,11 +2311,11 @@ async fn eval_expr(
                             panic!("slice() requires at least a start index");
                         }
                         
-                        let start = to_usize(&eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await)
+                        let start = to_usize(&eval_expr(&args[0], ctx).await)
                             .expect("slice() start must be an integer");
                         
                         let stop = if args.len() > 1 {
-                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums).await)
+                            to_usize(&eval_expr(&args[1], ctx).await)
                                 .expect("slice() stop must be an integer")
                         } else {
                             s.len()
@@ -2313,8 +2334,8 @@ async fn eval_expr(
                         
                         // Update the original variable
                         if let Expr::Var(var_name) = object.as_ref() {
-                            if let Some((kind, _, ownership, _)) = env.get(var_name) {
-                                env.insert(var_name.clone(), (kind.clone(), Value::String(s), ownership.clone(), Moved::False));
+                            if let Some((kind, _, ownership, _)) = ctx.env.get(var_name) {
+                                ctx.env.insert(var_name.clone(), (kind.clone(), Value::String(s), ownership.clone(), Moved::False));
                             }
                         }
                         
@@ -2322,7 +2343,7 @@ async fn eval_expr(
                     }
                     "split" => {
                         let separator = if !args.is_empty() {
-                            match eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await {
+                            match eval_expr(&args[0], ctx).await {
                                 Value::String(sep) => {
                                     if sep.is_empty() {
                                         panic!("split() separator cannot be empty. Use split() with no arguments to split by character");
@@ -2349,14 +2370,14 @@ async fn eval_expr(
                         // copy() doesn't mutate, so no mutability check needed
                         
                         let start = if args.is_empty() {
-                            to_usize(&eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await)
+                            to_usize(&eval_expr(&args[0], ctx).await)
                                 .expect("copy() start must be an integer")
                         } else {
                             0
                         };
                         
                         let stop = if args.len() > 1 {
-                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums).await)
+                            to_usize(&eval_expr(&args[1], ctx).await)
                                 .expect("copy() stop must be an integer")
                         } else {
                             s.len()
@@ -2387,7 +2408,7 @@ async fn eval_expr(
                             panic!("index() requires a search argument");
                         }
                         
-                        let search = match eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await {
+                        let search = match eval_expr(&args[0], ctx).await {
                             Value::String(search_str) => search_str,
                             _ => panic!("index() search argument must be a string"),
                         };
@@ -2397,7 +2418,7 @@ async fn eval_expr(
                         }
                         
                         let start_pos = if args.len() > 1 {
-                            to_usize(&eval_expr(&args[1], env, fns, models, roles, model_methods, enums).await)
+                            to_usize(&eval_expr(&args[1], ctx).await)
                                 .expect("index() start position must be an integer")
                         } else {
                             0
@@ -2417,7 +2438,7 @@ async fn eval_expr(
                             panic!("repeat() requires a count argument");
                         }
                         
-                        let count = match to_usize(&eval_expr(&args[0], env, fns, models, roles, model_methods, enums).await) {
+                        let count = match to_usize(&eval_expr(&args[0], ctx).await) {
                             Ok(n) => n,
                             _ => panic!("repeat() count argument must be an integer"),
                         };
@@ -2437,14 +2458,14 @@ async fn eval_expr(
             match &obj_val {
                 Value::Object(model_name, _fields) => {
                     // Clone the method_def first to avoid borrow issues
-                    let method_def = model_methods
+                    let method_def = ctx.model_methods
                         .get(&(model_name.clone(), method.clone()))
                         .cloned()
                         .unwrap_or_else(|| panic!("Method '{}' not found on model '{}'", method, model_name));
 
                     // Check if method mutates this and if caller has permission
                     if let Expr::Var(var_name) = object.as_ref() {
-                        if let Some((kind, _, ownership, _)) = env.get(var_name) {
+                        if let Some((kind, _, ownership, _)) = ctx.env.get(var_name) {
                             let mutation_type = method_def.body.as_ref()
                                 .map(|body| method_mutation_type(body))
                                 .unwrap_or(MethodMutationType::None);
@@ -2481,30 +2502,31 @@ async fn eval_expr(
                     // Bind explicit parameters (skip first param if it matches signature)
                     for (i, (param_name, _param_type, param_ownership)) in method_def.params.iter().enumerate() {
                         if i < args.len() {
-                            let arg_val = eval_expr(&args[i], env, fns, models, roles, model_methods, enums).await;
+                            let arg_val = eval_expr(&args[i], ctx).await;
                             method_env.insert(
                                 param_name.clone(),
                                 (AssignKind::Var, arg_val, param_ownership.clone(), Moved::False),
                             );
                         }
                     }
-                        
-                    // Execute method body
-                    let flow = if let Some(body) = &method_def.body {
-                        execute_block(body, &mut method_env, fns, models, roles, model_methods, enums, method_def.return_type.as_ref()).await
-                    } else {
-                        panic!("Method '{}' has no body", method);
-                    };
-                    
+
                     // Sync `this` back to the original variable
                     if let Expr::Var(var_name) = object.as_ref() {
                         if let Some((_, updated_obj, _, _)) = method_env.get("this") {
                             // Get the original ownership from the outer env
-                            if let Some((kind, _, original_ownership, _)) = env.get(var_name) {
-                                env.insert(var_name.clone(), (kind.clone(), updated_obj.clone(), original_ownership.clone(), Moved::False));
+                            if let Some((kind, _, original_ownership, _)) = ctx.env.get(var_name) {
+                                ctx.env.insert(var_name.clone(), (kind.clone(), updated_obj.clone(), original_ownership.clone(), Moved::False));
                             }
                         }
                     }
+                        
+                    // Execute method body
+                    let flow = if let Some(body) = &method_def.body {
+                        let mut method_ctx = ctx.fork_with_env(method_env);
+                        execute_block(body, &mut method_ctx, method_def.return_type.as_ref()).await
+                    } else {
+                        panic!("Method '{}' has no body", method);
+                    };
                     
                     match flow {
                         ControlFlow::Return(val) => val,
@@ -2525,7 +2547,7 @@ async fn eval_expr(
                 .filter(|p| !param_names.contains(p))
                 .collect();
 
-            let owned_vars: Vec<String> = env
+            let owned_vars: Vec<String> = ctx.env
                 .iter()
                 .filter(|(_, (kind, _, ownership, _))| {
                     matches!(kind, AssignKind::Var) && *ownership == Ownership::Owned
@@ -2552,7 +2574,7 @@ async fn eval_expr(
             let captured_env = all_captured
                 .into_iter()
                 .filter_map(|var_name| {
-                    env.get(&var_name).map(|val| (var_name, val.clone()))
+                    ctx.env.get(&var_name).map(|val| (var_name, val.clone()))
                 })
                 .collect();
 
@@ -2564,7 +2586,7 @@ async fn eval_expr(
         }
         Expr::EnumVariant { enum_name, variant, data } => {
             let data_val = if let Some(expr) = data {
-                Some(Box::new(eval_expr(expr, env, fns, models, roles, model_methods, enums).await))
+                Some(Box::new(eval_expr(expr, ctx).await))
             } else {
                 None
             };
@@ -2577,42 +2599,37 @@ async fn eval_expr(
 #[async_recursion]
 async fn execute_stmt(
     stmt: &Stmt,
-    env: &mut HashMap<String, (AssignKind, Value, Ownership, Moved)>,
-    fns: &mut HashMap<String, FnDef>,
-    models: &mut HashMap<String, ModelDef>,
-    roles: &mut HashMap<String, RoleDef>,
-    model_methods: &mut HashMap<(String, String), FnDef>,
-    enums: &HashMap<String, EnumDef>,
+    ctx: &mut RuntimeContext,
     expected_return_type: Option<&Type>,
 ) -> ControlFlow {
     match stmt {
         Stmt::Echo(e) => {
-            let _type = infer_expr_type(e, env, fns, models, model_methods, enums);
-            let v = eval_expr(e, env, fns, models, roles, model_methods, enums).await;
+            let _type = infer_expr_type(e, &ctx.env, &ctx.fns, &ctx.models, &mut ctx.model_methods, &ctx.enums);
+            let v = eval_expr(e, ctx).await;
             print!("{}", format_value(&v));
             ControlFlow::None
         }
         Stmt::Print(e) => {
-            let _type = infer_expr_type(e, env, fns, models, model_methods, enums);
-            let v = eval_expr(e, env, fns, models, roles, model_methods, enums).await;
+            let _type = infer_expr_type(e, &ctx.env, &ctx.fns, &ctx.models, &mut ctx.model_methods, &ctx.enums);
+            let v = eval_expr(e, ctx).await;
             println!("{}", format_value(&v));
             ControlFlow::None
         }
         Stmt::ExprStmt(e) => {
-            let _type = infer_expr_type(e, env, fns, models, model_methods, enums);
-            eval_expr(e, env, fns, models, roles, model_methods, enums).await;
+            let _type = infer_expr_type(e, &ctx.env, &ctx.fns, &ctx.models, &mut ctx.model_methods, &ctx.enums);
+            eval_expr(e, ctx).await;
             ControlFlow::None
         }
         Stmt::Assign { kind, declared_type, name, value, ownership} => {
             // Check if variable already declared in this scope
-            if env.contains_key(name) {
+            if ctx.env.contains_key(name) {
                 panic!("Identifier '{}' already declared in this scope", name);
             }
             
             // Disallow function assignments for all variable types
             if let AssignKind::Var | AssignKind::Const = kind {
                 if let Expr::Var(fn_name) | Expr::Const(fn_name) = value {
-                    if fns.contains_key(fn_name) {
+                    if ctx.fns.contains_key(fn_name) {
                         panic!("Cannot assign function '{}' to variable. Use 'fn' to define functions.", fn_name);
                     }
                 }
@@ -2633,7 +2650,7 @@ async fn execute_stmt(
                 _ => {}
             }
 
-            let v = eval_expr(value, env, fns, models, roles, model_methods, enums).await;
+            let v = eval_expr(value, ctx).await;
             let actual_type = infer_value_type(&v);
 
             // Type check against declared type if provided
@@ -2646,17 +2663,17 @@ async fn execute_stmt(
                 }
             }
 
-            env.insert(name.clone(), (kind.clone(), v, ownership.clone(), Moved::False));
+            ctx.env.insert(name.clone(), (kind.clone(), v, ownership.clone(), Moved::False));
             
             ControlFlow::None
         }
         Stmt::Reassign { name, value } => {
-            let _type = infer_expr_type(value, env, fns, models, model_methods, enums);
-            if !env.contains_key(name) {
+            let _type = infer_expr_type(value, &ctx.env, &ctx.fns, &ctx.models, &mut ctx.model_methods, &ctx.enums);
+            if !ctx.env.contains_key(name) {
                 panic!("Variable '{}' not declared", name);
             }
 
-            let (kind, existing_val, ownership, _moved) = env.get(name).unwrap().clone();
+            let (kind, existing_val, ownership, _moved) = ctx.env.get(name).unwrap().clone();
             
             // Disallow direct reassignment of StateActor
             if matches!(existing_val, Value::StateActor(_, _, _)) {
@@ -2667,7 +2684,7 @@ async fn execute_stmt(
 
             match kind {
                 AssignKind::Var => {
-                    let v = eval_expr(value, env, fns, models, roles, model_methods, enums).await;
+                    let v = eval_expr(value, ctx).await;
                     let actual_type = infer_value_type(&v);
 
                     // Only allow reassignment if value is mutable (owned)
@@ -2680,7 +2697,7 @@ async fn execute_stmt(
                         panic!("Type error: variable {} is {:?}, cannot assign {:?}", name, existing_type, actual_type);
                     }
 
-                    env.insert(name.clone(), (kind.clone(), v, ownership, _moved));
+                    ctx.env.insert(name.clone(), (kind.clone(), v, ownership, _moved));
                     ControlFlow::None
                 }
                 kind => panic!("Cannot reassign for {}", match kind {
@@ -2693,22 +2710,22 @@ async fn execute_stmt(
         Stmt::Break => ControlFlow::Break,
         Stmt::Next => ControlFlow::Next,
         Stmt::If { condition, then_block, else_ifs, else_block } => {
-            let _cond_type = infer_expr_type(condition, env, fns, models, model_methods, enums);
-            let cond_value = eval_expr(condition, env, fns, models, roles, model_methods, enums).await;
+            let _cond_type = infer_expr_type(condition, &ctx.env, &ctx.fns, &ctx.models, &mut ctx.model_methods, &ctx.enums);
+            let cond_value = eval_expr(condition, ctx).await;
 
             if is_truthy(&cond_value) {
-                execute_block(then_block, env, fns, models, roles, model_methods, enums, None).await
+                execute_block(then_block, ctx, None).await
             } else {
                 for (else_if_cond, else_if_stmts) in else_ifs {
-                    let _type = infer_expr_type(else_if_cond, env, fns, models, model_methods, enums);
-                    let else_if_value = eval_expr(else_if_cond, env, fns, models, roles, model_methods, enums).await;
+                    let _type = infer_expr_type(else_if_cond, &ctx.env, &ctx.fns, &ctx.models, &mut ctx.model_methods, &ctx.enums);
+                    let else_if_value = eval_expr(else_if_cond, ctx).await;
                     if is_truthy(&else_if_value) {
-                        return execute_block(else_if_stmts, env, fns, models, roles, model_methods, enums, None).await;
+                        return execute_block(else_if_stmts, ctx, None).await;
                     }
                 }
                 
                 if let Some(else_stmts) = else_block {
-                    execute_block(else_stmts, env, fns, models, roles, model_methods, enums, None).await
+                    execute_block(else_stmts, ctx, None).await
                 } else {
                     ControlFlow::None
                 }
@@ -2716,13 +2733,13 @@ async fn execute_stmt(
         }
         Stmt::While { condition, body } => {
             loop {
-                let _cond_type = infer_expr_type(condition, env, fns, models, model_methods, enums);
-                let cond_value = eval_expr(condition, env, fns, models, roles, model_methods, enums).await;
+                let _cond_type = infer_expr_type(condition, &ctx.env, &ctx.fns, &ctx.models, &mut ctx.model_methods, &ctx.enums);
+                let cond_value = eval_expr(condition, ctx).await;
                 if !is_truthy(&cond_value) {
                     break;
                 }
                 
-                match execute_block(body, env, fns, models, roles, model_methods, enums, None).await {
+                match execute_block(body, ctx, None).await {
                     ControlFlow::Break => break,
                     ControlFlow::Next => continue,
                     ControlFlow::Return(v) => return ControlFlow::Return(v),
@@ -2733,15 +2750,15 @@ async fn execute_stmt(
         }
         Stmt::WhileOnce { condition, body } => {
             loop {
-                match execute_block(body, env, fns, models, roles, model_methods, enums, None).await {
+                match execute_block(body, ctx, None).await {
                     ControlFlow::Break => break,
                     ControlFlow::Next => continue,
                     ControlFlow::Return(v) => return ControlFlow::Return(v),
                     ControlFlow::None => {}
                 }
 
-                let _cond_type = infer_expr_type(condition, env, fns, models, model_methods, enums);
-                let cond_value = eval_expr(condition, env, fns, models, roles, model_methods, enums).await;
+                let _cond_type = infer_expr_type(condition, &ctx.env, &ctx.fns, &ctx.models, &mut ctx.model_methods, &ctx.enums);
+                let cond_value = eval_expr(condition, ctx).await;
                 if !is_truthy(&cond_value) {
                     break;
                 }
@@ -2750,13 +2767,13 @@ async fn execute_stmt(
         }
         Stmt::Until { condition, body } => {
             loop {
-                let _cond_type = infer_expr_type(condition, env, fns, models, model_methods, enums);
-                let cond_value = eval_expr(condition, env, fns, models, roles, model_methods, enums).await;
+                let _cond_type = infer_expr_type(condition, &ctx.env, &ctx.fns, &ctx.models, &mut ctx.model_methods, &ctx.enums);
+                let cond_value = eval_expr(condition, ctx).await;
                 if is_truthy(&cond_value) {
                     break;
                 }
                 
-                match execute_block(body, env, fns, models, roles, model_methods, enums, None).await {
+                match execute_block(body, ctx, None).await {
                     ControlFlow::Break => break,
                     ControlFlow::Next => continue,
                     ControlFlow::Return(v) => return ControlFlow::Return(v),
@@ -2767,15 +2784,15 @@ async fn execute_stmt(
         }
         Stmt::UntilOnce { condition, body } => {
             loop {
-                match execute_block(body, env, fns, models, roles, model_methods, enums, None).await {
+                match execute_block(body, ctx, None).await {
                     ControlFlow::Break => break,
                     ControlFlow::Next => continue,
                     ControlFlow::Return(v) => return ControlFlow::Return(v),
                     ControlFlow::None => {}
                 }
 
-                let _cond_type = infer_expr_type(condition, env, fns, models, model_methods, enums);
-                let cond_value = eval_expr(condition, env, fns, models, roles, model_methods, enums).await;
+                let _cond_type = infer_expr_type(condition, &ctx.env, &ctx.fns, &ctx.models, &mut ctx.model_methods, &ctx.enums);
+                let cond_value = eval_expr(condition, ctx).await;
                 if is_truthy(&cond_value) {
                     break;
                 }
@@ -2783,23 +2800,25 @@ async fn execute_stmt(
             ControlFlow::None
         }
         Stmt::Match { expr, cases, default, match_type } => {
-            let _expr_type = infer_expr_type(expr, env, fns, models, model_methods, enums);
-            let val = eval_expr(expr, env, fns, models, roles, model_methods, enums).await;
+            let _expr_type = infer_expr_type(expr, &ctx.env, &ctx.fns, &ctx.models, &mut ctx.model_methods, &ctx.enums);
+            let val = eval_expr(expr, ctx).await;
             let mut matched = false;
             
             for (patterns, stmts) in cases {
                 for pattern in patterns {
-                    if let Some(new_env) = match_pattern(&val, pattern, env) {
+                    if let Some(new_env) = match_pattern(&val, pattern, &ctx.env) {
                         matched = true;
-                        let mut pattern_env = new_env;
-                        let flow = execute_block(stmts, &mut pattern_env, fns, models, roles, model_methods, enums, None).await;
-                        
-                        // Sync modified variables back to outer env
+                        let pattern_env = new_env;
+
+                         // Sync modified variables back to outer env
                         for (name, value) in &pattern_env {
-                            if env.contains_key(name) {
-                                env.insert(name.clone(), value.clone());
+                            if ctx.env.contains_key(name) {
+                                ctx.env.insert(name.clone(), value.clone());
                             }
                         }
+
+                        let mut pattern_ctx = ctx.fork_with_env(pattern_env);
+                        let flow = execute_block(stmts, &mut pattern_ctx, None).await;
 
                         match (match_type, flow) {
                             (MatchType::One, ControlFlow::Next) => continue,
@@ -2814,7 +2833,7 @@ async fn execute_stmt(
             // No match found, execute default if it exists
             if !matched || *match_type == MatchType::Any {
                 if let Some(default_stmts) = default {
-                    execute_block(default_stmts, env, fns, models, roles, model_methods, enums, None).await
+                    execute_block(default_stmts, ctx, None).await
                 } else {
                     ControlFlow::None
                 }
@@ -2823,7 +2842,7 @@ async fn execute_stmt(
             }
         }
         Stmt::FnDef(fn_def) => {
-            fns.insert(fn_def.name.clone(), FnDef {
+            ctx.fns.insert(fn_def.name.clone(), FnDef {
                 name: fn_def.name.clone(),
                 params: fn_def.params.clone(),
                 body: fn_def.body.clone(),
@@ -2832,11 +2851,11 @@ async fn execute_stmt(
             ControlFlow::None
         }
         Stmt::ModelDef(model_def) => {
-            models.insert(model_def.name.clone(), model_def.clone());
+            ctx.models.insert(model_def.name.clone(), model_def.clone());
             ControlFlow::None
         }
         Stmt::RoleDef(role_def) => {
-            roles.insert(role_def.name.clone(), role_def.clone());
+            ctx.roles.insert(role_def.name.clone(), role_def.clone());
             ControlFlow::None
         }
         Stmt::ExtendModel { .. } => { ControlFlow::None }
@@ -2847,8 +2866,8 @@ async fn execute_stmt(
         Stmt::Return(expr_opt) => {
             let val = match expr_opt {
                 Some(e) => {
-                    let _type = infer_expr_type(e, env, fns, models, model_methods, enums);
-                    eval_expr(e, env, fns, models, roles, model_methods, enums).await
+                    let _type = infer_expr_type(e, &ctx.env, &ctx.fns, &ctx.models, &mut ctx.model_methods, &ctx.enums);
+                    eval_expr(e, ctx).await
                 }
                 None => Value::Void,
             };
@@ -2866,18 +2885,102 @@ async fn execute_stmt(
 
             ControlFlow::Return(val)
         }
+        Stmt::Export(export_kind) => {
+            match export_kind {
+                ExportKind::Named(inner_stmt) => {
+                    // Execute the inner statement (e.g., fn def)
+                    let flow = execute_stmt(
+                        inner_stmt,
+                        ctx,
+                        expected_return_type,
+                    ).await;
+                    
+                    // Track the export
+                    if let Stmt::FnDef(fn_def) = inner_stmt.as_ref() {
+                        ctx.exports.functions.insert(fn_def.name.clone(), fn_def.clone());
+                    }
+                    // Add similar handling for models, roles if you want to export those
+                    
+                    flow
+                }
+                ExportKind::Default(name) => {
+                    // Verify the name exists
+                    if !ctx.fns.contains_key(name) {
+                        panic!("Cannot export default '{}': not defined", name);
+                    }
+                    
+                    if ctx.exports.default.is_some() {
+                        panic!("Module already has a default export");
+                    }
+                    
+                    ctx.exports.default = Some(name.clone());
+                    ctx.exports.functions.insert(name.clone(), ctx.fns.get(name).unwrap().clone());
+                    
+                    ControlFlow::None
+                }
+            }
+        }
+
+        Stmt::Import(import_stmt) => {
+            let module_exports = ctx.module_cache
+                .get(&import_stmt.source)
+                .unwrap_or_else(|| panic!("Module '{}' not found", import_stmt.source))
+                .clone();
+            
+            match &import_stmt.kind {
+                ImportKind::Named(names) => {
+                    for name in names {
+                        if let Some(fn_def) = module_exports.functions.get(name) {
+                            ctx.fns.insert(name.clone(), fn_def.clone());
+                        } else {
+                            panic!("'{}' is not exported from '{}'", name, import_stmt.source);
+                        }
+                    }
+                }
+                
+                ImportKind::Default(name) => {
+                    let default_name = module_exports
+                        .default
+                        .as_ref()
+                        .unwrap_or_else(|| panic!("Module '{}' has no default export", import_stmt.source));
+                    
+                    let fn_def = module_exports
+                        .functions
+                        .get(default_name)
+                        .unwrap();
+                    
+                    // Import under the user's chosen name
+                    let mut renamed_fn = fn_def.clone();
+                    renamed_fn.name = name.clone();
+                    ctx.fns.insert(name.clone(), renamed_fn);
+                }
+                
+                ImportKind::Namespace(namespace) => {
+                    // For namespace imports, we need a different approach
+                    // Store functions with prefixed names for now
+                    for (fn_name, fn_def) in &module_exports.functions {
+                        let qualified_name = format!("{}.{}", namespace, fn_name);
+                        ctx.fns.insert(qualified_name, fn_def.clone());
+                    }
+                    
+                    // Handle .default access
+                    if let Some(default_name) = &module_exports.default {
+                        let fn_def = module_exports.functions.get(default_name).unwrap();
+                        let qualified_default = format!("{}.default", namespace);
+                        ctx.fns.insert(qualified_default, fn_def.clone());
+                    }
+                }
+            }
+            
+            ControlFlow::None
+        }
     }
 }
 
 #[async_recursion]
 async fn execute_block(
     stmts: &[Stmt],
-    env: &mut HashMap<String, (AssignKind, Value, Ownership, Moved)>,
-    fns: &mut HashMap<String, FnDef>,
-    models: &mut HashMap<String, ModelDef>,
-    roles: &mut HashMap<String, RoleDef>,
-    model_methods: &mut HashMap<(String, String), FnDef>,
-    enums: &HashMap<String, EnumDef>,
+    ctx: &mut RuntimeContext,
     expected_return_type: Option<&Type>,
 ) -> ControlFlow {
     for stmt in stmts {
@@ -2892,7 +2995,7 @@ async fn execute_block(
             }
         }
 
-        let flow = execute_stmt(stmt, env, fns, models, roles, model_methods, enums, expected_return_type).await;
+        let flow = execute_stmt(stmt, ctx, expected_return_type).await;
         match flow {
             ControlFlow::Break | ControlFlow::Next | ControlFlow::Return(_) => return flow,
             ControlFlow::None => {}
@@ -2901,38 +3004,163 @@ async fn execute_block(
     ControlFlow::None
 }
 
-async fn run(stmts: &[Stmt]) {
-    let mut env: HashMap<String, (AssignKind, Value, Ownership, Moved)> = HashMap::new();
-    let mut fns: HashMap<String, FnDef> = HashMap::new();
-    let mut models: HashMap<String, ModelDef> = HashMap::new();
-    let mut roles: HashMap<String, RoleDef> = HashMap::new();
-    let mut model_roles: HashMap<(String, String), bool> = HashMap::new();
-    let mut model_methods: HashMap<(String, String), FnDef> = HashMap::new();
+async fn load_module(
+    path: &str,
+    module_cache: &mut HashMap<String, ModuleExports>,
+) -> ModuleExports {
+    if let Some(exports) = module_cache.get(path) {
+        return exports.clone();
+    }
+    
+    let file_path = format!("{}.ngn", path);
+    let source = std::fs::read_to_string(&file_path)
+        .unwrap_or_else(|_| panic!("Could not read module '{}'", file_path));
+    
+    let tokens = lexer::tokenize(&source);
+    
+    let mut preliminary_parser = Parser::new(tokens.clone(), HashMap::new());
+    let preliminary_ast = preliminary_parser
+        .parse_program()
+        .unwrap_or_else(|e| panic!("Parse error in '{}': {}", file_path, e));
+    
     let mut enums: HashMap<String, EnumDef> = HashMap::new();
+    for stmt in &preliminary_ast {
+        if let Stmt::EnumDef(enum_def) = stmt {
+            enums.insert(enum_def.name.clone(), enum_def.clone());
+        }
+    }
+    
+    let mut parser = Parser::new(tokens, enums);
+    let stmts = parser
+        .parse_program()
+        .unwrap_or_else(|e| panic!("Parse error in '{}': {}", file_path, e));
+    
+    module_cache.insert(path.to_string(), ModuleExports::default());
+    
+    let exports = Box::pin(run_module(&stmts, module_cache, false)).await;
+    
+    module_cache.insert(path.to_string(), exports.clone());
+    
+    exports
+}
 
+async fn run_module(
+    stmts: &[Stmt],
+    module_cache: &mut HashMap<String, ModuleExports>,
+    is_entry: bool, // true for main file, false for imported modules
+) -> ModuleExports {
+    let mut ctx = RuntimeContext::with_cache(std::mem::take(module_cache));
+
+    // First pass: collect definitions and handle imports/exports
     for stmt in stmts {
         match stmt {
+            Stmt::Import(import_stmt) => {
+                let module_exports = load_module(&import_stmt.source, module_cache).await;
+                
+                match &import_stmt.kind {
+                    ImportKind::Named(names) => {
+                        for name in names {
+                            if let Some(fn_def) = module_exports.functions.get(name) {
+                                ctx.fns.insert(name.clone(), fn_def.clone());
+                            } else if let Some(model_def) = module_exports.models.get(name) {
+                                ctx.models.insert(name.clone(), model_def.clone());
+                            } else if let Some(enum_def) = module_exports.enums.get(name) {
+                                ctx.enums.insert(name.clone(), enum_def.clone());
+                            } else {
+                                panic!("'{}' is not exported from '{}'", name, import_stmt.source);
+                            }
+                        }
+                    }
+                    
+                    ImportKind::Default(local_name) => {
+                        let default_name = module_exports
+                            .default
+                            .as_ref()
+                            .unwrap_or_else(|| {
+                                panic!("Module '{}' has no default export", import_stmt.source)
+                            });
+                        
+                        if let Some(fn_def) = module_exports.functions.get(default_name) {
+                            let mut renamed = fn_def.clone();
+                            renamed.name = local_name.clone();
+                            ctx.fns.insert(local_name.clone(), renamed);
+                        } else {
+                            panic!("Default export '{}' not found in '{}'", default_name, import_stmt.source);
+                        }
+                    }
+                    
+                    ImportKind::Namespace(namespace) => {
+                        // Store namespace marker in env
+                        ctx.env.insert(
+                            namespace.clone(),
+                            (AssignKind::Const, Value::Namespace(namespace.clone()), Ownership::Borrowed, Moved::False)
+                        );
+
+                        // Store qualified functions
+                        for (name, fn_def) in &module_exports.functions {
+                            ctx.fns.insert(format!("{}.{}", namespace, name), fn_def.clone());
+                        }
+                        for (name, model_def) in &module_exports.models {
+                            ctx.models.insert(format!("{}.{}", namespace, name), model_def.clone());
+                        }
+                        if let Some(default_name) = &module_exports.default {
+                            if let Some(fn_def) = module_exports.functions.get(default_name) {
+                                ctx.fns.insert(format!("{}.default", namespace), fn_def.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            
+            Stmt::Export(export_kind) => {
+                match export_kind {
+                    ExportKind::Named(inner_stmt) => {
+                        // Process the inner statement
+                        match inner_stmt.as_ref() {
+                            Stmt::FnDef(fn_def) => {
+                                ctx.fns.insert(fn_def.name.clone(), fn_def.clone());
+                                ctx.exports.functions.insert(fn_def.name.clone(), fn_def.clone());
+                            }
+                            Stmt::ModelDef(model_def) => {
+                                ctx.models.insert(model_def.name.clone(), model_def.clone());
+                                ctx.exports.models.insert(model_def.name.clone(), model_def.clone());
+                            }
+                            Stmt::EnumDef(enum_def) => {
+                                ctx.enums.insert(enum_def.name.clone(), enum_def.clone());
+                                ctx.exports.enums.insert(enum_def.name.clone(), enum_def.clone());
+                            }
+                            _ => panic!("Cannot export this statement type"),
+                        }
+                    }
+                    ExportKind::Default(name) => {
+                        if ctx.exports.default.is_some() {
+                            panic!("Module already has a default export");
+                        }
+                        ctx.exports.default = Some(name.clone());
+                    }
+                }
+            }
             Stmt::FnDef(fn_def) => {
-                fns.insert(fn_def.name.clone(), fn_def.clone());
+                ctx.fns.insert(fn_def.name.clone(), fn_def.clone());
             }
             Stmt::ModelDef(model_def) => {
-                models.insert(model_def.name.clone(), model_def.clone());
+                ctx.models.insert(model_def.name.clone(), model_def.clone());
             }
             Stmt::RoleDef(role_def) => {
-                roles.insert(role_def.name.clone(), role_def.clone());
+                ctx.roles.insert(role_def.name.clone(), role_def.clone());
             }
             Stmt::EnumDef(enum_def) => {
-                enums.insert(enum_def.name.clone(), enum_def.clone());
+                ctx.enums.insert(enum_def.name.clone(), enum_def.clone());
             }
             Stmt::ExtendModel { model_name, role_name, methods } => {
                 // Validate model exists
-                if !models.contains_key(model_name) {
+                if !ctx.models.contains_key(model_name) {
                     panic!("Cannot extend unknown model '{}'", model_name);
                 }
                 
                 // If role specified, validate it exists
                 if let Some(role) = role_name {
-                    if !roles.contains_key(role) {
+                    if !ctx.roles.contains_key(role) {
                         panic!("Cannot extend with unknown role '{}'", role);
                     }
                     
@@ -2941,10 +3169,10 @@ async fn run(stmts: &[Stmt]) {
                         model_name, 
                         role, 
                         methods, 
-                        &roles
+                        &ctx.roles
                     );
                     
-                    model_roles.insert(
+                    ctx.model_roles.insert(
                         (model_name.clone(), role.clone()), 
                         true
                     );
@@ -2954,7 +3182,7 @@ async fn run(stmts: &[Stmt]) {
                 for method in methods {
                     if method.name == "new" {
                         // Get the model definition
-                        let model_def = models.get(model_name).unwrap_or_else(|| {
+                        let model_def = ctx.models.get(model_name).unwrap_or_else(|| {
                             panic!("Model '{}' not found", model_name);
                         });
                         
@@ -3018,7 +3246,7 @@ async fn run(stmts: &[Stmt]) {
                     }
                     
                     
-                    model_methods.insert(
+                    ctx.model_methods.insert(
                         (model_name.clone(), method.name.clone()),
                         method.clone(),
                     );
@@ -3027,43 +3255,52 @@ async fn run(stmts: &[Stmt]) {
             Stmt::Assign { kind: AssignKind::Static, .. } => {
                 execute_stmt(
                     stmt,
-                    &mut env,
-                    &mut fns,
-                    &mut models,
-                    &mut roles,
-                    &mut model_methods,
-                    &enums,
-                    None
+                    &mut ctx,
+                    None,
                 ).await;
             }
             _ => {
-                panic!("Top-level statements must be model/function definitions or static assignments");
+                panic!("Top-level statements must be definitions, imports, or exports");
             }
         }
     }
 
-    if let Some(main_fn) = fns.get("main").cloned() {
-        if !main_fn.params.is_empty() {
-            panic!("main() must have no parameters");
+    // Validate default export exists
+    if let Some(default_name) = &ctx.exports.default {
+        if !ctx.fns.contains_key(default_name) {
+            panic!("Default export '{}' is not defined", default_name);
         }
-        
-        if let Some(body) = &main_fn.body {
-            let mut main_env = env.clone();
-            execute_block(
-                body,
-                &mut main_env,
-                &mut fns,
-                &mut models,
-                &mut roles,
-                &mut model_methods,
-                &enums,
-                main_fn.return_type.as_ref()
-            ).await;
-        } else {
-            panic!("The main() function must have a body.");
-        }
-        
-    } else {
-        panic!("No main() function found. Entrypoint files must define main()");
+        ctx.exports.functions.insert(default_name.clone(), ctx.fns.get(default_name).unwrap().clone());
     }
+
+    // Only run main() for entry file
+    if is_entry {
+        if let Some(main_fn) = ctx.fns.get("main").cloned() {
+            if !main_fn.params.is_empty() {
+                panic!("main() must have no parameters");
+            }
+            
+            if let Some(body) = &main_fn.body {
+                execute_block(
+                    body,
+                    &mut ctx,
+                    main_fn.return_type.as_ref()
+                ).await;
+            } else {
+                panic!("The main() function must have a body.");
+            }
+        } else {
+            panic!("No main() function found. Entrypoint files must define main()");
+        }
+    }
+
+    // Restore cache for caller
+    *module_cache = ctx.module_cache;
+
+    ctx.exports
+}
+
+pub async fn run(stmts: &[Stmt]) {
+    let mut module_cache = HashMap::new();
+    run_module(stmts, &mut module_cache, true).await;
 }

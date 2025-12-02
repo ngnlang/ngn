@@ -19,7 +19,8 @@ pub enum Token {
     Model, Role, Extend, With,
     Regex(String), Enum, InterpolatedString(Vec<InterpolationToken>),
     LArrow, LArrowMaybe,
-    Thread, Channel, Sleep
+    Thread, Channel, Sleep,
+    Import, Export, Default, From, As,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -287,6 +288,84 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
                                 't' => current_literal.push('\t'),
                                 'r' => current_literal.push('\r'),
                                 '\\' => current_literal.push('\\'),
+                                '\'' => current_literal.push('\''),
+                                '"' => current_literal.push('"'),
+                                _ => current_literal.push(next_c),
+                            }
+                        }
+                    } else {
+                        current_literal.push(c);
+                    }
+                }
+                
+                // Push final literal if any
+                if !current_literal.is_empty() {
+                    parts.push(InterpolationToken::Literal(current_literal));
+                }
+                
+                let end = chars.peek().map(|(i, _)| *i).unwrap_or(input.len());
+
+                // Decide which token to push
+                if parts.iter().any(|p| matches!(p, InterpolationToken::Variable(_))) {
+                    tokens.push((start, Token::InterpolatedString(parts), end));
+                } else {
+                    // No variables, treat as regular string
+                    let literal = parts.into_iter()
+                        .filter_map(|p| match p {
+                            InterpolationToken::Literal(s) => Some(s),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("");
+                    tokens.push((start, Token::String(literal), end));
+                }
+            }
+
+            '\'' => {
+                let start = pos;
+                let mut parts = Vec::new();
+                let mut current_literal = String::new();
+                
+                while let Some((_, c)) = chars.next() {
+                    if c == '\'' {
+                        // Push any remaining literal before the closing quote
+                        if !current_literal.is_empty() {
+                            parts.push(InterpolationToken::Literal(current_literal.clone()));
+                            current_literal.clear();
+                        } else {
+                            parts.push(InterpolationToken::Literal(current_literal.clone()));
+                            current_literal.clear();
+                        }
+                        break;
+                    }
+                    if c == '{' {
+                        // Save literal part if any
+                        if !current_literal.is_empty() {
+                            parts.push(InterpolationToken::Literal(current_literal.clone()));
+                            current_literal.clear();
+                        }
+                        
+                        // Parse variable name
+                        let mut var_name = String::new();
+                        while let Some((_, c)) = chars.next() {
+                            if c == '}' {
+                                break;
+                            }
+                            var_name.push(c);
+                        }
+                        
+                        if !var_name.is_empty() {
+                            parts.push(InterpolationToken::Variable(var_name));
+                        }
+                        continue;
+                    } else if c == '\\' {
+                        if let Some((_, next_c)) = chars.next() {
+                            match next_c {
+                                'n' => current_literal.push('\n'),
+                                't' => current_literal.push('\t'),
+                                'r' => current_literal.push('\r'),
+                                '\\' => current_literal.push('\\'),
+                                '\'' => current_literal.push('\''),
                                 '"' => current_literal.push('"'),
                                 _ => current_literal.push(next_c),
                             }
@@ -359,6 +438,11 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
                     "thread" => Token::Thread,
                     "channel" => Token::Channel,
                     "sleep" => Token::Sleep,
+                    "import" => Token::Import,
+                    "export" => Token::Export,
+                    "default" => Token::Default,
+                    "from" => Token::From,
+                    "as" => Token::As,
                     _ => Token::Ident(ident),
                 };
                 tokens.push((start, token, end));
