@@ -20,7 +20,7 @@ Your entrypoint file must define a `main()` function. It's found and run automat
 | `const status = "go"` | local | immutable | immutable | owned |
 | `static DATA = [1..=1000]` | global | immutable | immutable | borrowed |
 
-> The `static` example uses psuedocode to mimic creating an array of numbers from 1 to 1000, inclusively.
+> The `static` example uses pseudocode to mimic creating an array of numbers from 1 to 1000, inclusively.
 
 ### `var`
 
