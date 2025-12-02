@@ -932,9 +932,9 @@ fn main() {
     })
 
     // Continue doing other work while the thread runs
-    print("Value: {value}")
 
-    // Now wait until we receive a message, indicating thread work is done
+    // Now wait until we receive a message,
+    // indicating thread work is done
     <- done
 }
 ```
