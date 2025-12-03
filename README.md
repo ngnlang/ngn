@@ -290,34 +290,7 @@ print(greeting.repeat(2)) // goodbyegoodbye
 ```
 
 ## Numbers
-These will be moved into a math module.
-
-### `abs(number)`
-Get the absolute value of a number.
-```ngn
-print((-5).abs()) // 5
-```
-
-### `round(number)`
-Round a number to the nearest integer.
-```ngn
-print((3.7).round()) // 4
-print((5.5).round()) // 6
-```
-
-### `ceil(number)`
-Round a number up, no matter the decimal value.
-```ngn
-print((7.6).ceil()) // 8
-print((3.2).ceil())  // 4
-```
-
-### `floor(number)`
-Round a number down, no matter the decimal value.
-```ngn
-print((1.3).floor()) // 1
-print((3.7).floor()) // 3
-```
+There are currently no number methods, but we do have a math mod (see [below](#standard-library)).
 
 ## Arrays
 If you want to mutate arrays, be sure to declare them with `var`
@@ -1097,3 +1070,21 @@ export default add
 // main.ngn
 import add from "math"
 ```
+
+> ngn does not support re-exporting
+
+## "Standard Library"
+We call this the toolbox.
+
+You can import in different ways:
+- `import { abs } from "tbx::math"`; use functions directly (best for tree-shaking)
+- `import { abs as ABS } from "tbx::math"`; aliased functions
+- `import Math from "tbx::math"`; use functions via alias `Math.abs`
+- `import * as Math from "tbx::math"`; (use same as above)
+
+### tbx::math
+- `abs`: return the absolute value of a number. `abs(-5) // 5`
+- `ceil`: return the smallest integer greater than or equal to `ceil(3.2) // 4`
+- `floor`: return the smallest integer less than or equal to `floor(3.9) // 3`
+- `round`: return the number rounded to the nearest integer `round(4.5) // 5`
+- `sin`: (Trigonometry? If you know, you know.) `sin(0) // 0`
