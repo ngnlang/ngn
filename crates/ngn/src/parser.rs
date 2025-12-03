@@ -134,7 +134,7 @@ impl Parser {
             Some(Token::Role) => self.parse_role_def(),
             Some(Token::Extend) => self.parse_extend_stmt(),
             Some(Token::Return) => self.parse_return_stmt(),
-            Some(Token::LArrow) | Some(Token::Sleep) => {
+            Some(Token::LArrow) | Some(Token::LArrowCount(_)) | Some(Token::Sleep) => {
                 let expr = self.parse_expr()?;
                 Ok(Stmt::ExprStmt(expr))
             }

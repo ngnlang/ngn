@@ -142,6 +142,7 @@ pub enum Expr {
     Send(Box<Expr>, Box<Expr>),
     Receive(Box<Expr>),
     MaybeReceive(Box<Expr>),
+    CountReceive(Box<Expr>, u32),
     MakeState(Box<Expr>),
 }
 

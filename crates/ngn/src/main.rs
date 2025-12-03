@@ -685,6 +685,14 @@ fn infer_expr_type(
             }
         }
 
+        Expr::CountReceive(chan_expr, _message_count) => {
+            let chan_type = infer_expr_type(chan_expr, env, fns, models, model_methods, enums);
+            match chan_type {
+                Type::Channel(inner) => *inner,
+                _ => panic!("Type Error: Right side of <-n must be a channel"),
+            }
+        }
+
         Expr::MaybeReceive(chan_expr) => {
             let chan_type = infer_expr_type(chan_expr, env, fns, models, model_methods, enums);
             if let Type::Channel(inner) = chan_type {
@@ -1155,6 +1163,129 @@ fn collect_vars_from_expr(e: &Expr, vars: &mut Vec<String>) {
     }
 }
 
+struct ThreadVarAnalysis {
+    directly_assigned: HashSet<String>,
+    state_method_calls: HashSet<String>,
+}
+
+fn analyze_thread_closure(stmts: &[Stmt]) -> ThreadVarAnalysis {
+    let mut analysis = ThreadVarAnalysis {
+        directly_assigned: HashSet::new(),
+        state_method_calls: HashSet::new(),
+    };
+    for stmt in stmts {
+        analyze_stmt(stmt, &mut analysis);
+    }
+    analysis
+}
+
+fn analyze_stmt(stmt: &Stmt, analysis: &mut ThreadVarAnalysis) {
+    match stmt {
+        Stmt::Reassign { name, value } => {
+            analysis.directly_assigned.insert(name.clone());
+            analyze_expr(value, analysis);
+        }
+        Stmt::Assign { value, .. } => analyze_expr(value, analysis),
+        Stmt::ExprStmt(expr) | Stmt::Echo(expr) | Stmt::Print(expr) => {
+            analyze_expr(expr, analysis);
+        }
+        Stmt::Return(Some(expr)) => analyze_expr(expr, analysis),
+        Stmt::Return(None) | Stmt::Break | Stmt::Next => {}
+        Stmt::If { condition, then_block, else_ifs, else_block } => {
+            analyze_expr(condition, analysis);
+            for s in then_block { analyze_stmt(s, analysis); }
+            for (cond, block) in else_ifs {
+                analyze_expr(cond, analysis);
+                for s in block { analyze_stmt(s, analysis); }
+            }
+            if let Some(else_b) = else_block {
+                for s in else_b { analyze_stmt(s, analysis); }
+            }
+        }
+        Stmt::Match { expr, cases, default, .. } => {
+            analyze_expr(expr, analysis);
+            for (_, body) in cases {
+                for s in body { analyze_stmt(s, analysis); }
+            }
+            if let Some(d) = default {
+                for s in d { analyze_stmt(s, analysis); }
+            }
+        }
+        Stmt::While { condition, body }
+        | Stmt::WhileOnce { condition, body }
+        | Stmt::Until { condition, body }
+        | Stmt::UntilOnce { condition, body } => {
+            analyze_expr(condition, analysis);
+            for s in body { analyze_stmt(s, analysis); }
+        }
+        Stmt::FnDef(_) | Stmt::ModelDef(_) | Stmt::RoleDef(_)
+        | Stmt::ExtendModel { .. } | Stmt::EnumDef(_)
+        | Stmt::Import(_) | Stmt::Export(_) => {}
+    }
+}
+
+fn analyze_expr(expr: &Expr, analysis: &mut ThreadVarAnalysis) {
+    match expr {
+        Expr::Assign { name, value } | Expr::CompoundAssign { name, value, .. } => {
+            analysis.directly_assigned.insert(name.clone());
+            analyze_expr(value, analysis);
+        }
+        Expr::MethodCall { object, method, args } => {
+            if matches!(method.as_str(), "update" | "set" | "get") {
+                if let Expr::Var(var_name) = object.as_ref() {
+                    analysis.state_method_calls.insert(var_name.clone());
+                }
+            }
+            analyze_expr(object, analysis);
+            for arg in args { analyze_expr(arg, analysis); }
+        }
+        Expr::Add(l, r) | Expr::Subtract(l, r) | Expr::Multiply(l, r)
+        | Expr::Divide(l, r) | Expr::Power(l, r) | Expr::Modulo(l, r)
+        | Expr::Equal(l, r) | Expr::NotEqual(l, r)
+        | Expr::LessThan(l, r) | Expr::LessThanOrEqual(l, r)
+        | Expr::GreaterThan(l, r) | Expr::GreaterThanOrEqual(l, r) => {
+            analyze_expr(l, analysis);
+            analyze_expr(r, analysis);
+        }
+        Expr::Not(e) | Expr::Negative(e) | Expr::Receive(e)
+        | Expr::MaybeReceive(e) | Expr::Thread(e) | Expr::MakeState(e) => {
+            analyze_expr(e, analysis);
+        }
+        Expr::CountReceive(e, _) => analyze_expr(e, analysis),
+        Expr::Array(exprs) => {
+            for e in exprs { analyze_expr(e, analysis); }
+        }
+        Expr::Call { args, .. } => {
+            for arg in args { analyze_expr(arg, analysis); }
+        }
+        Expr::FieldAccess { object, value, .. } => {
+            analyze_expr(object, analysis);
+            if let Some(v) = value { analyze_expr(v, analysis); }
+        }
+        Expr::ModelInstance { fields, .. } => {
+            for (_, e) in fields { analyze_expr(e, analysis); }
+        }
+        Expr::InterpolatedString(parts) => {
+            for part in parts {
+                if let InterpolationPart::Expression(e) = part {
+                    analyze_expr(e, analysis);
+                }
+            }
+        }
+        Expr::Send(a, b) => {
+            analyze_expr(a, analysis);
+            analyze_expr(b, analysis);
+        }
+        Expr::EnumVariant { data: Some(e), .. } => analyze_expr(e, analysis),
+        Expr::Closure(_) => {} // Don't recurse into nested closures
+        // Leaves - no nested expressions
+        Expr::I64(_) | Expr::I32(_) | Expr::U64(_) | Expr::U32(_)
+        | Expr::F64(_) | Expr::F32(_) | Expr::String(_) | Expr::Bool(_)
+        | Expr::Var(_) | Expr::Const(_) | Expr::Static(_) | Expr::Regex(_)
+        | Expr::MakeChannel(_) | Expr::EnumVariant { data: None, .. } => {}
+    }
+}
+
 #[async_recursion]
 async fn eval_expr(
     e: &Expr,
@@ -1423,6 +1554,7 @@ async fn eval_expr(
             }
         },
         Expr::Call { name, args } if name == "thread" => {
+            // TODO - I think this is dead code
             if args.len() != 1 {
                 panic!("thread() expects exactly 1 argument (a closure)");
             }
@@ -1430,14 +1562,10 @@ async fn eval_expr(
             let closure_val = eval_expr(&args[0], ctx).await;
             
             if let Value::Closure(closure) = closure_val {
-                // 1. Clone the entire environment for the new thread
-                // This mimics a 'move' closure in Rust.
                 let mut thread_ctx = ctx.fork();
                 let thread_closure = closure.clone();
 
-                // 2. Spawn Tokio Task
                 tokio::spawn(async move {
-                    // Call the closure inside the new thread
                     call_closure(
                         &thread_closure,
                         &[], // No args passed to thread fn
@@ -1451,17 +1579,47 @@ async fn eval_expr(
             }
         }
         Expr::Thread(target) => {
-            // We expect the target to be a closure
             let val = eval_expr(target, ctx).await;
 
+            // We expect the target to be a closure
             if let Value::Closure(closure) = val {
-                // 1. Clone everything to move into the thread
+                let analysis = analyze_thread_closure(&closure.def.body);
+
+                // Check direct assignments
+                for var_name in &analysis.directly_assigned {
+                    if let Some((kind, value, _, _)) = ctx.env.get(var_name) {
+                        if matches!(kind, AssignKind::Var) {
+                            if !matches!(value, Value::StateActor(_, _, _)) {
+                                panic!(
+                                    "To mutate variable '{}' in thread(), use 'var {} = state(value)",
+                                    var_name, var_name
+                                );
+                            } else {
+                                panic!(
+                                    "Cannot directly mutate variable '{}' in thread(); use {}.update() or {}.set()",
+                                    var_name, var_name, var_name
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // Check .update()/.set()/.get() calls on non-StateActor vars
+                for var_name in &analysis.state_method_calls {
+                    if let Some((_, value, _, _)) = ctx.env.get(var_name) {
+                        if !matches!(value, Value::StateActor(_, _, _)) {
+                            panic!(
+                                "Cannot call .update()/.set()/.get() on '{}'; use 'var {} = state(value)' to create shared state",
+                                var_name, var_name
+                            );
+                        }
+                    }
+                }
+
                 let mut thread_ctx = ctx.fork();
                 let thread_closure = closure.clone();
 
-                // 2. Spawn the Tokio task
                 tokio::spawn(async move {
-                    // We need to call the closure.
                     call_closure(
                         &thread_closure,
                         &[], // Spawned threads take no arguments
@@ -1471,7 +1629,7 @@ async fn eval_expr(
 
                 Value::Void
             } else {
-                panic!("spawn/thread expects a closure");
+                panic!("thread expects a closure");
             }
         }
         Expr::MakeChannel(hint) => {
@@ -1504,6 +1662,26 @@ async fn eval_expr(
                     Some(v) => v,
                     None => panic!("Channel closed and empty"),
                 }
+            } else {
+                panic!("Cannot receive from non-channel type");
+            }
+        }
+        Expr::CountReceive(chan_expr, message_count) => {
+            let chan_val = eval_expr(chan_expr, ctx).await;
+
+            if let Value::Channel(_, rx_mutex, _) = chan_val {
+                let mut rx = rx_mutex.lock().await;
+                let mut count: u32 = 0;
+                let mut messages = Vec::new();
+
+                while count < *message_count {
+                    match rx.recv().await {
+                        Some(v) => messages.push(v),
+                        None => panic!("Channel closed and empty"),
+                    }
+                    count += 1;
+                }
+                Value::Array(messages)
             } else {
                 panic!("Cannot receive from non-channel type");
             }
@@ -1546,24 +1724,24 @@ async fn eval_expr(
         Expr::MakeState(initial_expr) => {
             let initial = eval_expr(initial_expr, ctx).await;
             
-            // Create channels
             let (cmd_tx, mut cmd_rx) = mpsc::channel::<Value>(32);
             let (resp_tx, resp_rx) = mpsc::channel::<Value>(32);
             
-            // Clone environment for actor
             let mut actor_ctx = ctx.fork();
             let inner_type = infer_value_type(&initial);
-            let args: Vec<Expr> = vec![*(*initial_expr).clone()];
             
-            // Spawn actor
             tokio::spawn(async move {
+                let mut current = initial;
+                
                 while let Some(cmd) = cmd_rx.recv().await {
                     if let Value::Closure(closure) = cmd {
+                        let arg_expr = value_to_expr(&current);
                         let new_val = call_closure(
                             &closure,
-                            &args,
+                            &[arg_expr],
                             &mut actor_ctx,
                         ).await;
+                        current = new_val.clone();
                         let _ = resp_tx.send(new_val).await;
                     }
                 }
@@ -2521,7 +2699,7 @@ async fn eval_expr(
                 .map(|(name, _)| name.clone())
                 .collect();
 
-            // Referenced variables should not include ones that are rebound, owned, or defined in closure params
+            // Referenced variables should not include ones that are owned or defined in closure params
             let read_vars: Vec<String> = referenced_vars.clone()
                 .into_iter()
                 .filter(|ref_var| !owned_vars.contains(ref_var) && !param_names.contains(ref_var))

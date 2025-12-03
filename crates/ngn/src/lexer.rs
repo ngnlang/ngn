@@ -18,7 +18,7 @@ pub enum Token {
     Ident(String), String(String), Float(f64), Integer(i64),
     Model, Role, Extend, With,
     Regex(String), Enum, InterpolatedString(Vec<InterpolationToken>),
-    LArrow, LArrowMaybe,
+    LArrow, LArrowMaybe, LArrowCount(u32),
     Thread, Channel, Sleep,
     Import, Export, Default, From, As,
 }
@@ -178,7 +178,26 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
                         chars.next(); // consume '?'
                         tokens.push((pos, Token::LArrowMaybe, pos + 3));
                     } else {
-                        tokens.push((pos, Token::LArrow, pos + 2));
+                        // Check for digits after '<-'
+                        let mut end_pos = pos + 2;
+                        let mut num_str = String::new();
+
+                        while let Some((_, c)) = chars.peek() {
+                            if c.is_ascii_digit() {
+                                num_str.push(*c);
+                                chars.next();
+                                end_pos += 1;
+                            } else {
+                                break;
+                            }
+                        }
+
+                        if !num_str.is_empty() {
+                            let count: u32 = num_str.parse().unwrap();
+                            tokens.push((pos, Token::LArrowCount(count), end_pos));
+                        } else {
+                            tokens.push((pos, Token::LArrow, pos + 2));
+                        }
                     }
                 } else {
                     tokens.push((pos, Token::Less, pos + 1));
