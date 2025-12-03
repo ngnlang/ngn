@@ -1,16 +1,13 @@
-mod ast;
-mod lexer;
-mod parser;
-mod expr_parser;
-mod utils;
+use ngn::error::RuntimeError;
+use ngn::runtime::{Callable, ExportKind, ImportKind, ModuleExports, RuntimeContext};
+use ngn::parser::Parser;
 
-use parser::Parser;
-
+use ngn::toolbox::{ImportSource, Toolbox, parse_import_source};
 use regex::Regex as RegexLib;
 
 use std::fs;
 use std::collections::HashSet;
-use crate::ast::{
+use ngn::ast::{
     ClosureDef, 
     ClosureValue, 
     EnumDef, 
@@ -23,10 +20,6 @@ use crate::ast::{
     Pattern, 
     RoleDef, 
     Type, 
-    ModuleExports, 
-    RuntimeContext, 
-    ExportKind, 
-    ImportKind, 
 };
 
 use async_recursion::async_recursion;
@@ -40,7 +33,7 @@ async fn main() {
     let source = fs::read_to_string(file_path)
         .expect("Failed to read ngn file");
 
-    let tokens = lexer::tokenize(&source);
+    let tokens = ngn::lexer::tokenize(&source);
 
     // Preliminary parse to extract enum definitions
     let mut preliminary_parser = Parser::new(tokens.clone(), HashMap::new());
@@ -69,9 +62,9 @@ async fn main() {
 }
 
 use std::collections::HashMap;
-use ast::{Expr, Stmt};
+use ngn::ast::{Expr, Stmt};
 
-use crate::ast::{AssignKind, ControlFlow, MatchType, Value};
+use ngn::ast::{AssignKind, ControlFlow, MatchType, Value};
 
 fn format_type_for_error(t: &Type) -> String {
     match t {
@@ -418,7 +411,7 @@ fn infer_value_type(v: &Value) -> Type {
 fn infer_expr_type(
     e: &Expr,
     env: &HashMap<String, (AssignKind, Value, Ownership, Moved)>,
-    fns: &HashMap<String, FnDef>,
+    fns: &HashMap<String, Callable>,
     models: &HashMap<String, ModelDef>,
     model_methods: &mut HashMap<(String, String), FnDef>,
     enums: &HashMap<String, EnumDef>,
@@ -524,9 +517,11 @@ fn infer_expr_type(
             } else if let Some((_, Value::Closure(closure), _ownership, _moved)) = env.get(name) {
                 // Closure return type
                 closure.def.return_type.clone().unwrap_or(Type::Void)
-            } else if let Some(fn_def) = fns.get(name) {
-                // Check if it's a global function
+            } else if let Some(Callable::UserDefined(fn_def)) = fns.get(name) {
                 fn_def.return_type.clone().unwrap_or(Type::Void)
+            } else if let Some(Callable::Builtin(_)) = fns.get(name) {
+                // Builtins don't have return_type metadata—decide what to do
+                Type::Void  // or panic, or store metadata separately
             } else {
                 panic!("Unknown function: {}", name);
             }
@@ -557,8 +552,11 @@ fn infer_expr_type(
             if let Expr::Var(var_name) = object.as_ref() {
                 if let Some((_, Value::Namespace(ns), _, _)) = env.get(var_name) {
                     let qualified_name = format!("{}.{}", ns, method);
-                    if let Some(fn_def) = fns.get(&qualified_name) {
+                    if let Some(Callable::UserDefined(fn_def)) = fns.get(&qualified_name) {
                         return fn_def.return_type.clone().unwrap_or(Type::Void);
+                    } else if let Some(Callable::Builtin(_)) = fns.get(&qualified_name) {
+                        // Builtins don't carry return type metadata
+                        return Type::Void;
                     }
                 }
                 if let Some((_, Value::StateActor(_, _, inner_type), _, _)) = env.get(var_name) {
@@ -587,8 +585,6 @@ fn infer_expr_type(
             match obj_type {
                 Type::I64 | Type::I32 | Type::U64 | Type::U32 | Type::F64 | Type::F32 => {
                     match method.as_str() {
-                        "abs" => obj_type.clone(),  // Returns same type as input
-                        "round" | "floor" | "ceil" => Type::I64,  // These convert to integer
                         _ => panic!("Unknown number method: {}", method),
                     }
                 }
@@ -1377,9 +1373,12 @@ async fn eval_expr(
                     return rx_guard.recv().await.expect("State actor closed");
                 }
                 v.clone()
-            } else if let Some(fn_def) = ctx.fns.get(name) {
+            } else if let Some(Callable::UserDefined(fn_def)) = ctx.fns.get(name) {
                 // If it's a function in fns, return it as a Value::Function
                 Value::Function(fn_def.clone())
+            } else if let Some(Callable::Builtin(_builtin)) = ctx.fns.get(name) {
+                // Decide: can builtins be passed as values?
+                panic!("Cannot use builtin '{}' as a value", name)
             } else {
                 // Check if it's a known enum variant
                 let mut found_enum = false;
@@ -1406,9 +1405,12 @@ async fn eval_expr(
                     panic!("Constant '{}' has been moved", name);
                 }
                 v.clone()
-            } else if let Some(fn_def) = ctx.fns.get(name) {
+            } else if let Some(Callable::UserDefined(fn_def)) = ctx.fns.get(name) {
                 // If it's a function in fns, return it as a Value::Function
                 Value::Function(fn_def.clone())
+            } else if let Some(Callable::Builtin(_builtin)) = ctx.fns.get(name) {
+                // Decide: can builtins be passed as values?
+                panic!("Cannot use builtin '{}' as a value", name)
             } else {
                 panic!("Undefined constant: {}", name);
             }
@@ -1595,66 +1597,78 @@ async fn eval_expr(
                 ).await;
             }
 
-            let fn_def = if let Some((_, Value::Function(fn_def), _ownership, _moved)) = ctx.env.get(name) {
-                fn_def.clone()
-            } else if let Some(fn_def) = ctx.fns.get(name) {
-                fn_def.clone()
+            let callable = if let Some((_, Value::Function(fn_def), _ownership, _moved)) = ctx.env.get(name) {
+                Callable::UserDefined(fn_def.clone())
+            } else if let Some(callable) = ctx.fns.get(name) {
+                callable.clone()
             } else {
                 panic!("Unknown function: {}", name);
             };
 
-            // Create new scope for function
-            let mut fn_env: HashMap<String, (AssignKind, Value, Ownership, Moved)> = HashMap::new();
-            let fn_arg_count = fn_def.params.len();
-            
-            // Bind parameters
-            for (i, (param_name, param_type, param_ownership)) in fn_def.params.iter().enumerate() {
-                let arg_expr = &args[i];
-                let ownership = get_ownership(arg_expr, &ctx.env);
+            match callable {
+                Callable::UserDefined(fn_def) => {
+                    // Create new scope for function
+                    let mut fn_env: HashMap<String, (AssignKind, Value, Ownership, Moved)> = HashMap::new();
+                    let fn_arg_count = fn_def.params.len();
+                    
+                    // Bind parameters
+                    for (i, (param_name, param_type, param_ownership)) in fn_def.params.iter().enumerate() {
+                        let arg_expr = &args[i];
+                        let ownership = get_ownership(arg_expr, &ctx.env);
 
-                let arg_val = if i < args.len() {
-                    eval_expr(arg_expr, ctx).await
-                } else {
-                    panic!("Function {} expects {} arguments, got {}", name, fn_arg_count, args.len())
-                };
-                
-                // Only error if param expects Owned but arg is Borrowed
-                if *param_ownership == Ownership::Owned && ownership == Ownership::Borrowed {
-                    panic!("Function {} param '{}' expects owned, but got borrowed", name, param_name);
-                }
-                
-                // Mark as moved if param expects Owned
-                if *param_ownership == Ownership::Owned {
-                    if let Expr::Var(var_name) = arg_expr {
-                        if let Some((k, v, o, _)) = ctx.env.get(var_name) {
-                            ctx.env.insert(var_name.clone(), (k.clone(), v.clone(), o.clone(), Moved::True));
+                        let arg_val = if i < args.len() {
+                            eval_expr(arg_expr, ctx).await
+                        } else {
+                            panic!("Function {} expects {} arguments, got {}", name, fn_arg_count, args.len())
+                        };
+                        
+                        // Only error if param expects Owned but arg is Borrowed
+                        if *param_ownership == Ownership::Owned && ownership == Ownership::Borrowed {
+                            panic!("Function {} param '{}' expects owned, but got borrowed", name, param_name);
                         }
+                        
+                        // Mark as moved if param expects Owned
+                        if *param_ownership == Ownership::Owned {
+                            if let Expr::Var(var_name) = arg_expr {
+                                if let Some((k, v, o, _)) = ctx.env.get(var_name) {
+                                    ctx.env.insert(var_name.clone(), (k.clone(), v.clone(), o.clone(), Moved::True));
+                                }
+                            }
+                        }
+
+                        // Validate parameter type
+                        if let Some(expected_type) = param_type {
+                            let actual_type = infer_value_type(&arg_val);
+                            if !types_compatible(expected_type, &actual_type) {
+                                panic!("Type error: param for function {}: expected {:?}, got {:?}", name, expected_type, actual_type);
+                            }
+                        }
+
+                        fn_env.insert(param_name.clone(), (AssignKind::Var, arg_val, ownership, Moved::False));
+                    }
+                    
+                    // Execute function body
+                    if let Some(body) = &fn_def.body {
+                        let mut fn_ctx = ctx.fork_with_env(fn_env);
+                        let flow = execute_block(body, &mut fn_ctx, fn_def.return_type.as_ref()).await;
+                        match flow {
+                            ControlFlow::Return(val) => val,
+                            _ => Value::Void,
+                        }
+                    } else {
+                        panic!("Cannot call function '{}' as it has not body.", name);
                     }
                 }
-
-                // Validate parameter type
-                if let Some(expected_type) = param_type {
-                    let actual_type = infer_value_type(&arg_val);
-                    if !types_compatible(expected_type, &actual_type) {
-                        panic!("Type error: param for function {}: expected {:?}, got {:?}", name, expected_type, actual_type);
+                
+                Callable::Builtin(func) => {
+                    // Builtins are simple: eval args, call function
+                    let mut eval_args = Vec::new();
+                    for arg in args {
+                        eval_args.push(eval_expr(arg, ctx).await);
                     }
+                    func(eval_args).unwrap_or(Value::Void)
                 }
-
-                fn_env.insert(param_name.clone(), (AssignKind::Var, arg_val, ownership, Moved::False));
             }
-            
-            // Execute function body
-            if let Some(body) = &fn_def.body {
-                let mut fn_ctx = ctx.fork_with_env(fn_env);
-                let flow = execute_block(body, &mut fn_ctx, fn_def.return_type.as_ref()).await;
-                match flow {
-                    ControlFlow::Return(val) => val,
-                    _ => Value::Void,
-                }
-            } else {
-                panic!("Cannot call function '{}' as it has not body.", name);
-            }
-            
         }
         Expr::ModelInstance { name, fields } => {
             // Lookup model definition
@@ -1762,48 +1776,62 @@ async fn eval_expr(
         Expr::MethodCall { object, method, args } => {
             // Handle StateActor and Channel methods
             if let Expr::Var(var_name) = object.as_ref() {
-                if let Some((_, Value::Namespace(ns), _, _)) = ctx.env.get(var_name) {
+                let namespace_info = {
+                    if let Some((_, Value::Namespace(ns), _, _)) = ctx.env.get(var_name) {
+                        Some(ns.clone())
+                    } else {
+                        None
+                    }
+                };
+
+                if let Some(ns) = namespace_info {
                     let qualified_name = format!("{}.{}", ns, method);
-                    
-                    let fn_def = ctx.fns.get(&qualified_name)
-                        .unwrap_or_else(|| panic!("Function '{}' not found in namespace '{}'", method, ns))
-                        .clone();
                     
                     // Evaluate arguments
                     let mut eval_args = Vec::new();
                     for arg in args {
                         eval_args.push(eval_expr(arg, ctx).await);
                     }
-                    
-                    // Build function environment
-                    let mut fn_env = HashMap::new();
-                    for ((param_name, param_type, ownership), arg_val) in fn_def.params.iter().zip(eval_args) {
-                        let arg_type = infer_value_type(&arg_val);
-                        if let Some(expected) = param_type {
-                            if !types_compatible(expected, &arg_type) {
-                                panic!(
-                                    "Argument type mismatch for '{}': expected {:?}, got {:?}",
-                                    param_name, expected, arg_type
+
+                    match ctx.fns.get(&qualified_name).cloned() {
+                        Some(Callable::UserDefined(fn_def)) => {
+                            // Build function environment
+                            let mut fn_env = HashMap::new();
+                            for ((param_name, param_type, ownership), arg_val) in fn_def.params.iter().zip(eval_args) {
+                                let arg_type = infer_value_type(&arg_val);
+                                if let Some(expected) = param_type {
+                                    if !types_compatible(expected, &arg_type) {
+                                        panic!(
+                                            "Argument type mismatch for '{}': expected {:?}, got {:?}",
+                                            param_name, expected, arg_type
+                                        );
+                                    }
+                                }
+                                fn_env.insert(
+                                    param_name.clone(),
+                                    (AssignKind::Var, arg_val, ownership.clone(), Moved::False)
                                 );
                             }
+                            
+                            // Execute function body
+                            if let Some(body) = &fn_def.body {
+                                let mut fn_ctx = ctx.fork_with_env(fn_env);
+                                let flow = execute_block(body, &mut fn_ctx, fn_def.return_type.as_ref()).await;
+                                
+                                return match flow {
+                                    ControlFlow::Return(v) => v,
+                                    _ => Value::Void,
+                                };
+                            } else {
+                                panic!("Function '{}' has no body", qualified_name);
+                            }
                         }
-                        fn_env.insert(
-                            param_name.clone(),
-                            (AssignKind::Var, arg_val, ownership.clone(), Moved::False)
-                        );
-                    }
-                    
-                    // Execute function body
-                    if let Some(body) = &fn_def.body {
-                        let mut fn_ctx = ctx.fork_with_env(fn_env);
-                        let flow = execute_block(body, &mut fn_ctx, fn_def.return_type.as_ref()).await;
-                        
-                        return match flow {
-                            ControlFlow::Return(v) => v,
-                            _ => Value::Void,
-                        };
-                    } else {
-                        panic!("Function '{}' has no body", qualified_name);
+                        Some(Callable::Builtin(func)) => {
+                            return func(eval_args).unwrap_or(Value::Void);
+                        }
+                        None => {
+                            panic!("Function '{}' not found in namespace '{}'", method, ns);
+                        }
                     }
                 } else if let Some((_, Value::StateActor(tx, rx, inner_type), ownership, _)) = ctx.env.get(var_name) {
                     let tx = tx.clone();
@@ -1910,52 +1938,6 @@ async fn eval_expr(
 
             // Handle numeric methods
             match obj_val.clone() {
-                Value::I64(n) => {
-                    match method.as_str() {
-                        "abs" => return Value::I64(n.abs()),
-                        "round" | "floor" | "ceil" => return Value::I64(n),
-                        _ => {}
-                    }
-                }
-                Value::I32(n) => {
-                    match method.as_str() {
-                        "abs" => return Value::I32(n.abs()),
-                        "round" | "floor" | "ceil" => return Value::I32(n),
-                        _ => {}
-                    }
-                }
-                Value::U64(n) => {
-                    match method.as_str() {
-                        "abs" => return Value::U64(n),
-                        "round" | "floor" | "ceil" => return Value::U64(n),
-                        _ => {}
-                    }
-                }
-                Value::U32(n) => {
-                    match method.as_str() {
-                        "abs" => return Value::U32(n),
-                        "round" | "floor" | "ceil" => return Value::U32(n),
-                        _ => {}
-                    }
-                }
-                Value::F64(n) => {
-                    match method.as_str() {
-                        "abs" => return Value::F64(n.abs()),
-                        "round" => return Value::F64(n.round()),
-                        "floor" => return Value::F64(n.floor()),
-                        "ceil" => return Value::F64(n.ceil()),
-                        _ => {}
-                    }
-                }
-                Value::F32(n) => {
-                    match method.as_str() {
-                        "abs" => return Value::F32(n.abs()),
-                        "round" => return Value::F32(n.round()),
-                        "floor" => return Value::F32(n.floor()),
-                        "ceil" => return Value::F32(n.ceil()),
-                        _ => {}
-                    }
-                }
                 _ => {} // Not a number, continue
             }
 
@@ -2826,12 +2808,7 @@ async fn execute_stmt(
             }
         }
         Stmt::FnDef(fn_def) => {
-            ctx.fns.insert(fn_def.name.clone(), FnDef {
-                name: fn_def.name.clone(),
-                params: fn_def.params.clone(),
-                body: fn_def.body.clone(),
-                return_type: fn_def.return_type.clone(),
-            });
+            ctx.fns.insert(fn_def.name.clone(), Callable::UserDefined(fn_def.clone()));
             ControlFlow::None
         }
         Stmt::ModelDef(model_def) => {
@@ -2898,7 +2875,17 @@ async fn execute_stmt(
                     }
                     
                     ctx.exports.default = Some(name.clone());
-                    ctx.exports.functions.insert(name.clone(), ctx.fns.get(name).unwrap().clone());
+                    match ctx.fns.get(name) {
+                        Some(Callable::UserDefined(fn_def)) => {
+                            ctx.exports.functions.insert(name.clone(), fn_def.clone());
+                        }
+                        Some(Callable::Builtin(_builtin)) => {
+                            panic!("Cannot export builtin '{}'", name);
+                        }
+                        None => {
+                            panic!("Cannot export '{}': not defined", name);
+                        }
+                    }
                     
                     ControlFlow::None
                 }
@@ -2917,7 +2904,7 @@ async fn execute_stmt(
                         if let Some(fn_def) = module_exports.functions.get(original) {
                             let mut imported_fn = fn_def.clone();
                             imported_fn.name = local.clone();
-                            ctx.fns.insert(local.clone(), imported_fn);
+                            ctx.fns.insert(local.clone(), Callable::UserDefined(imported_fn.clone()));
                         } else {
                             panic!("'{}' is not exported from '{}'", original, import_stmt.source);
                         }
@@ -2938,7 +2925,7 @@ async fn execute_stmt(
                     // Import under the user's chosen name
                     let mut renamed_fn = fn_def.clone();
                     renamed_fn.name = name.clone();
-                    ctx.fns.insert(name.clone(), renamed_fn);
+                    ctx.fns.insert(name.clone(), Callable::UserDefined(renamed_fn.clone()));
                 }
                 
                 ImportKind::Namespace(namespace) => {
@@ -2946,14 +2933,14 @@ async fn execute_stmt(
                     // Store functions with prefixed names for now
                     for (fn_name, fn_def) in &module_exports.functions {
                         let qualified_name = format!("{}.{}", namespace, fn_name);
-                        ctx.fns.insert(qualified_name, fn_def.clone());
+                        ctx.fns.insert(qualified_name, Callable::UserDefined(fn_def.clone()));
                     }
                     
                     // Handle .default access
                     if let Some(default_name) = &module_exports.default {
                         let fn_def = module_exports.functions.get(default_name).unwrap();
                         let qualified_default = format!("{}.default", namespace);
-                        ctx.fns.insert(qualified_default, fn_def.clone());
+                        ctx.fns.insert(qualified_default, Callable::UserDefined(fn_def.clone()));
                     }
                 }
             }
@@ -3033,10 +3020,92 @@ fn normalize_path(path: &std::path::Path) -> String {
     result.to_string_lossy().to_string()
 }
 
+pub fn resolve_toolbox_import(
+    kind: &ImportKind,
+    module: Option<&str>,
+    toolbox: &Toolbox,
+    ctx: &mut RuntimeContext,
+) -> Result<(), RuntimeError> {
+    match kind {
+        // import { abs, round } from "tbx::math"
+        ImportKind::Named(names) => {
+            let module_name = module.ok_or_else(|| {
+                RuntimeError::ImportError("Named imports from 'tbx' require a module path, e.g., 'tbx::math'".into())
+            })?;
+            
+            let tbx_module = toolbox.get_module(module_name).ok_or_else(|| {
+                RuntimeError::ImportError(format!("Unknown toolbox module: {}", module_name))
+            })?;
+            
+            for (original, local) in names {
+                let func = tbx_module.functions.get(original).ok_or_else(|| {
+                    RuntimeError::ImportError(format!("'{}' not found in tbx::{}", original, module_name))
+                })?;
+                
+                ctx.fns.insert(local.clone(), Callable::Builtin(*func));
+            }
+            Ok(())
+        }
+        
+        // import * as Math from "tbx::math"
+        ImportKind::Namespace(namespace) => {
+            let module_name = module.ok_or_else(|| {
+                RuntimeError::ImportError("Namespace imports from 'tbx' require a module path".into())
+            })?;
+            
+            let tbx_module = toolbox.get_module(module_name).ok_or_else(|| {
+                RuntimeError::ImportError(format!("Unknown toolbox module: {}", module_name))
+            })?;
+            
+            // Register namespace marker
+            ctx.env.insert(
+                namespace.clone(),
+                (AssignKind::Const, Value::Namespace(namespace.clone()), Ownership::Borrowed, Moved::False)
+            );
+            
+            // Register all functions with namespace prefix
+            for (name, func) in &tbx_module.functions {
+                ctx.fns.insert(
+                    format!("{}.{}", namespace, name),
+                    Callable::Builtin(*func)
+                );
+            }
+            Ok(())
+        }
+        
+        // import { math } from "tbx"
+        // import { math as Math } from "tbx"
+        ImportKind::Default(name) => {
+            // For `import math from "tbx::math"` — import whole module as a namespace
+            let module_name = module.ok_or_else(|| {
+                RuntimeError::ImportError(format!("Default imports from 'tbx' not supported. Use 'tbx::{}' or named imports.", name.to_lowercase()))
+            })?;
+            
+            let tbx_module = toolbox.get_module(module_name).ok_or_else(|| {
+                RuntimeError::ImportError(format!("Unknown toolbox module: {}", module_name))
+            })?;
+            
+            ctx.env.insert(
+                name.clone(),
+                (AssignKind::Const, Value::Namespace(name.clone()), Ownership::Borrowed, Moved::False)
+            );
+            
+            for (fn_name, func) in &tbx_module.functions {
+                ctx.fns.insert(
+                    format!("{}.{}", name, fn_name),
+                    Callable::Builtin(*func)
+                );
+            }
+            Ok(())
+        }
+    }
+}
+
 async fn load_module(
     path: &str,
     current_file: &str,
     module_cache: &mut HashMap<String, ModuleExports>,
+    toolbox: &Toolbox,
 ) -> ModuleExports {
     if let Some(exports) = module_cache.get(path) {
         return exports.clone();
@@ -3047,7 +3116,7 @@ async fn load_module(
     let source = std::fs::read_to_string(&file_path)
         .unwrap_or_else(|_| panic!("Could not read module '{}'", file_path));
     
-    let tokens = lexer::tokenize(&source);
+    let tokens = ngn::lexer::tokenize(&source);
     
     let mut preliminary_parser = Parser::new(tokens.clone(), HashMap::new());
     let preliminary_ast = preliminary_parser
@@ -3068,7 +3137,7 @@ async fn load_module(
     
     module_cache.insert(path.to_string(), ModuleExports::default());
     
-    let exports = Box::pin(run_module(&stmts, current_file,  module_cache, false)).await;
+    let exports = Box::pin(run_module(&stmts, current_file,  module_cache, toolbox, false)).await;
     
     module_cache.insert(path.to_string(), exports.clone());
     
@@ -3079,6 +3148,7 @@ async fn run_module(
     stmts: &[Stmt],
     current_file: &str,
     module_cache: &mut HashMap<String, ModuleExports>,
+    toolbox: &Toolbox,
     is_entry: bool, // true for main file, false for imported modules
 ) -> ModuleExports {
     let mut ctx = RuntimeContext::with_cache(std::mem::take(module_cache));
@@ -3087,63 +3157,136 @@ async fn run_module(
     for stmt in stmts {
         match stmt {
             Stmt::Import(import_stmt) => {
-                let module_exports = load_module(
-                    &import_stmt.source, 
-                    current_file,
-                    module_cache
-                ).await;
-                
-                match &import_stmt.kind {
-                    ImportKind::Named(names) => {
-                        for (original, local) in names {
-                            if let Some(fn_def) = module_exports.functions.get(original) {
-                                let mut imported_fn = fn_def.clone();
-                                imported_fn.name = local.clone(); // Rename to local alias
-                                ctx.fns.insert(local.clone(), imported_fn);
-                            } else if let Some(model_def) = module_exports.models.get(original) {
-                                ctx.models.insert(local.clone(), model_def.clone());
-                            } else if let Some(enum_def) = module_exports.enums.get(original) {
-                                ctx.enums.insert(local.clone(), enum_def.clone());
-                            } else {
-                                panic!("'{}' is not exported from '{}'", original, import_stmt.source);
+                match parse_import_source(&import_stmt.source) {
+                    ImportSource::Toolbox { module } => {
+                        match &import_stmt.kind {
+                            // import { abs, round } from "tbx::math"
+                            ImportKind::Named(names) => {
+                                let module_name = module.unwrap_or_else(|| {
+                                    panic!("Named imports from 'tbx' require a module, e.g., 'tbx::math'");
+                                });
+                                
+                                let tbx_module = toolbox.get_module(&module_name).unwrap_or_else(|| {
+                                    panic!("Unknown toolbox module: tbx::{}", module_name);
+                                });
+                                
+                                for (original, local) in names {
+                                    let func = tbx_module.functions.get(original).unwrap_or_else(|| {
+                                        panic!("'{}' not found in tbx::{}", original, module_name);
+                                    });
+                                    ctx.fns.insert(local.clone(), Callable::Builtin(*func));
+                                }
+                            }
+                            
+                            // import * as Math from "tbx::math"
+                            ImportKind::Namespace(namespace) => {
+                                let module_name = module.unwrap_or_else(|| {
+                                    panic!("Namespace imports from 'tbx' require a module, e.g., 'tbx::math'");
+                                });
+                                
+                                let tbx_module = toolbox.get_module(&module_name).unwrap_or_else(|| {
+                                    panic!("Unknown toolbox module: tbx::{}", module_name);
+                                });
+                                
+                                ctx.env.insert(
+                                    namespace.clone(),
+                                    (AssignKind::Const, Value::Namespace(namespace.clone()), Ownership::Borrowed, Moved::False)
+                                );
+                                
+                                for (name, func) in &tbx_module.functions {
+                                    ctx.fns.insert(
+                                        format!("{}.{}", namespace, name),
+                                        Callable::Builtin(*func)
+                                    );
+                                }
+                            }
+                            
+                            // import math from "tbx::math"
+                            ImportKind::Default(local_name) => {
+                                let module_name = module.unwrap_or_else(|| {
+                                    panic!("Default imports from 'tbx' require a module, e.g., 'tbx::{}'", local_name.to_lowercase());
+                                });
+                                
+                                let tbx_module = toolbox.get_module(&module_name).unwrap_or_else(|| {
+                                    panic!("Unknown toolbox module: tbx::{}", module_name);
+                                });
+                                
+                                ctx.env.insert(
+                                    local_name.clone(),
+                                    (AssignKind::Const, Value::Namespace(local_name.clone()), Ownership::Borrowed, Moved::False)
+                                );
+                                
+                                for (name, func) in &tbx_module.functions {
+                                    ctx.fns.insert(
+                                        format!("{}.{}", local_name, name),
+                                        Callable::Builtin(*func)
+                                    );
+                                }
                             }
                         }
                     }
                     
-                    ImportKind::Default(local_name) => {
-                        let default_name = module_exports
-                            .default
-                            .as_ref()
-                            .unwrap_or_else(|| {
-                                panic!("Module '{}' has no default export", import_stmt.source)
-                            });
+                    ImportSource::File { path: _ } => {
+                        let module_exports = load_module(
+                            &import_stmt.source, 
+                            current_file,
+                            module_cache,
+                            toolbox,
+                        ).await;
                         
-                        if let Some(fn_def) = module_exports.functions.get(default_name) {
-                            let mut renamed = fn_def.clone();
-                            renamed.name = local_name.clone();
-                            ctx.fns.insert(local_name.clone(), renamed);
-                        } else {
-                            panic!("Default export '{}' not found in '{}'", default_name, import_stmt.source);
-                        }
-                    }
-                    
-                    ImportKind::Namespace(namespace) => {
-                        // Store namespace marker in env
-                        ctx.env.insert(
-                            namespace.clone(),
-                            (AssignKind::Const, Value::Namespace(namespace.clone()), Ownership::Borrowed, Moved::False)
-                        );
+                        match &import_stmt.kind {
+                            ImportKind::Named(names) => {
+                                for (original, local) in names {
+                                    if let Some(fn_def) = module_exports.functions.get(original) {
+                                        let mut imported_fn = fn_def.clone();
+                                        imported_fn.name = local.clone(); // Rename to local alias
+                                        ctx.fns.insert(local.clone(), Callable::UserDefined(imported_fn.clone()));
+                                    } else if let Some(model_def) = module_exports.models.get(original) {
+                                        ctx.models.insert(local.clone(), model_def.clone());
+                                    } else if let Some(enum_def) = module_exports.enums.get(original) {
+                                        ctx.enums.insert(local.clone(), enum_def.clone());
+                                    } else {
+                                        panic!("'{}' is not exported from '{}'", original, import_stmt.source);
+                                    }
+                                }
+                            }
+                            
+                            ImportKind::Default(local_name) => {
+                                let default_name = module_exports
+                                    .default
+                                    .as_ref()
+                                    .unwrap_or_else(|| {
+                                        panic!("Module '{}' has no default export", import_stmt.source)
+                                    });
+                                
+                                if let Some(fn_def) = module_exports.functions.get(default_name) {
+                                    let mut renamed = fn_def.clone();
+                                    renamed.name = local_name.clone();
+                                    ctx.fns.insert(local_name.clone(), Callable::UserDefined(renamed.clone()));
+                                } else {
+                                    panic!("Default export '{}' not found in '{}'", default_name, import_stmt.source);
+                                }
+                            }
+                            
+                            ImportKind::Namespace(namespace) => {
+                                // Store namespace marker in env
+                                ctx.env.insert(
+                                    namespace.clone(),
+                                    (AssignKind::Const, Value::Namespace(namespace.clone()), Ownership::Borrowed, Moved::False)
+                                );
 
-                        // Store qualified functions
-                        for (name, fn_def) in &module_exports.functions {
-                            ctx.fns.insert(format!("{}.{}", namespace, name), fn_def.clone());
-                        }
-                        for (name, model_def) in &module_exports.models {
-                            ctx.models.insert(format!("{}.{}", namespace, name), model_def.clone());
-                        }
-                        if let Some(default_name) = &module_exports.default {
-                            if let Some(fn_def) = module_exports.functions.get(default_name) {
-                                ctx.fns.insert(format!("{}.default", namespace), fn_def.clone());
+                                // Store qualified functions
+                                for (name, fn_def) in &module_exports.functions {
+                                    ctx.fns.insert(format!("{}.{}", namespace, name), Callable::UserDefined(fn_def.clone()));
+                                }
+                                for (name, model_def) in &module_exports.models {
+                                    ctx.models.insert(format!("{}.{}", namespace, name), model_def.clone());
+                                }
+                                if let Some(default_name) = &module_exports.default {
+                                    if let Some(fn_def) = module_exports.functions.get(default_name) {
+                                        ctx.fns.insert(format!("{}.default", namespace), Callable::UserDefined(fn_def.clone()));
+                                    }
+                                }
                             }
                         }
                     }
@@ -3156,7 +3299,7 @@ async fn run_module(
                         // Process the inner statement
                         match inner_stmt.as_ref() {
                             Stmt::FnDef(fn_def) => {
-                                ctx.fns.insert(fn_def.name.clone(), fn_def.clone());
+                                ctx.fns.insert(fn_def.name.clone(), Callable::UserDefined(fn_def.clone()));
                                 ctx.exports.functions.insert(fn_def.name.clone(), fn_def.clone());
                             }
                             Stmt::ModelDef(model_def) => {
@@ -3179,7 +3322,7 @@ async fn run_module(
                 }
             }
             Stmt::FnDef(fn_def) => {
-                ctx.fns.insert(fn_def.name.clone(), fn_def.clone());
+                ctx.fns.insert(fn_def.name.clone(), Callable::UserDefined(fn_def.clone()));
             }
             Stmt::ModelDef(model_def) => {
                 ctx.models.insert(model_def.name.clone(), model_def.clone());
@@ -3305,30 +3448,39 @@ async fn run_module(
 
     // Validate default export exists
     if let Some(default_name) = &ctx.exports.default {
-        if !ctx.fns.contains_key(default_name) {
-            panic!("Default export '{}' is not defined", default_name);
+        match ctx.fns.get(default_name) {
+            Some(Callable::UserDefined(fn_def)) => {
+                ctx.exports.functions.insert(default_name.clone(), fn_def.clone());
+            }
+            Some(Callable::Builtin(_)) => {
+                panic!("Cannot export a builtin as default");
+            }
+            None => {
+                panic!("Default export '{}' is not defined", default_name);
+            }
         }
-        ctx.exports.functions.insert(default_name.clone(), ctx.fns.get(default_name).unwrap().clone());
     }
 
     // Only run main() for entry file
     if is_entry {
-        if let Some(main_fn) = ctx.fns.get("main").cloned() {
-            if !main_fn.params.is_empty() {
-                panic!("main() must have no parameters");
+        match ctx.fns.get("main").cloned() {
+            Some(Callable::UserDefined(main_fn)) => {
+                if !main_fn.params.is_empty() {
+                    panic!("main() must have no parameters");
+                }
+                
+                if let Some(body) = &main_fn.body {
+                    execute_block(body, &mut ctx, main_fn.return_type.as_ref()).await;
+                } else {
+                    panic!("The main() function must have a body.");
+                }
             }
-            
-            if let Some(body) = &main_fn.body {
-                execute_block(
-                    body,
-                    &mut ctx,
-                    main_fn.return_type.as_ref()
-                ).await;
-            } else {
-                panic!("The main() function must have a body.");
+            Some(Callable::Builtin(_)) => {
+                panic!("main() cannot be a builtin function");
             }
-        } else {
-            panic!("No main() function found. Entrypoint files must define main()");
+            None => {
+                panic!("No main() function found. Entrypoint files must define main()");
+            }
         }
     }
 
@@ -3340,5 +3492,6 @@ async fn run_module(
 
 pub async fn run(stmts: &[Stmt], entry_file: &str) {
     let mut module_cache = HashMap::new();
-    run_module(stmts, entry_file, &mut module_cache, true).await;
+    let toolbox = Toolbox::new();
+    run_module(stmts, entry_file, &mut module_cache, &toolbox, true).await;
 }
