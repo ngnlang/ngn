@@ -1007,8 +1007,10 @@ fn main() {
         done <- true
     })
     
-    <-done
-    <-done
+    // If number of awaited messages is known, you can declare that here.
+    // They'll be returned as an array, if you need to assign them.
+    <-2 done
+
     print(counter)  // Always 15
 }
 ```
