@@ -794,11 +794,35 @@ Here are the ways to manipulate an object's fields, based on the above example c
 - by `const`, `static` variables: ❌ not allowed, as these are all strictly immutable
 
 ## Channels
-Send and receive data. You must provide a data type for the channel.
+Send and receive data.
+- You must declare a channel with `const`
+- You must provide a data type for the channel's messages.
+
+### <- syntax
+Use `<-` to both send and receive messages. Let's assume we have a channel called `line`.
+- `line <- "hello"` would send a message to the channel.
+- `<- line` would cause the program to stop and wait for a single message.
+
+Regarding the last point: if you had multiple things sending messages, you have the following options:
+```ngn
+// Would wait on two messages before continuing the program.
+<- line
+<- line
+
+// If you know how many messages to wait on, here's a shorthand version of the above:
+<-2 line
+
+// You can even base it off of other things:
+<-tasks.size() line  // array size
+<-(x + y) line
+
+// If you don't know how many messages you'll receive.
+// You'll need to close the channel for this to work (example futher below).
+<-? line
+```
 
 ```ngn
 fn main() {
-    // You can only assign channels with "const"
     const c = channel(): string
 
     // Send a message
@@ -812,43 +836,18 @@ fn main() {
     const msg = <- c
     print("Received: {msg}")
 
-    // This should FAIL because the channel is closed and empty.
+    // This will fail because the channel is closed and empty.
     const fail = <- c
 }
 ```
 
-Channels can even contain other channels, and you can send/receive data within those inner channels.
-```ngn
-fn main() {
-    const request_line = channel(): channel<string>
-
-    // (See next section for details on threads)
-    thread(|| {
-        // Thread waits for inbound data on the request_line channel,
-        // which happens to be another channel that we assign to a constant.
-        const reply_channel = <- request_line
-        
-        // Reply back on the private channel
-        reply_channel <- "Your order is ready!"
-    })
-
-    // Create a private response channel
-    const private_channel = channel(): string
-    
-    // Send private channel, which the worker is waiting for
-    request_line <- private_channel
-    
-    // Wait for the private reply
-    print(<- private_channel)
-}
-```
-
-You can even send a closure to a channel:
+You can send a closure to a channel:
 ```ngn
 fn main() {
     const job_queue = channel(): fn
     const done = channel(): bool
 
+    // (See next section for details on threads)
     thread(|| {
         print("Worker started")
         while (true) {
@@ -869,11 +868,40 @@ fn main() {
         print("Task B executing: {n} * 2 = {res}") 
     }
     
+    // must close the channel to break out of `while` loop
     job_queue.close()
+
     print("Jobs sent")
     
+    // wait for jobs to complete
     <- done
-    print("Main exiting")
+
+    print("Jobs complete")
+}
+```
+
+Channels can even contain other channels, and you can send/receive data within those inner channels.
+```ngn
+fn main() {
+    const request_line = channel(): channel<string>
+
+    thread(|| {
+        // Thread waits for inbound data on the request_line channel,
+        // which happens to be another channel that we assign to a constant.
+        const reply_channel = <- request_line
+        
+        // Reply back on the private channel
+        reply_channel <- "Your order is ready!"
+    })
+
+    // Create a private response channel
+    const private_channel = channel(): string
+    
+    // Send private channel, which the worker is waiting for
+    request_line <- private_channel
+    
+    // Wait for the private reply
+    print(<- private_channel)
 }
 ```
 
