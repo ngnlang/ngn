@@ -328,6 +328,12 @@ fn value_to_expr(v: &Value) -> Expr {
         Value::F32(n) => Expr::F32(*n),
         Value::String(s) => Expr::String(s.clone()),
         Value::Bool(b) => Expr::Bool(*b),
+        Value::Function(fn_def) => Expr::Var(fn_def.name.clone()),
+        Value::Closure(closure) => Expr::Closure(closure.def.clone()),
+        Value::Array(items) => {
+            let exprs: Vec<Expr> = items.iter().map(|item| value_to_expr(item)).collect();
+            Expr::Array(exprs)
+        },
         _ => panic!("Cannot convert {:?} to expr", v),
     }
 }
@@ -593,6 +599,7 @@ fn infer_expr_type(
                         "push" | "size" | "splice" => Type::I64,
                         "pull" => *inner_type,
                         "slice" | "copy" => Type::Array(inner_type),
+                        "each" => Type::Void,
                         _ => panic!("Unknown array method: {}", method),
                     }
                 }
@@ -965,6 +972,76 @@ fn validate_role_compliance(
     }
 }
 
+async fn execute_callable(
+    callable: Callable,
+    name: &str,
+    args: &[Expr],
+    ctx: &mut RuntimeContext,
+) -> Value {
+    match callable {
+        Callable::UserDefined(fn_def) => {
+            // Create new scope for function
+            let mut fn_env: HashMap<String, (AssignKind, Value, Ownership, Moved)> = HashMap::new();
+            let fn_arg_count = fn_def.params.len();
+            
+            // Bind parameters
+            for (i, (param_name, param_type, param_ownership)) in fn_def.params.iter().enumerate() {
+                let arg_expr = &args[i];
+                let ownership = get_ownership(arg_expr, &ctx.env);
+
+                let arg_val = if i < args.len() {
+                    eval_expr(arg_expr, ctx).await
+                } else {
+                    panic!("Function {} expects {} arguments, got {}", name, fn_arg_count, args.len())
+                };
+                
+                // Only error if param expects Owned but arg is Borrowed
+                if *param_ownership == Ownership::Owned && ownership == Ownership::Borrowed {
+                    panic!("Function {} param '{}' expects owned, but got borrowed", name, param_name);
+                }
+                
+                // Mark as moved if param expects Owned
+                if *param_ownership == Ownership::Owned {
+                    if let Expr::Var(var_name) = arg_expr {
+                        if let Some((k, v, o, _)) = ctx.env.get(var_name) {
+                            ctx.env.insert(var_name.clone(), (k.clone(), v.clone(), o.clone(), Moved::True));
+                        }
+                    }
+                }
+
+                // Validate parameter type
+                if let Some(expected_type) = param_type {
+                    let actual_type = infer_value_type(&arg_val);
+                    if !types_compatible(expected_type, &actual_type) {
+                        panic!("Type error: param for function {}: expected {:?}, got {:?}", name, expected_type, actual_type);
+                    }
+                }
+
+                fn_env.insert(param_name.clone(), (AssignKind::Var, arg_val, ownership, Moved::False));
+            }
+            
+            // Execute function body
+            if let Some(body) = &fn_def.body {
+                let mut fn_ctx = ctx.fork_with_env(fn_env);
+                let flow = execute_block(body, &mut fn_ctx, fn_def.return_type.as_ref()).await;
+                match flow {
+                    ControlFlow::Return(val) => val,
+                    _ => Value::Void,
+                }
+            } else {
+                panic!("Cannot call function '{}' as it has not body.", name);
+            }
+        }
+        Callable::Builtin(func) => {
+            let mut eval_args = Vec::new();
+            for arg in args {
+                eval_args.push(eval_expr(arg, ctx).await);
+            }
+            func(eval_args).unwrap_or(Value::Void)
+        }
+    }
+}
+
 #[async_recursion]
 async fn call_closure(
     closure: &ClosureValue,
@@ -1113,7 +1190,12 @@ fn collect_vars_from_expr(e: &Expr, vars: &mut Vec<String>) {
                 collect_vars_from_expr(expr, vars);
             }
         }
-        Expr::Call { args, .. } => {
+        Expr::Call { name, args } => {
+            // The call target might be a variable holding a function
+            if !vars.contains(name) {
+                vars.push(name.clone());
+            }
+
             for arg in args {
                 collect_vars_from_expr(arg, vars);
             }
@@ -1146,6 +1228,9 @@ fn collect_vars_from_expr(e: &Expr, vars: &mut Vec<String>) {
         }
         Expr::MaybeReceive(target) => {
             collect_vars_from_expr(target, vars);
+        }
+        Expr::Thread(e) => {
+            collect_vars_from_expr(e, vars);
         }
         Expr::Closure(def) => {
             for stmt in &def.body {
@@ -1315,8 +1400,17 @@ async fn eval_expr(
         Expr::Bool(b) => Value::Bool(*b),
         Expr::Array(exprs) => {
             let mut values: Vec<Value> = Vec::new();
-            for e in exprs {
-                values.push(eval_expr(e, ctx).await);
+            for ex in exprs {
+                if let Expr::Var(var_name) = ex {
+                    // Try to resolve as a function first
+                    if let Some(callable) = ctx.fns.get(var_name) {
+                        if let Callable::UserDefined(fn_def) = callable {
+                            values.push(Value::Function(fn_def.clone()));
+                            continue;
+                        }
+                    }
+                }
+                values.push(eval_expr(ex, ctx).await);
             }
             Value::Array(values)
         },
@@ -1735,22 +1829,52 @@ async fn eval_expr(
             let (cmd_tx, mut cmd_rx) = mpsc::channel::<Value>(32);
             let (resp_tx, resp_rx) = mpsc::channel::<Value>(32);
             
-            let mut actor_ctx = ctx.fork();
+            let actor_ctx = ctx.fork();
             let inner_type = infer_value_type(&initial);
+            let inner_type_clone = inner_type.clone();
             
             tokio::spawn(async move {
                 let mut current = initial;
                 
                 while let Some(cmd) = cmd_rx.recv().await {
                     if let Value::Closure(closure) = cmd {
-                        let arg_expr = value_to_expr(&current);
-                        let new_val = call_closure(
-                            &closure,
-                            &[arg_expr],
-                            &mut actor_ctx,
-                        ).await;
-                        current = new_val.clone();
-                        let _ = resp_tx.send(new_val).await;
+                        let mut closure_env = closure.captured_env.clone();
+
+                        let param_name = closure.def.params.first()
+                            .map(|(name, _)| name.clone());
+                        
+                        if let Some(ref name) = param_name {
+                            closure_env.insert(
+                                name.clone(),
+                                (AssignKind::Var, current.clone(), Ownership::Owned, Moved::False)
+                            );
+                        }
+                        
+                        let mut fn_ctx = actor_ctx.fork_with_env(closure_env);
+                        let flow = execute_block(&closure.def.body, &mut fn_ctx, None).await;
+                        
+                        // Use the mutated parameter value as the new state
+                        let result = match flow {
+                            ControlFlow::Return(val) => {
+                                if !matches!(val, Value::Void) && infer_value_type(&val) == inner_type_clone {
+                                    val
+                                } else {
+                                    param_name.as_ref()
+                                        .and_then(|name| fn_ctx.env.get(name))
+                                        .map(|(_, v, _, _)| v.clone())
+                                        .unwrap_or(current.clone())
+                                }
+                            }
+                            _ => {
+                                param_name.as_ref()
+                                    .and_then(|name| fn_ctx.env.get(name))
+                                    .map(|(_, v, _, _)| v.clone())
+                                    .unwrap_or(current.clone())
+                            }
+                        };
+
+                        current = result.clone();
+                        let _ = resp_tx.send(result).await;
                     }
                 }
             });
@@ -1774,87 +1898,27 @@ async fn eval_expr(
                 return Value::Void;
             }
 
-            if let Some((_, Value::Closure(closure), _ownership, _moved)) = ctx.env.get(name) {
-                let closure = closure.clone();
-                return call_closure(
-                    &closure,
-                    args,
-                    ctx,
-                ).await;
-            }
-
-            let callable = if let Some((_, Value::Function(fn_def), _ownership, _moved)) = ctx.env.get(name) {
-                Callable::UserDefined(fn_def.clone())
-            } else if let Some(callable) = ctx.fns.get(name) {
-                callable.clone()
-            } else {
-                panic!("Unknown function: {}", name);
-            };
-
-            match callable {
-                Callable::UserDefined(fn_def) => {
-                    // Create new scope for function
-                    let mut fn_env: HashMap<String, (AssignKind, Value, Ownership, Moved)> = HashMap::new();
-                    let fn_arg_count = fn_def.params.len();
-                    
-                    // Bind parameters
-                    for (i, (param_name, param_type, param_ownership)) in fn_def.params.iter().enumerate() {
-                        let arg_expr = &args[i];
-                        let ownership = get_ownership(arg_expr, &ctx.env);
-
-                        let arg_val = if i < args.len() {
-                            eval_expr(arg_expr, ctx).await
-                        } else {
-                            panic!("Function {} expects {} arguments, got {}", name, fn_arg_count, args.len())
-                        };
-                        
-                        // Only error if param expects Owned but arg is Borrowed
-                        if *param_ownership == Ownership::Owned && ownership == Ownership::Borrowed {
-                            panic!("Function {} param '{}' expects owned, but got borrowed", name, param_name);
-                        }
-                        
-                        // Mark as moved if param expects Owned
-                        if *param_ownership == Ownership::Owned {
-                            if let Expr::Var(var_name) = arg_expr {
-                                if let Some((k, v, o, _)) = ctx.env.get(var_name) {
-                                    ctx.env.insert(var_name.clone(), (k.clone(), v.clone(), o.clone(), Moved::True));
-                                }
-                            }
-                        }
-
-                        // Validate parameter type
-                        if let Some(expected_type) = param_type {
-                            let actual_type = infer_value_type(&arg_val);
-                            if !types_compatible(expected_type, &actual_type) {
-                                panic!("Type error: param for function {}: expected {:?}, got {:?}", name, expected_type, actual_type);
-                            }
-                        }
-
-                        fn_env.insert(param_name.clone(), (AssignKind::Var, arg_val, ownership, Moved::False));
-                    }
-                    
-                    // Execute function body
-                    if let Some(body) = &fn_def.body {
-                        let mut fn_ctx = ctx.fork_with_env(fn_env);
-                        let flow = execute_block(body, &mut fn_ctx, fn_def.return_type.as_ref()).await;
-                        match flow {
-                            ControlFlow::Return(val) => val,
-                            _ => Value::Void,
-                        }
-                    } else {
-                        panic!("Cannot call function '{}' as it has not body.", name);
-                    }
+            // Try variable lookup first (handles function references)
+            if let Some((_, value, _ownership, _moved)) = ctx.env.get(name) {
+                if let Value::Closure(closure) = value {
+                    return call_closure(&closure.clone(), args, ctx).await;
                 }
-                
-                Callable::Builtin(func) => {
-                    // Builtins are simple: eval args, call function
-                    let mut eval_args = Vec::new();
-                    for arg in args {
-                        eval_args.push(eval_expr(arg, ctx).await);
-                    }
-                    func(eval_args).unwrap_or(Value::Void)
+                if let Value::Function(fn_def) = value {
+                    return execute_callable(
+                        Callable::UserDefined(fn_def.clone()),
+                        name,
+                        args,
+                        ctx,
+                    ).await;
                 }
             }
+
+            // Fall back to function name lookup
+            if let Some(callable) = ctx.fns.get(name) {
+                return execute_callable(callable.clone(), name, args, ctx).await;
+            }
+
+            panic!("Unknown function: {}", name);
         }
         Expr::ModelInstance { name, fields } => {
             // Lookup model definition
@@ -2334,9 +2398,32 @@ async fn eval_expr(
                         
                         return Value::Array(copied);
                     }
-                    _ => {
-                        // Not an array method, continue to regular method handling
+                    "each" => {
+                        if args.is_empty() {
+                            panic!("each() requires a closure argument");
+                        }
+                        
+                        let closure_val = eval_expr(&args[0], ctx).await;
+                        
+                        if let Value::Closure(closure) = closure_val {
+                            let items = arr.clone();
+                            
+                            for (i, item) in items.iter().enumerate() {
+                                let args: Vec<Expr> = if closure.def.params.len() >= 2 {
+                                    vec![value_to_expr(item), Expr::I64(i as i64)]
+                                } else {
+                                    vec![value_to_expr(item)]
+                                };
+                                
+                                call_closure(&closure, &args, ctx).await;
+                            }
+                            
+                            return Value::Void;
+                        } else {
+                            panic!("each() requires a closure");
+                        }
                     }
+                    _ => {} // Not an array method, continue to regular method handling
                 }
             }
 
