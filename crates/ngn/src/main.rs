@@ -1666,20 +1666,28 @@ async fn eval_expr(
                 panic!("Cannot receive from non-channel type");
             }
         }
-        Expr::CountReceive(chan_expr, message_count) => {
+        Expr::CountReceive(chan_expr, count_expr) => {
+            let count_val = eval_expr(count_expr, ctx).await;
+            let count = match count_val {
+                Value::I64(n) => n as usize,
+                Value::U64(n) => n as usize,
+                Value::I32(n) => n as usize,
+                Value::U32(n) => n as usize,
+                _ => panic!("Count must be an integer"),
+            };
+
             let chan_val = eval_expr(chan_expr, ctx).await;
 
             if let Value::Channel(_, rx_mutex, _) = chan_val {
                 let mut rx = rx_mutex.lock().await;
-                let mut count: u32 = 0;
                 let mut messages = Vec::new();
 
-                while count < *message_count {
-                    match rx.recv().await {
-                        Some(v) => messages.push(v),
-                        None => panic!("Channel closed and empty"),
+                for _ in 0..count {
+                    if let Some(val) = rx.recv().await {
+                        messages.push(val);
+                    } else {
+                        panic!("Channel closed before receiving {} values", count);
                     }
-                    count += 1;
                 }
                 Value::Array(messages)
             } else {

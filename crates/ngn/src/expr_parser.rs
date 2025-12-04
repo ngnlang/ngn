@@ -30,6 +30,13 @@ impl ExprParser {
         self.tokens.next()
     }
 
+    fn can_start_expression(&mut self) -> bool {
+        matches!(
+            self.current_token(),
+            Some(Token::Ident(_)) | Some(Token::String(_))
+        )
+    }
+
     // Precedence levels (lowest to highest)
     fn parse_assignment(&mut self) -> Result<Expr, String> {
         let mut expr = self.parse_comparison()?;
@@ -206,13 +213,17 @@ impl ExprParser {
             }
             Some(Token::LArrow) => {
                 self.advance();
-                let expr = self.parse_unary()?; // Recursive to allow <- <- chan
-                Ok(Expr::Receive(Box::new(expr)))
-            }
-            Some(Token::LArrowCount(count)) => {
-                self.advance();
-                let expr = self.parse_unary()?;
-                Ok(Expr::CountReceive(Box::new(expr), count))
+                let first_expr = self.parse_unary()?;
+                
+                // Check if next token can start an expression (meaning there's a channel after the count)
+                if self.can_start_expression() {
+                    let channel_expr = self.parse_unary()?;
+                    // first_expr is count, channel_expr is channel
+                    Ok(Expr::CountReceive(Box::new(channel_expr), Box::new(first_expr)))
+                } else {
+                    // first_expr is the channel (no count)
+                    Ok(Expr::Receive(Box::new(first_expr)))
+                }
             }
             Some(Token::LArrowMaybe) => {
                 self.advance();
