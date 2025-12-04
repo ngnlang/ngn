@@ -380,6 +380,17 @@ print(stuff) // [10, 20, 30, 40, 45, 47, 50]
 print(size) // 7
 ```
 
+### `each(|item, index| {})`
+For each item in the array, execute a closure.
+
+```ngn
+var things = ["hat", "gloves", "coat"]
+
+things.each(|t, i| {
+  print("{i}: {t}")
+})
+```
+
 ## Enums
 
 ngn provides two built-in enums for common patterns: `Result` and `Maybe`
@@ -1024,7 +1035,7 @@ fn main() {
     thread(|| {
         // Pass a closure that mutates the data.
         // The closure receives the current value of the state variable via a param.
-        counter.update(|n| n + 10)
+        counter.update(|n| n + 10) // implicit return used
         print("added 10")
         done <- true
     })
@@ -1045,6 +1056,43 @@ fn main() {
 If needed, you also have access to these variable methods when using `state()`:
 - `.get()`, gets the current value
 - `.set()`, sets the current value - which replaces the existing one. Be careful, as it can be tricky to ensure proper mutation order when coupled with `.update()`.
+
+### Spawning threads
+If you have multiple tasks, here is one way you can spawn each of them in their own thread.
+```ngn
+fn main() {
+  const done = channel(): bool
+  var results = state([])
+
+  fn task1(): string {
+    print("Doing task 1")
+    return "Task 1 done"
+  }
+  fn task2(): string {
+    print("Doing task 2")
+    return "Task 2 done"
+  }
+  fn task3():string {
+    print("Doing task 3")
+    return "Task 3 done"
+  }
+  const tasks = [task1, task2, task3]
+
+  // Spawn threads
+  tasks.each(|task, i| {
+    thread(|| {
+      const result = task()
+      results.update(|r| r.push(result))
+
+      done <- true
+    })
+  })
+
+  <-tasks.size() done
+  
+  print("Spawned results: {results}")
+}
+```
 
 ## Modules
 You can use `export` and `import` to create modules in your project. This is a functions-only feature.
