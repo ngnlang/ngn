@@ -8,18 +8,7 @@ use regex::Regex as RegexLib;
 use std::fs;
 use std::collections::HashSet;
 use ngn::ast::{
-    ClosureDef, 
-    ClosureValue, 
-    EnumDef, 
-    FnDef, 
-    InterpolationPart, 
-    MethodMutationType, 
-    ModelDef, 
-    Moved, 
-    Ownership, 
-    Pattern, 
-    RoleDef, 
-    Type, 
+    ClosureDef, ClosureValue, EnumDef, FnDef, InterpolationPart, MapKey, MethodMutationType, ModelDef, Moved, Ownership, Pattern, RoleDef, Type 
 };
 
 use async_recursion::async_recursion;
@@ -66,6 +55,31 @@ use ngn::ast::{Expr, Stmt};
 
 use ngn::ast::{AssignKind, ControlFlow, MatchType, Value};
 
+fn is_valid_type(t: &Type, models: &HashMap<String, ModelDef>, enums: &HashMap<String, EnumDef>) -> bool {
+    match t {
+        Type::I64 | Type::I32 | Type::U64 | Type::U32 
+        | Type::F64 | Type::F32 | Type::Str | Type::Bool 
+        | Type::Void | Type::Function | Type::Regex | Type::String => true,
+        
+        Type::Array(inner) => is_valid_type(inner, models, enums),
+        Type::Map(key_type, val_type) => {
+            is_valid_type(key_type, models, enums) && is_valid_type(val_type, models, enums)
+        }
+        Type::Channel(inner) => is_valid_type(inner, models, enums),
+        Type::Model(name) => models.contains_key(name),
+        Type::Enum(name, _) => enums.contains_key(name),
+        Type::Generic(_) => false, // Generics aren't valid unless resolved
+        Type::Object(_) => true, // Object literals are always valid
+    }
+}
+
+fn is_hashable_type(t: &Type) -> bool {
+    matches!(
+        t,
+        Type::Generic(_) | Type::Str | Type::String | Type::I64 | Type::I32 | Type::U64 | Type::U32 | Type::Bool | Type::Enum(_, _)
+    )
+}
+
 fn format_type_for_error(t: &Type) -> String {
     match t {
         Type::I64 => "i64".to_string(),
@@ -103,6 +117,12 @@ fn format_type_for_error(t: &Type) -> String {
             }
         }
         Type::Channel(inner) => format!("channel<{}>", format_type_for_error(inner)),
+        Type::Map(key_type, val_type) => {
+            format!("map<{}, {}>", 
+                format_type_for_error(key_type), 
+                format_type_for_error(val_type)
+            )
+        }
     }
 }
 
@@ -138,6 +158,24 @@ fn format_value(v: &Value) -> String {
         Value::Channel(_, _, _) => "<channel>".to_string(),
         Value::StateActor(_, _, _) => "<state>".to_string(),
         Value::Namespace(name) => format!("[namespace: {}]", name),
+        Value::Map(map, _, _) => {
+            let entries: Vec<String> = map
+                .iter()
+                .map(|(k, v)| {
+                    let key_str = match k {
+                        MapKey::String(s) => format!("\"{}\"", s),
+                        MapKey::I64(n) => n.to_string(),
+                        MapKey::I32(n) => n.to_string(),
+                        MapKey::U64(n) => n.to_string(),
+                        MapKey::U32(n) => n.to_string(),
+                        MapKey::Bool(b) => b.to_string(),
+                        MapKey::Enum(enum_name, variant) => format!("{}::{}", enum_name, variant),
+                    };
+                    format!("{}: {}", key_str, format_value(v))
+                })
+                .collect();
+            format!("{{ {} }}", entries.join(", "))
+        }
     }
 }
 
@@ -253,6 +291,7 @@ fn is_truthy(v: &Value) -> bool {
         Value::Channel(_, _, _) => true,
         Value::StateActor(_, _, _) => true,
         Value::Namespace(_) => true,
+        Value::Map(_, _, _) => true,
     }
 }
 
@@ -334,7 +373,45 @@ fn value_to_expr(v: &Value) -> Expr {
             let exprs: Vec<Expr> = items.iter().map(|item| value_to_expr(item)).collect();
             Expr::Array(exprs)
         },
+        Value::Map(map, key_type, val_type) => {
+            let pairs: Vec<(Box<Expr>, Box<Expr>)> = map.iter()
+                .map(|(key, val)| {
+                    let key_expr = match key {
+                        MapKey::String(s) => Expr::String(s.clone()),
+                        MapKey::I64(n) => Expr::I64(*n),
+                        MapKey::I32(n) => Expr::I32(*n),
+                        MapKey::U64(n) => Expr::U64(*n),
+                        MapKey::U32(n) => Expr::U32(*n),
+                        MapKey::Bool(b) => Expr::Bool(*b),
+                        MapKey::Enum(enum_name, variant) => {
+                            Expr::EnumVariant {
+                                enum_name: enum_name.clone(),
+                                variant: variant.clone(),
+                                data: None,
+                            }
+                        }
+                    };
+                    let val_expr = value_to_expr(val);
+                    (Box::new(key_expr), Box::new(val_expr))
+                })
+                .collect();
+            
+            Expr::CreateMap(pairs, key_type.clone(), val_type.clone())
+        }
         _ => panic!("Cannot convert {:?} to expr", v),
+    }
+}
+
+fn value_to_map_key(val: Value) -> MapKey {
+    match val {
+        Value::String(s) => MapKey::String(s),
+        Value::I64(n) => MapKey::I64(n),
+        Value::I32(n) => MapKey::I32(n),
+        Value::U64(n) => MapKey::U64(n),
+        Value::U32(n) => MapKey::U32(n),
+        Value::Bool(b) => MapKey::Bool(b),
+        Value::EnumValue(enum_name, variant, _) => MapKey::Enum(enum_name, variant),
+        _ => panic!("Invalid map key type: {:?}", val),
     }
 }
 
@@ -411,6 +488,47 @@ fn infer_value_type(v: &Value) -> Type {
         }
         Value::StateActor(_, _, inner_type) => inner_type.clone(),
         Value::Namespace(_) => Type::Void,
+        Value::Map(map, key_type, val_type) => {
+            if map.is_empty() {
+                // Empty map
+                Type::Map(Box::new(key_type.clone()), Box::new(val_type.clone()))
+            } else {
+                // Infer from first entry
+                let (first_key, first_val) = map.iter().next().unwrap();
+                
+                let key_type = match first_key {
+                    MapKey::String(_) => Type::Str,
+                    MapKey::I64(_) => Type::I64,
+                    MapKey::I32(_) => Type::I32,
+                    MapKey::U64(_) => Type::U64,
+                    MapKey::U32(_) => Type::U32,
+                    MapKey::Bool(_) => Type::Bool,
+                    MapKey::Enum(enum_name, _) => Type::Enum(enum_name.clone(), vec![]),
+                };
+                
+                let val_type = infer_value_type(first_val);
+                
+                // Validate all entries match
+                for (key, val) in map.iter() {
+                    let k_type = match key {
+                        MapKey::String(_) => Type::Str,
+                        MapKey::I64(_) => Type::I64,
+                        MapKey::I32(_) => Type::I32,
+                        MapKey::U64(_) => Type::U64,
+                        MapKey::U32(_) => Type::U32,
+                        MapKey::Bool(_) => Type::Bool,
+                        MapKey::Enum(enum_name, _) => Type::Enum(enum_name.clone(), vec![]),
+                    };
+                    let v_type = infer_value_type(val);
+                    
+                    if !types_compatible(&key_type, &k_type) || !types_compatible(&val_type, &v_type) {
+                        panic!("Type error: mixed types in map");
+                    }
+                }
+                
+                Type::Map(Box::new(key_type), Box::new(val_type))
+            }
+        }
     }
 }
 
@@ -612,6 +730,16 @@ fn infer_expr_type(
                         _ => panic!("Unknown string method: {}", method),
                     }
                 }
+                Type::Map(key_type, val_type) => {
+                    match method.as_str() {
+                        "set" => Type::Map(key_type.clone(), val_type.clone()),
+                        "get" => (*val_type).clone(),
+                        "has" => Type::Bool,
+                        "remove" => (*val_type).clone(),
+                        "size" => Type::I64,
+                        _ => panic!("Unknown map method: {}", method),
+                    }
+                }
                 Type::Model(model_name) => {
                     if let Some(fn_def) = model_methods.get(&(model_name.clone(), method.clone())) {
                         if let Some(return_type) = &fn_def.return_type {
@@ -712,6 +840,28 @@ fn infer_expr_type(
         Expr::MakeState(expr) => {
             // Just infer the type of the inner expression - don't evaluate
             infer_expr_type(expr, env, fns, models, model_methods, enums)
+        }
+        Expr::CreateMap(pairs, key_type, val_type) => {
+            if pairs.is_empty() {
+                Type::Map(Box::new(key_type.clone()), Box::new(val_type.clone()))
+            } else {
+                // Infer from first pair
+                let (key_expr, val_expr) = &pairs[0];
+                let key_type = infer_expr_type(key_expr, env, fns, models, model_methods, enums);
+                let val_type = infer_expr_type(val_expr, env, fns, models, model_methods, enums);
+                
+                // Validate all pairs match
+                for (k_expr, v_expr) in pairs.iter() {
+                    let k_type = infer_expr_type(k_expr, env, fns, models, model_methods, enums);
+                    let v_type = infer_expr_type(v_expr, env, fns, models, model_methods, enums);
+                    
+                    if !types_compatible(&key_type, &k_type) || !types_compatible(&val_type, &v_type) {
+                        panic!("Type error: mixed types in map literal");
+                    }
+                }
+                
+                Type::Map(Box::new(key_type), Box::new(val_type))
+            }
         }
     }
 }
@@ -1362,12 +1512,18 @@ fn analyze_expr(expr: &Expr, analysis: &mut ThreadVarAnalysis) {
             analyze_expr(b, analysis);
         }
         Expr::EnumVariant { data: Some(e), .. } => analyze_expr(e, analysis),
-        Expr::Closure(_) => {} // Don't recurse into nested closures
-        // Leaves - no nested expressions
+        Expr::CreateMap(pairs, _, _) => {
+            for (key_expr, val_expr) in pairs {
+                analyze_expr(key_expr, analysis);
+                analyze_expr(val_expr, analysis);
+            }
+        }
+        // Do not analyze
         Expr::I64(_) | Expr::I32(_) | Expr::U64(_) | Expr::U32(_)
         | Expr::F64(_) | Expr::F32(_) | Expr::String(_) | Expr::Bool(_)
         | Expr::Var(_) | Expr::Const(_) | Expr::Static(_) | Expr::Regex(_)
-        | Expr::MakeChannel(_) | Expr::EnumVariant { data: None, .. } => {}
+        | Expr::MakeChannel(_) | Expr::EnumVariant { data: None, .. } 
+        | Expr::Closure(_) => {}
     }
 }
 
@@ -1649,6 +1805,7 @@ async fn eval_expr(
         },
         Expr::Call { name, args } if name == "thread" => {
             // TODO - I think this is dead code
+            eprintln!("!!!!!!!WRONG JASON: Expr::Call > thread IS ALIVE");
             if args.len() != 1 {
                 panic!("thread() expects exactly 1 argument (a closure)");
             }
@@ -2023,8 +2180,49 @@ async fn eval_expr(
                 _ => panic!("Cannot access field on non-object"),
             }
         }
+        Expr::CreateMap(pairs, key_type, val_type) => {
+            if !is_valid_type(key_type, &ctx.models, &ctx.enums) {
+                panic!("Invalid map key type: {}", format_type_for_error(key_type));
+            }
+            
+            if !is_valid_type(val_type, &ctx.models, &ctx.enums) {
+                panic!("Invalid map value type: {}", format_type_for_error(val_type));
+            }
+            
+            if !is_hashable_type(key_type) {
+                panic!("Map keys must be hashable (string, number, bool, or enum), got {}", 
+                    format_type_for_error(key_type));
+            }
+
+            if pairs.is_empty() {
+                return Value::Map(HashMap::new(), key_type.clone(), val_type.clone());
+            }
+            
+            let mut map = HashMap::new();
+            
+            // Validate all pairs match
+            for (key_expr, val_expr) in pairs {
+                let key_val = eval_expr(key_expr, ctx).await;
+                let val = eval_expr(val_expr, ctx).await;
+                
+                let k_type = infer_value_type(&key_val);
+                let v_type = infer_value_type(&val);
+                
+                if !types_compatible(key_type, &k_type) {
+                    panic!("Map key type mismatch: expected {}, got {}", format_type_for_error(key_type), format_type_for_error(&k_type));
+                }
+                if !types_compatible(val_type, &v_type) {
+                    panic!("Map value type mismatch: expected {}, got {}", format_type_for_error(val_type), format_type_for_error(&v_type));
+                }
+                
+                let map_key = value_to_map_key(key_val);
+                map.insert(map_key, val);
+            }
+            
+            Value::Map(map, key_type.clone(), val_type.clone())
+        }
         Expr::MethodCall { object, method, args } => {
-            // Handle StateActor and Channel methods
+            // Handle Namespace, StateActor and Channel methods
             if let Expr::Var(var_name) = object.as_ref() {
                 let namespace_info = {
                     if let Some((_, Value::Namespace(ns), _, _)) = ctx.env.get(var_name) {
@@ -2691,6 +2889,91 @@ async fn eval_expr(
                     _ => {
                         // Not a string method, continue to model method handling
                     }
+                }
+            }
+
+            // Handle map methods
+            if let Value::Map(mut map, key_type, val_type) = obj_val.clone() {
+                match method.as_str() {
+                    "set" => {
+                        if args.len() != 2 {
+                            panic!("set() requires key and value arguments");
+                        }
+
+                        let key = eval_expr(&args[0], ctx).await;
+                
+                        // Type check
+                        let actual_key_type = &infer_value_type(&key);
+                        if !types_compatible(&key_type, actual_key_type) {
+                            panic!("Key type mismatch: expected {:?} got {:?}", &key_type, actual_key_type);
+                        }
+
+                        let val = eval_expr(&args[1], ctx).await;
+
+                        // Type check
+                        let actual_val_type = &infer_value_type(&val);
+                        if !types_compatible(&val_type, actual_val_type) {
+                            panic!("Value type mismatch: expected {:?} got {:?}", &val_type, actual_val_type);
+                        }
+                        
+                        let map_key = value_to_map_key(key);
+                        map.insert(map_key, val);
+                        
+                        // Update the original variable if it's a var
+                        if let Expr::Var(var_name) = object.as_ref() {
+                            if can_mutate(var_name, &ctx.env) {
+                                if let Some((kind, _, ownership, _)) = ctx.env.get(var_name) {
+                                    ctx.env.insert(var_name.clone(), (kind.clone(), Value::Map(map.clone(), key_type.clone(), val_type.clone()), ownership.clone(), Moved::False));
+                                }
+                            }
+                        }
+                        
+                        return Value::Map(map, key_type, val_type);
+                    }
+                    "get" => {
+                        if args.is_empty() {
+                            panic!("get() requires a key argument");
+                        }
+                        let key_val = eval_expr(&args[0], ctx).await;
+                        let map_key = value_to_map_key(key_val);
+                        
+                        return map.get(&map_key)
+                            .cloned()
+                            .unwrap_or(Value::Void);
+                    }
+                    "has" => {
+                        if args.is_empty() {
+                            panic!("has() requires a key argument");
+                        }
+                        let key_val = eval_expr(&args[0], ctx).await;
+                        let map_key = value_to_map_key(key_val);
+                        
+                        return Value::Bool(map.contains_key(&map_key));
+                    }
+                    "remove" => {
+                        if args.is_empty() {
+                            panic!("remove() requires a key argument");
+                        }
+                        let key_val = eval_expr(&args[0], ctx).await;
+                        let map_key = value_to_map_key(key_val);
+                        
+                        let removed = map.remove(&map_key);
+                        
+                        // Update the original variable
+                        if let Expr::Var(var_name) = object.as_ref() {
+                            if can_mutate(var_name, &ctx.env) {
+                                if let Some((kind, _, ownership, _)) = ctx.env.get(var_name) {
+                                    ctx.env.insert(var_name.clone(), (kind.clone(), Value::Map(map, key_type, val_type), ownership.clone(), Moved::False));
+                                }
+                            }
+                        }
+                        
+                        return removed.unwrap_or(Value::Void);
+                    }
+                    "size" => {
+                        return Value::I64(map.len() as i64);
+                    }
+                    _ => {} // Not a map method; caught in infer_expr_type
                 }
             }
 

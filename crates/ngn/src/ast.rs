@@ -26,6 +26,7 @@ pub enum Type {
     Generic(String),
     Enum(String, Vec<Type>),
     Channel(Box<Type>),
+    Map(Box<Type>, Box<Type>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -65,6 +66,7 @@ pub enum Value {
         Type,
     ),
     Namespace(String),
+    Map(HashMap<MapKey, Value>, Type, Type),
 }
 
 // Implement PartialEq manually to skip Channel comparison
@@ -93,6 +95,7 @@ impl PartialEq for Value {
             (Value::Channel(_, _, _), Value::Channel(_, _, _)) => false,
             (Value::StateActor(_, _, _), Value::StateActor(_, _, _)) => false,
             (Value::Namespace(a), Value::Namespace(b)) => a == b,
+            (Value::Map(_, _, _), Value::Map(_, _, _)) => false,
             _ => false, // Different types are not equal
         }
     }
@@ -144,6 +147,7 @@ pub enum Expr {
     MaybeReceive(Box<Expr>),
     CountReceive(Box<Expr>, Box<Expr>),
     MakeState(Box<Expr>),
+    CreateMap(Vec<(Box<Expr>, Box<Expr>)>, Type, Type),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -216,6 +220,17 @@ pub enum ControlFlow {
 pub enum MatchType {
     One,
     Any,
+}
+
+#[derive(Hash, Eq, PartialEq, Clone, Debug)]
+pub enum MapKey {
+    String(String),
+    I64(i64),
+    I32(i32),
+    U64(u64),
+    U32(u32),
+    Bool(bool),
+    Enum(String, String), // (enum_name, variant_name)
 }
 
 #[derive(Debug, Clone, PartialEq)]

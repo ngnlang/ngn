@@ -30,6 +30,12 @@ impl ExprParser {
         self.tokens.next()
     }
 
+    fn skip_newlines(&mut self) {
+        while matches!(self.current_token(), Some(Token::Newline)) {
+            self.advance();
+        }
+    }
+
     fn can_start_expression(&mut self) -> bool {
         matches!(
             self.current_token(),
@@ -374,6 +380,60 @@ impl ExprParser {
                     return Ok(Expr::Call { name: "sleep".to_string(), args });
                 }
                 Ok(Expr::Var("sleep".to_string()))
+            }
+            Some(Token::Map) => {
+                self.advance();
+
+                if !matches!(self.current_token(), Some(Token::Less)) {
+                    return Err(
+                        "Map declaration requires explicit types: map<KeyType, ValueType>()\n\
+                        Example: var m = map<string, i64>([\"a\": 1])"
+                            .to_string()
+                    );
+                }
+                
+                // Expect < for generics
+                self.expect(Token::Less)?;
+                let key_type = parse_type(&mut self.tokens)?;
+                self.expect(Token::Comma)?;
+                let val_type = parse_type(&mut self.tokens)?;
+                self.expect(Token::Greater)?;
+                
+                // Expect ()
+                self.expect(Token::LParen)?;
+                
+                // Parse optional initial pairs: map<K, V>(["key": val, ...])
+                let pairs = if !matches!(self.current_token(), Some(Token::RParen)) {
+                    // Expect an array: ["key": val, "key2": val2, ...]
+                    self.expect(Token::LBracket)?;
+                    
+                    let mut pairs = Vec::new();
+                    
+                    while !matches!(self.current_token(), Some(Token::RBracket)) {
+                        let key_expr = self.parse_assignment()?;
+                        self.expect(Token::Colon)?;
+                        let val_expr = self.parse_assignment()?;
+                        
+                        pairs.push((Box::new(key_expr), Box::new(val_expr)));
+                        
+                        if matches!(self.current_token(), Some(Token::Comma)) {
+                            self.advance();
+                            self.skip_newlines();
+                        } else {
+                            break;
+                        }
+                    }
+                    
+                    self.expect(Token::RBracket)?;
+                    pairs
+                } else {
+                    vec![]
+                };
+                
+                self.expect(Token::RParen)?;
+                
+                // only pass Type (0) for types, not Ownership
+                Ok(Expr::CreateMap(pairs, key_type.0, val_type.0))
             }
             Some(Token::Ident(name)) => {
                 if name == "state" {
