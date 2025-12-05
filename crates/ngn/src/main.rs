@@ -685,7 +685,7 @@ fn infer_expr_type(
                 }
                 if let Some((_, Value::StateActor(_, _, inner_type), _, _)) = env.get(var_name) {
                     match method.as_str() {
-                        "get" | "set" | "update" => return inner_type.clone(),
+                        "read" | "write" | "update" => return inner_type.clone(),
                         _ => panic!("Unknown state method: {}", method),
                     }
                 } else if let Some((_, Value::Channel(_, _, inner_type), _, _)) = env.get(var_name) {
@@ -1466,7 +1466,7 @@ fn analyze_expr(expr: &Expr, analysis: &mut ThreadVarAnalysis) {
             analyze_expr(value, analysis);
         }
         Expr::MethodCall { object, method, args } => {
-            if matches!(method.as_str(), "update" | "set" | "get") {
+            if matches!(method.as_str(), "update" | "write" | "read") {
                 if let Expr::Var(var_name) = object.as_ref() {
                     analysis.state_method_calls.insert(var_name.clone());
                 }
@@ -2288,15 +2288,15 @@ async fn eval_expr(
                     let ownership = ownership.clone();
                     
                     match method.as_str() {
-                        "get" => {
+                        "read" => {
                             let identity = make_identity_closure(&inner_type, &ownership);
                             tx.send(identity).await.expect("State actor closed");
                             let mut rx_guard = rx.lock().await;
                             return rx_guard.recv().await.expect("State actor closed");
                         }
-                        "set" => {
+                        "write" => {
                             if args.is_empty() {
-                                panic!("state.set() requires a value argument");
+                                panic!("state.write() requires a value argument");
                             }
                             let val = eval_expr(&args[0], ctx).await;
                             let const_closure = make_const_closure(val, &inner_type, &ownership);
