@@ -25,55 +25,18 @@ Your entrypoint file must define a `main()` function. It's found and run automat
 ### `var`
 
 ```ngn
-var x = "hello" // declares `x` as an owned string
-x = "goodbye" ✅ // value is mutable since it's owned
-```
-#### Owned params
-Marking a param as owned is necessary if you want to mutate the param within the function. Despite `const` being owned (since its data _could_ live on the heap), remember that it's not mutable. Marking a param as needing to be owned also moves ownership of the var or const into the function - which means it's no longer available after the function is called.
-
-```ngn
-var x = "hello" // owned string
-
-fn doThing(thing: <string) { // the `<` means it requires an owned string
-  // do thing
-}
-
-doThing(x) ✅ // moves ownership of `x` to the function
-
-print(x) ❌ // `x` is no longer available, since it's ownership was moved
-```
-
-Instantiate a model with `var` if you want to mutate fields. But even though it's owned, you can still pass it to a function that doesn't have an owned param (doesn't mutate). In this case, we "downgrade" what you pass, so that it doesn't transfer ownership.
-```ngn
-model User {
-  name: string,
-  role: string
-}
-
-var user = User {
-  name: "Sam",
-  role: "Developer"
-  years: 3
-}
-
-fn readUser(u: User) { // only require a borrowed User
-  // take a read action on the reference to `u`; cannot mutate
-}
-
-// Can pass a variable to a function that expects a borrowed param;
-// ngn ensures it's downgraded to "borrowed" within the function
-// and doesn't transfer ownership.
-readUser(user) ✅
-
-print(user) ✅ // can still do things with `user` here
+var x = "hello"
+x = "goodbye" ✅
 ```
 
 ### `const`
 Data could live on the heap, if only known at runtime, or in binary if it's a literal. You cannot mutate the data - even for objects and arrays.
 
 ```ngn
-const x = "hello" // owned, even if ngn stores it in binary (which doesn't need memory cleanup)
+const x = "hello" // owned, even though ngn stores it in the binary (which doesn't need memory cleanup)
 x = "goodbye" ❌ // value is immutable
+
+const user_input = getUserInput() // owned and stored on heap, since we don't know the size of the data at compile time.
 ```
 
 ### `static`
@@ -96,16 +59,18 @@ fn main() {
 
 - `string`
 - `i64`, `i32`, `u64`, `u32`, `f64`, `f32`
-- `boolean`
+- `bool`
 - `array`
 - `array<type>`
 - `void`
+- `map<key_type, value_type>`
+- `channel<type>`
 
 ### explicit
 ```ngn
 const thing: string = "one"
 var answer: u64 = 42
-var truth: boolean = false
+var truth: bool = false
 const things: array = [1, 2, 3]
 const stuff: array<string> = ["shirt", "hat", "coat"]
 
@@ -176,7 +141,7 @@ const ind = sent.index("to") // 10
 ```
 
 ### `includes(pattern)`
-Determine if a string includes a given pattern. Returns a boolean.
+Determine if a string includes a given pattern. Returns a bool.
 
 ```ngn
 const weather = "sunny"
@@ -184,7 +149,7 @@ const inc = weather.includes("sun") // true
 ```
 
 ### `starts(pattern)`
-Determine if a string starts with a given pattern. Returns a boolean.
+Determine if a string starts with a given pattern. Returns a bool.
 
 ```ngn
 var process = "complete"
@@ -192,7 +157,7 @@ const beg = process.starts("c") // true
 ```
 
 ### `ends(pattern)`
-Determine if a string ends with a given pattern. Returns a boolean.
+Determine if a string ends with a given pattern. Returns a bool.
 
 ```ngn
 var process = "working"
@@ -248,25 +213,25 @@ Remove a section of a string by providing a start index and an optional stop ind
 
 - If `stop` is provided, the slice excludes the item at that index.
 - If `stop` is not provided, it removes everything upto and including the last item.
-- Since you're mutating the original string, it must be owned.
+- Since you're mutating the original string, it must be declared with `var`.
 ```
 var quote = "I flew too close to the sun on wings of pastrami."
-const sliced = orig.slice(24, 31)
+const sliced = quote.slice(24, 31)
 
 print(orig) // I flew too close to the wings of pastrami.
 print(sliced) // "sun on "
 ```
 
 ### `upper()`
-Transform a string to all uppercase; preserves original string.
+Transform a string to all uppercase, returning a new string. Preserves original string.
 
 ```ngn
-var version = "one"
+const version = "one"
 print(version.upper()) // ONE
 ```
 
 ### `lower()`
-Transform a string to all lowercase; preserves original string.
+Transform a string to all lowercase, returning a new string. Preserves original string.
 
 ```ngn
 var version = "ONE"
@@ -274,7 +239,7 @@ print(version.lower()) // one
 ```
 
 ### `trim()`
-Remove whitespace from both ends of a string; preserves original string.
+Remove whitespace from both ends of a string, returning a new string. Preserves original string.
 
 ```ngn
 var = thing = " strong "
@@ -330,7 +295,7 @@ print(stuff) // ["coat", "guitar", "shirt"]
 const pulled_one = stuff.pull(1)
 
 print(pulled_one) // ["guitar"]
-print stuff // ["coat", "shirt", "hat"]
+print stuff // ["coat", "shirt"]
 ```
 
 ### `copy(start?, stop?)`
@@ -341,8 +306,8 @@ Copies an entire array or a section of it, based on indices. This does not chang
 - If neither is provided, the entire array is copied.
 
 ```
-const stuff = [10, 20, 30, 40, 50] // borrowed
-const copied = stuff.copy(3) // you can copy borrowed arrays
+const stuff = [10, 20, 30, 40, 50]
+const copied = stuff.copy(3)
 
 print(copied) // [40, 50]
 print(stuff) // [10, 20, 30, 40, 50]
@@ -381,7 +346,7 @@ print(size) // 7
 ```
 
 ### `each(|item, index| {})`
-For each item in the array, execute a closure.
+For each item in an array, execute a closure.
 
 ```ngn
 var things = ["hat", "gloves", "coat"]
@@ -638,6 +603,67 @@ fn doThing() {
 }
 ```
 
+### Owned params
+When you mark a param as owned, here is what happens:
+- ownership of the data is moved to the function
+- the value is mutable within the function, if it was declared with `var`
+- ngn will cleanup any associated heap memory after the function finishes
+- the var or const is no longer accessible outside of the function
+
+> Despite `const` data being owned, since its data _could_ live on the heap, remember that it's not mutable.
+
+```ngn
+var x = "hello"
+
+// the `<` means it requires an owned string
+fn createRockMusic(thing: <string) {
+  // do thing: read and/or mutate
+}
+
+createRockMusic(x) ✅ // moves ownership of `x` to the function
+
+print(x) ❌ // `x` is no longer available, since it's ownership was moved
+```
+
+### Borrowed params
+This is the default for all params.
+
+```ngn
+var x = "hello"
+
+fn readThing(thing: string) {
+  // do thing: but cannot mutate
+}
+
+readThing(x) ✅ // does not move ownership of `x` to the function
+
+print(x) ✅ // `x` is still available
+```
+
+If a function doesn't declare a param as owned, you can still pass owned data to it. In this case, we "downgrade" what you pass, so that it doesn't transfer ownership. Essentially, the function borrows it.
+
+## `map`
+Create a key, value map. Type declartion is required.
+
+```ngn
+const m = map<i64, string>()
+
+// add an entry
+m.set(1, "one") // returns the map
+
+// checks if an entry exists, based on key
+m.has(1) // returns a bool
+
+// get an entry
+m.get(1) // returns the value, or void if not found
+
+// remove an entry
+m.remove(1) // returns the removed value
+
+// get the size
+m.size() // returns the number of entries in the map
+```
+
 ## Closures
 Closures are similar to functions, but you can assign them to an identifier, then call it like a function. You can define any params within a pair of pipes, or have an empty set of pipes if not using params.
 ```ngn
@@ -652,7 +678,7 @@ const doThing = || {
 doThing()
 ```
 
-Unlike functions, closures give you access to the state of their surrounding scope.
+Unlike functions, closures give you access to the state of their surrounding scope. (this needs serious rethinking)
 ```ngn
 const base = 10
 
@@ -678,7 +704,7 @@ The closure can even mutate the outside var, if you'd like.
 ```ngn
 var count = 0
 
-const incrementBy = |a: i64| count = count + a // calculate, mutate, return
+const incrementBy = |a: i64| count += a // calculate, mutate, return
 
 incrementBy(10) // we're not capturing the returned value here, but you could
 print(count) // 10
@@ -799,9 +825,9 @@ When you create an instance of a model, it's essentially an object - although it
 The general rule is that you can mutate based on how the variable was declared (`var`, `const`). However, you can't change a field's type.
 
 Here are the ways to manipulate an object's fields, based on the above example code:
-- direct assignment, by `var`s: `user.age = 7`
-- entire object, by `var`s: `user = { name: "Ben", age: 56 }`
-- method, by `var`s: `user.changeName("Stacie")`
+- direct assignment: `user.age = 7`
+- entire object: `user = { name: "Ben", age: 56 }`
+- method: `user.changeName("Stacie")`
 - by `const`, `static` variables: ❌ not allowed, as these are all strictly immutable
 
 ## Channels
@@ -1054,8 +1080,8 @@ fn main() {
 }
 ```
 If needed, you also have access to these variable methods when using `state()`:
-- `.get()`, gets the current value
-- `.set()`, sets the current value - which replaces the existing one. Be careful, as it can be tricky to ensure proper mutation order when coupled with `.update()`.
+- `.read()`, gets the current value
+- `.write()`, sets the current value - which replaces the existing one. Be careful, as it can be tricky to ensure proper mutation order when coupled with `.update()`.
 
 ### Spawning threads
 If you have multiple tasks, here is one way you can spawn each of them in their own thread.
