@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tokio::sync::mpsc;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -27,6 +27,7 @@ pub enum Type {
     Enum(String, Vec<Type>),
     Channel(Box<Type>),
     Map(Box<Type>, Box<Type>),
+    Set(Box<Type>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -67,6 +68,7 @@ pub enum Value {
     ),
     Namespace(String),
     Map(HashMap<MapKey, Value>, Type, Type),
+    Set(HashSet<SetValue>, Type),
 }
 
 // Implement PartialEq manually to skip Channel comparison
@@ -96,6 +98,7 @@ impl PartialEq for Value {
             (Value::StateActor(_, _, _), Value::StateActor(_, _, _)) => false,
             (Value::Namespace(a), Value::Namespace(b)) => a == b,
             (Value::Map(_, _, _), Value::Map(_, _, _)) => false,
+            (Value::Set(_, _), Value::Set(_, _)) => false,
             _ => false, // Different types are not equal
         }
     }
@@ -148,6 +151,7 @@ pub enum Expr {
     CountReceive(Box<Expr>, Box<Expr>),
     MakeState(Box<Expr>),
     CreateMap(Vec<(Box<Expr>, Box<Expr>)>, Type, Type),
+    CreateSet(Vec<Box<Expr>>, Type),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -231,6 +235,17 @@ pub enum MapKey {
     U32(u32),
     Bool(bool),
     Enum(String, String), // (enum_name, variant_name)
+}
+
+#[derive(Hash, Eq, PartialEq, Clone, Debug)]
+pub enum SetValue {
+    I64(i64),
+    I32(i32),
+    U64(u64),
+    U32(u32),
+    String(String),
+    Bool(bool),
+    EnumValue(String, String),
 }
 
 #[derive(Debug, Clone, PartialEq)]

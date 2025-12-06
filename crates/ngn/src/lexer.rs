@@ -21,7 +21,7 @@ pub enum Token {
     LArrow, LArrowMaybe,
     Thread, Channel, Sleep,
     Import, Export, Default, From, As,
-    Map,
+    Map, Set,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -446,6 +446,7 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
                     "from" => Token::From,
                     "as" => Token::As,
                     "map" => Token::Map,
+                    "set" => Token::Set,
                     _ => Token::Ident(ident),
                 };
                 tokens.push((start, token, end));

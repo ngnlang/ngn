@@ -266,29 +266,35 @@ impl ExprParser {
             match self.current_token() {
                 Some(Token::Period) => {
                     self.advance();
-                    match self.current_token() {
-                        Some(Token::Ident(field_name)) => {
+                    let name = match self.current_token() {
+                        Some(Token::Ident(name)) => {
                             self.advance();
-                            // Check if it's a method call
-                            if matches!(self.current_token(), Some(Token::LParen)) {
-                                self.advance();
-                                let args = self.parse_fn_args()?;
-                                self.expect(Token::RParen)?;
-                                expr = Expr::MethodCall {
-                                    object: Box::new(expr),
-                                    method: field_name,
-                                    args,
-                                };
-                            } else {
-                                // Field access
-                                expr = Expr::FieldAccess {
-                                    object: Box::new(expr),
-                                    field: field_name,
-                                    value: None,
-                                };
-                            }
+                            name
                         }
-                        _ => return Err("Expected identifier after '.'".to_string()),
+                        Some(Token::Set) => {
+                            self.advance();
+                            "set".to_string()
+                        }
+                        _ => return Err(format!("Expected identifier after '.', got {:?}", self.current_token())),
+                    };
+
+                    // Check if it's a method call
+                    if matches!(self.current_token(), Some(Token::LParen)) {
+                        self.advance();
+                        let args = self.parse_fn_args()?;
+                        self.expect(Token::RParen)?;
+                        expr = Expr::MethodCall {
+                            object: Box::new(expr),
+                            method: name,
+                            args,
+                        };
+                    } else {
+                        // Accessing a field on an model
+                        expr = Expr::FieldAccess {
+                            object: Box::new(expr),
+                            field: name,
+                            value: None,
+                        };
                     }
                 }
                 _ => break,
@@ -387,7 +393,7 @@ impl ExprParser {
                 if !matches!(self.current_token(), Some(Token::Less)) {
                     return Err(
                         "Map declaration requires explicit types: map<KeyType, ValueType>()\n\
-                        Example: var m = map<string, i64>([\"a\": 1])"
+                        Example: var m = map<string, i64>()"
                             .to_string()
                     );
                 }
@@ -402,14 +408,11 @@ impl ExprParser {
                 // Expect ()
                 self.expect(Token::LParen)?;
                 
-                // Parse optional initial pairs: map<K, V>(["key": val, ...])
+                // Parse optional initial pairs: map<K, V>("key": val, ...)
                 let pairs = if !matches!(self.current_token(), Some(Token::RParen)) {
-                    // Expect an array: ["key": val, "key2": val2, ...]
-                    self.expect(Token::LBracket)?;
-                    
                     let mut pairs = Vec::new();
                     
-                    while !matches!(self.current_token(), Some(Token::RBracket)) {
+                    while !matches!(self.current_token(), Some(Token::RParen)) {
                         let key_expr = self.parse_assignment()?;
                         self.expect(Token::Colon)?;
                         let val_expr = self.parse_assignment()?;
@@ -424,7 +427,6 @@ impl ExprParser {
                         }
                     }
                     
-                    self.expect(Token::RBracket)?;
                     pairs
                 } else {
                     vec![]
@@ -434,6 +436,52 @@ impl ExprParser {
                 
                 // only pass Type (0) for types, not Ownership
                 Ok(Expr::CreateMap(pairs, key_type.0, val_type.0))
+            }
+            Some(Token::Set) => {
+                self.advance();
+
+                if !matches!(self.current_token(), Some(Token::Less)) {
+                    return Err(
+                        "Set declaration requires explicit types: set<Type>()\n\
+                        Example: var m = set<string>()"
+                            .to_string()
+                    );
+                }
+                
+                // Expect < for generics
+                self.expect(Token::Less)?;
+                let val_type = parse_type(&mut self.tokens)?;
+                self.expect(Token::Greater)?;
+                
+                // Expect ()
+                self.expect(Token::LParen)?;
+                
+                // Parse optional initial values: set<V>(val, ...)
+                let values = if !matches!(self.current_token(), Some(Token::RParen)) {
+                    let mut values = Vec::new();
+                    
+                    while !matches!(self.current_token(), Some(Token::RParen)) {
+                        let val_expr = self.parse_assignment()?;
+                        
+                        values.push(Box::new(val_expr));
+                        
+                        if matches!(self.current_token(), Some(Token::Comma)) {
+                            self.advance();
+                            self.skip_newlines();
+                        } else {
+                            break;
+                        }
+                    }
+                    
+                    values
+                } else {
+                    vec![]
+                };
+                
+                self.expect(Token::RParen)?;
+                
+                // only pass Type (0) for types, not Ownership
+                Ok(Expr::CreateSet(values, val_type.0))
             }
             Some(Token::Ident(name)) => {
                 if name == "state" {

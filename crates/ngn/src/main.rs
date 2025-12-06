@@ -8,7 +8,7 @@ use regex::Regex as RegexLib;
 use std::fs;
 use std::collections::HashSet;
 use ngn::ast::{
-    ClosureDef, ClosureValue, EnumDef, FnDef, InterpolationPart, MapKey, MethodMutationType, ModelDef, Moved, Ownership, Pattern, RoleDef, Type 
+    ClosureDef, ClosureValue, EnumDef, FnDef, InterpolationPart, MapKey, MethodMutationType, ModelDef, Moved, Ownership, Pattern, RoleDef, SetValue, Type 
 };
 
 use async_recursion::async_recursion;
@@ -64,6 +64,9 @@ fn is_valid_type(t: &Type, models: &HashMap<String, ModelDef>, enums: &HashMap<S
         Type::Array(inner) => is_valid_type(inner, models, enums),
         Type::Map(key_type, val_type) => {
             is_valid_type(key_type, models, enums) && is_valid_type(val_type, models, enums)
+        }
+        Type::Set(val_type) => {
+            is_valid_type(val_type, models, enums)
         }
         Type::Channel(inner) => is_valid_type(inner, models, enums),
         Type::Model(name) => models.contains_key(name),
@@ -123,6 +126,11 @@ fn format_type_for_error(t: &Type) -> String {
                 format_type_for_error(val_type)
             )
         }
+        Type::Set(val_type) => {
+            format!("set<{}>",  
+                format_type_for_error(val_type)
+            )
+        }
     }
 }
 
@@ -172,6 +180,23 @@ fn format_value(v: &Value) -> String {
                         MapKey::Enum(enum_name, variant) => format!("{}::{}", enum_name, variant),
                     };
                     format!("{}: {}", key_str, format_value(v))
+                })
+                .collect();
+            format!("{{ {} }}", entries.join(", "))
+        },
+        Value::Set(set, _) => {
+            let entries: Vec<String> = set
+                .iter()
+                .map(|v| {
+                    match v {
+                        SetValue::String(s) => format!("\"{}\"", s),
+                        SetValue::I64(n) => n.to_string(),
+                        SetValue::I32(n) => n.to_string(),
+                        SetValue::U64(n) => n.to_string(),
+                        SetValue::U32(n) => n.to_string(),
+                        SetValue::Bool(b) => b.to_string(),
+                        SetValue::EnumValue(enum_name, variant) => format!("{}::{}", enum_name, variant),
+                    }
                 })
                 .collect();
             format!("{{ {} }}", entries.join(", "))
@@ -292,6 +317,7 @@ fn is_truthy(v: &Value) -> bool {
         Value::StateActor(_, _, _) => true,
         Value::Namespace(_) => true,
         Value::Map(_, _, _) => true,
+        Value::Set(_, _,) => true,
     }
 }
 
@@ -415,6 +441,35 @@ fn value_to_map_key(val: Value) -> MapKey {
     }
 }
 
+fn value_to_set_value(v: &Value) -> SetValue {
+    match v {
+        Value::String(s) => SetValue::String(s.clone()),
+        Value::I64(n) => SetValue::I64(*n),
+        Value::I32(n) => SetValue::I32(*n),
+        Value::U64(n) => SetValue::U64(*n),
+        Value::U32(n) => SetValue::U32(*n),
+        Value::Bool(b) => SetValue::Bool(*b),
+        Value::EnumValue(enum_name, variant, _) => {
+            SetValue::EnumValue(enum_name.clone(), variant.clone())
+        }
+        _ => panic!("Cannot add unhashable value to set"),
+    }
+}
+
+fn set_value_to_value(sv: &SetValue) -> Value {
+    match sv {
+        SetValue::String(s) => Value::String(s.clone()),
+        SetValue::I64(n) => Value::I64(*n),
+        SetValue::I32(n) => Value::I32(*n),
+        SetValue::U64(n) => Value::U64(*n),
+        SetValue::U32(n) => Value::U32(*n),
+        SetValue::Bool(b) => Value::Bool(*b),
+        SetValue::EnumValue(enum_name, variant) => {
+            Value::EnumValue(enum_name.clone(), variant.clone(), None)
+        }
+    }
+}
+
 fn infer_value_type(v: &Value) -> Type {
     match v {
         Value::I64(_) => Type::I64,
@@ -527,6 +582,28 @@ fn infer_value_type(v: &Value) -> Type {
                 }
                 
                 Type::Map(Box::new(key_type), Box::new(val_type))
+            }
+        },
+        Value::Set(set, val_type) => {
+            if set.is_empty() {
+                // Empty set
+                Type::Set(Box::new(val_type.clone()))
+            } else {
+                // Infer from first entry
+                let first_val = set.iter().next().unwrap();
+                
+                let val_type = infer_value_type(&set_value_to_value(first_val));
+                
+                // Validate all entries match
+                for val in set.iter() {
+                    let v_type = infer_value_type(&set_value_to_value(val));
+                    
+                    if !types_compatible(&val_type, &v_type) {
+                        panic!("Type error: mixed types in set");
+                    }
+                }
+                
+                Type::Set(Box::new(val_type))
             }
         }
     }
@@ -740,6 +817,16 @@ fn infer_expr_type(
                         _ => panic!("Unknown map method: {}", method),
                     }
                 }
+                Type::Set(val_type) => {
+                    match method.as_str() {
+                        "add" => Type::Set(val_type.clone()),
+                        "get" => (*val_type).clone(),
+                        "has" => Type::Bool,
+                        "remove" => (*val_type).clone(),
+                        "size" => Type::I64,
+                        _ => panic!("Unknown set method: {}", method),
+                    }
+                }
                 Type::Model(model_name) => {
                     if let Some(fn_def) = model_methods.get(&(model_name.clone(), method.clone())) {
                         if let Some(return_type) = &fn_def.return_type {
@@ -856,11 +943,31 @@ fn infer_expr_type(
                     let v_type = infer_expr_type(v_expr, env, fns, models, model_methods, enums);
                     
                     if !types_compatible(&key_type, &k_type) || !types_compatible(&val_type, &v_type) {
-                        panic!("Type error: mixed types in map literal");
+                        panic!("Type error: mixed types in map");
                     }
                 }
                 
                 Type::Map(Box::new(key_type), Box::new(val_type))
+            }
+        }
+        Expr::CreateSet(values, val_type) => {
+            if values.is_empty() {
+                Type::Set(Box::new(val_type.clone()))
+            } else {
+                // Infer from first pair
+                let val_expr = &values[0];
+                let val_type = infer_expr_type(val_expr, env, fns, models, model_methods, enums);
+                
+                // Validate all values match
+                for v_expr in values.iter() {
+                    let v_type = infer_expr_type(v_expr, env, fns, models, model_methods, enums);
+                    
+                    if !types_compatible(&val_type, &v_type) {
+                        panic!("Type error: mixed types in set");
+                    }
+                }
+                
+                Type::Set(Box::new(val_type))
             }
         }
     }
@@ -1515,6 +1622,11 @@ fn analyze_expr(expr: &Expr, analysis: &mut ThreadVarAnalysis) {
         Expr::CreateMap(pairs, _, _) => {
             for (key_expr, val_expr) in pairs {
                 analyze_expr(key_expr, analysis);
+                analyze_expr(val_expr, analysis);
+            }
+        }
+        Expr::CreateSet(values, _) => {
+            for val_expr in values {
                 analyze_expr(val_expr, analysis);
             }
         }
@@ -2220,6 +2332,42 @@ async fn eval_expr(
             }
             
             Value::Map(map, key_type.clone(), val_type.clone())
+        }
+        Expr::CreateSet(values, val_type) => {
+            if !is_valid_type(val_type, &ctx.models, &ctx.enums) {
+                panic!("Invalid declared type for set: {}", format_type_for_error(val_type));
+            }
+
+            if !is_hashable_type(val_type) {
+                panic!("Non-hashable declared type for set: {}", format_type_for_error(val_type));
+            }
+
+            if values.is_empty() {
+                return Value::Set(HashSet::new(), val_type.clone());
+            }
+            
+            let mut set = HashSet::new();
+            
+            // Validate all values match
+            for val_expr in values {
+                let val = eval_expr(val_expr, ctx).await;
+                
+                let v_type = infer_value_type(&val);
+
+                if !is_hashable_type(val_type) {
+                    panic!("Non-hashable inferred value type for set: {}", format_type_for_error(val_type));
+                }
+                
+                if !types_compatible(val_type, &v_type) {
+                    panic!("Set value type mismatch: expected {}, got {}", format_type_for_error(val_type), format_type_for_error(&v_type));
+                }
+
+                let set_val = value_to_set_value(&val);
+                
+                set.insert(set_val);
+            }
+            
+            Value::Set(set, val_type.clone())
         }
         Expr::MethodCall { object, method, args } => {
             // Handle Namespace, StateActor and Channel methods
@@ -2974,6 +3122,72 @@ async fn eval_expr(
                         return Value::I64(map.len() as i64);
                     }
                     _ => {} // Not a map method; caught in infer_expr_type
+                }
+            }
+
+            // Handle set methods
+            if let Value::Set(mut set, val_type) = obj_val.clone() {
+                match method.as_str() {
+                    "add" => {
+                        if args.len() != 1 {
+                            panic!("add() requires value argument");
+                        }
+
+                        let val = eval_expr(&args[0], ctx).await;
+
+                        // Type check
+                        let actual_val_type = &infer_value_type(&val);
+                        if !types_compatible(&val_type, actual_val_type) {
+                            panic!("Value type mismatch: expected {:?} got {:?}", &val_type, actual_val_type);
+                        }
+                        
+                        let set_val = value_to_set_value(&val);
+                        set.insert(set_val);
+                        
+                        // Update the original variable if it's a var
+                        if let Expr::Var(var_name) = object.as_ref() {
+                            if can_mutate(var_name, &ctx.env) {
+                                if let Some((kind, _, ownership, _)) = ctx.env.get(var_name) {
+                                    ctx.env.insert(var_name.clone(), (kind.clone(), Value::Set(set.clone(), val_type.clone()), ownership.clone(), Moved::False));
+                                }
+                            }
+                        }
+                        
+                        return Value::Set(set, val_type);
+                    }
+                    "has" => {
+                        if args.is_empty() {
+                            panic!("has() requires a key argument");
+                        }
+                        let key_val = eval_expr(&args[0], ctx).await;
+                        let set_val = value_to_set_value(&key_val);
+                        
+                        return Value::Bool(set.contains(&set_val));
+                    }
+                    "remove" => {
+                        if args.is_empty() {
+                            panic!("remove() requires a key argument");
+                        }
+                        let key_val = eval_expr(&args[0], ctx).await;
+                        let set_val = value_to_set_value(&key_val);
+                        
+                        let removed = set.remove(&set_val);
+                        
+                        // Update the original variable
+                        if let Expr::Var(var_name) = object.as_ref() {
+                            if can_mutate(var_name, &ctx.env) {
+                                if let Some((kind, _, ownership, _)) = ctx.env.get(var_name) {
+                                    ctx.env.insert(var_name.clone(), (kind.clone(), Value::Set(set, val_type), ownership.clone(), Moved::False));
+                                }
+                            }
+                        }
+                        
+                        return Value::Bool(removed);
+                    }
+                    "size" => {
+                        return Value::I64(set.len() as i64);
+                    }
+                    _ => {} // Not a map method; (caught in infer_expr_type)
                 }
             }
 
