@@ -664,6 +664,27 @@ m.remove(1) // returns the removed value
 m.size() // returns the number of entries in the map
 ```
 
+## `set`
+Create a set of values.
+- Type declartion is required
+- Values are deduplicated
+
+```ngn
+const s = set<string>()
+
+// add a value
+s.add("one") // returns the set
+
+// checks if a value exists
+s.has("one') // returns a bool
+
+// remove a value
+s.remove("one") // returns a bool of whether the value was removed
+
+// get the size
+s.size() // returns the number of values in the set
+```
+
 ## Closures
 Closures are similar to functions, but you can assign them to an identifier, then call it like a function. You can define any params within a pair of pipes, or have an empty set of pipes if not using params.
 ```ngn
