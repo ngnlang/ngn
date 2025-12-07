@@ -571,8 +571,11 @@ match any (value) {
 }
 ```
 
-## `fn`
-You can write functions in various ways; along with passing them as arguments to other functions.
+## `fn` (functions)
+Functions have: 
+- access to globals (imports, statics, models, enums)
+- access to sibling functions
+- no access to outside vars or consts
 
 ### Traditional block, explicit return
 ```ngn
@@ -604,11 +607,11 @@ fn doThing() {
 ```
 
 ### Owned params
-When you mark a param as owned, here is what happens:
-- ownership of the data is moved to the function
+When you mark a function param as owned, here is what happens:
 - the value is mutable within the function, if it was declared with `var`
-- ngn will cleanup any associated heap memory after the function finishes
 - the var or const is no longer accessible outside of the function
+- ownership of the passed data is moved to the function
+- ngn will cleanup any associated heap memory after the function finishes
 
 > Despite `const` data being owned, since its data _could_ live on the heap, remember that it's not mutable.
 
@@ -686,32 +689,35 @@ s.size() // returns the number of values in the set
 ```
 
 ## Closures
-Closures are similar to functions, but you can assign them to an identifier, then call it like a function. You can define any params within a pair of pipes, or have an empty set of pipes if not using params.
+Closures are similar to functions, but have important differences:
+- assign them with `const`, then call it like a function.
+- access to vars and consts from its outer environment.
+- uses pipe syntax to wrap params
+
 ```ngn
-const add = |a: i64, b: i64| a + b
+const add = |a, b| a + b
 
 const sum = add(3, 4)
 
 const doThing = || {
-  // do thing!
   print("Hello")
 }
 doThing()
 ```
 
-Unlike functions, closures give you access to the state of their surrounding scope. (this needs serious rethinking)
+Again, closures have access to the state of their surrounding scope.
 ```ngn
 const base = 10
 
-const add_base = |a: i64| base + a
+const add_base = |a| base + a
 print(add_base(3)) // 13
 ```
 
-The value within the closure can be kept in sync with the outside environment when using vars.
+A variable's value within a closure is kept in sync with the outside environment.
 ```ngn
 var count = 0
 
-const incrementBy = |a: i64| count + a // calculate and return
+const incrementBy = |a: i64| count + a
 
 print(incrementBy(10)) // 10
 
@@ -736,6 +742,30 @@ print(count) // 15
 count = 100
 incrementBy(7)
 print(count) // 107
+```
+
+You can mimic classic "close over" behavior by returning a closure from a function.
+```ngn
+fn main() {
+  var count = 10
+
+  fn adder(c) {
+    return |m| {
+      return c + m
+    }
+  }
+
+  var add1 = adder(count)
+  // add1 becomes the returned closure from adder,
+  // and the value of `c` is locked-in as 10
+  // since that was the value of `count` when it was passed
+
+  print(add1(3)) // 13
+  count = add1(5) // 15
+
+  var add2 = adder(count) // `c` is 15 for this closure 
+  print(add2(5)) // 20
+}
 ```
 
 ## Objects and Composability
