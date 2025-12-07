@@ -1,8 +1,8 @@
-use ngn::error::RuntimeError;
 use ngn::runtime::{Callable, ExportKind, ImportKind, ModuleExports, RuntimeContext};
 use ngn::parser::Parser;
 
 use ngn::toolbox::{ImportSource, Toolbox, parse_import_source};
+use ngn::utils::resolve_module_path;
 use regex::Regex as RegexLib;
 
 use std::fs;
@@ -23,26 +23,7 @@ async fn main() {
         .expect("Failed to read ngn file");
 
     let tokens = ngn::lexer::tokenize(&source);
-
-    // Preliminary parse to extract enum definitions
-    let mut preliminary_parser = Parser::new(tokens.clone(), HashMap::new());
-    let preliminary_ast = match preliminary_parser.parse_program() {
-        Ok(ast) => ast,
-        Err(e) => {
-            eprintln!("Parse error: {}", e);
-            return;
-        }
-    };
-    
-    // Extract enums from the AST
-    let mut enums: HashMap<String, EnumDef> = HashMap::new();
-    for stmt in &preliminary_ast {
-        if let Stmt::EnumDef(enum_def) = stmt {
-            enums.insert(enum_def.name.clone(), enum_def.clone());
-        }
-    }
-
-    let mut parser = Parser::new(tokens, enums.clone());
+    let mut parser = Parser::new(tokens, HashMap::new(), file_path.to_string());
 
     match parser.parse_program() {
         Ok(ast) => run(&ast, file_path).await,
@@ -1510,7 +1491,7 @@ fn collect_vars_from_expr(e: &Expr, vars: &mut Vec<String>) {
             vars.push(name.clone());
             collect_vars_from_expr(value, vars);
         }
-        _ => { eprintln!("Missing match: collecting vars for {:?}", e); }
+        _ => {}
     }
 }
 
@@ -3682,6 +3663,12 @@ async fn execute_stmt(
                             let mut imported_fn = fn_def.clone();
                             imported_fn.name = local.clone();
                             ctx.fns.insert(local.clone(), Callable::UserDefined(imported_fn.clone()));
+                        } else if let Some(enum_def) = module_exports.enums.get(original) {
+                            let mut imported_enum = enum_def.clone();
+                            imported_enum.name = local.clone();
+                            ctx.enums.insert(local.clone(), imported_enum);
+                        } else if let Some(model_def) = module_exports.models.get(original) {
+                            ctx.models.insert(local.clone(), model_def.clone());
                         } else {
                             panic!("'{}' is not exported from '{}'", original, import_stmt.source);
                         }
@@ -3694,30 +3681,54 @@ async fn execute_stmt(
                         .as_ref()
                         .unwrap_or_else(|| panic!("Module '{}' has no default export", import_stmt.source));
                     
-                    let fn_def = module_exports
-                        .functions
-                        .get(default_name)
-                        .unwrap();
-                    
-                    // Import under the user's chosen name
-                    let mut renamed_fn = fn_def.clone();
-                    renamed_fn.name = name.clone();
-                    ctx.fns.insert(name.clone(), Callable::UserDefined(renamed_fn.clone()));
+                    // Check what type the default export is
+                    if let Some(fn_def) = module_exports.functions.get(default_name) {
+                        let mut renamed_fn = fn_def.clone();
+                        renamed_fn.name = name.clone();
+                        ctx.fns.insert(name.clone(), Callable::UserDefined(renamed_fn));
+                    } else if let Some(enum_def) = module_exports.enums.get(default_name) {
+                        let mut renamed_enum = enum_def.clone();
+                        renamed_enum.name = name.clone();
+                        ctx.enums.insert(name.clone(), renamed_enum);
+                    } else if let Some(model_def) = module_exports.models.get(default_name) {
+                        let mut renamed_model = model_def.clone();
+                        renamed_model.name = name.clone();
+                        ctx.models.insert(name.clone(), renamed_model);
+                    } else {
+                        panic!("Default export '{}' not found in '{}'", default_name, import_stmt.source);
+                    }
                 }
                 
                 ImportKind::Namespace(namespace) => {
-                    // For namespace imports, we need a different approach
-                    // Store functions with prefixed names for now
+                    // Functions
                     for (fn_name, fn_def) in &module_exports.functions {
                         let qualified_name = format!("{}.{}", namespace, fn_name);
                         ctx.fns.insert(qualified_name, Callable::UserDefined(fn_def.clone()));
                     }
                     
+                    // Enums
+                    for (enum_name, enum_def) in &module_exports.enums {
+                        let qualified_name = format!("{}.{}", namespace, enum_name);
+                        ctx.enums.insert(qualified_name, enum_def.clone());
+                    }
+                    
+                    // Models
+                    for (model_name, model_def) in &module_exports.models {
+                        let qualified_name = format!("{}.{}", namespace, model_name);
+                        ctx.models.insert(qualified_name, model_def.clone());
+                    }
+                    
                     // Handle .default access
                     if let Some(default_name) = &module_exports.default {
-                        let fn_def = module_exports.functions.get(default_name).unwrap();
                         let qualified_default = format!("{}.default", namespace);
-                        ctx.fns.insert(qualified_default, Callable::UserDefined(fn_def.clone()));
+                        
+                        if let Some(fn_def) = module_exports.functions.get(default_name) {
+                            ctx.fns.insert(qualified_default, Callable::UserDefined(fn_def.clone()));
+                        } else if let Some(enum_def) = module_exports.enums.get(default_name) {
+                            ctx.enums.insert(qualified_default, enum_def.clone());
+                        } else if let Some(model_def) = module_exports.models.get(default_name) {
+                            ctx.models.insert(qualified_default, model_def.clone());
+                        }
                     }
                 }
             }
@@ -3754,130 +3765,6 @@ async fn execute_block(
     ControlFlow::None
 }
 
-fn resolve_module_path(import_path: &str, current_file: &str) -> String {
-    use std::path::{Path, PathBuf};
-    
-    let current_dir = Path::new(current_file)
-        .parent()
-        .unwrap_or(Path::new("."));
-    
-    let resolved: PathBuf = if import_path.starts_with("./") || import_path.starts_with("../") {
-        // Relative import
-        current_dir.join(import_path)
-    } else {
-        // Bare import - treat as relative to current directory
-        current_dir.join(import_path)
-    };
-    
-    // Add .ngn extension if not present
-    let with_extension = if resolved.extension().is_some() {
-        resolved
-    } else {
-        resolved.with_extension("ngn")
-    };
-    
-    // Normalize the path (resolve .. and .)
-    normalize_path(&with_extension)
-}
-
-fn normalize_path(path: &std::path::Path) -> String {
-    let mut components = Vec::new();
-    
-    for component in path.components() {
-        match component {
-            std::path::Component::ParentDir => {
-                components.pop();
-            }
-            std::path::Component::CurDir => {}
-            c => components.push(c),
-        }
-    }
-    
-    let result: std::path::PathBuf = components.iter().collect();
-    result.to_string_lossy().to_string()
-}
-
-pub fn resolve_toolbox_import(
-    kind: &ImportKind,
-    module: Option<&str>,
-    toolbox: &Toolbox,
-    ctx: &mut RuntimeContext,
-) -> Result<(), RuntimeError> {
-    match kind {
-        // import { abs, round } from "tbx::math"
-        ImportKind::Named(names) => {
-            let module_name = module.ok_or_else(|| {
-                RuntimeError::ImportError("Named imports from 'tbx' require a module path, e.g., 'tbx::math'".into())
-            })?;
-            
-            let tbx_module = toolbox.get_module(module_name).ok_or_else(|| {
-                RuntimeError::ImportError(format!("Unknown toolbox module: {}", module_name))
-            })?;
-            
-            for (original, local) in names {
-                let func = tbx_module.functions.get(original).ok_or_else(|| {
-                    RuntimeError::ImportError(format!("'{}' not found in tbx::{}", original, module_name))
-                })?;
-                
-                ctx.fns.insert(local.clone(), Callable::Builtin(*func));
-            }
-            Ok(())
-        }
-        
-        // import * as Math from "tbx::math"
-        ImportKind::Namespace(namespace) => {
-            let module_name = module.ok_or_else(|| {
-                RuntimeError::ImportError("Namespace imports from 'tbx' require a module path".into())
-            })?;
-            
-            let tbx_module = toolbox.get_module(module_name).ok_or_else(|| {
-                RuntimeError::ImportError(format!("Unknown toolbox module: {}", module_name))
-            })?;
-            
-            // Register namespace marker
-            ctx.env.insert(
-                namespace.clone(),
-                (AssignKind::Const, Value::Namespace(namespace.clone()), Ownership::Borrowed, Moved::False, 0)
-            );
-            
-            // Register all functions with namespace prefix
-            for (name, func) in &tbx_module.functions {
-                ctx.fns.insert(
-                    format!("{}.{}", namespace, name),
-                    Callable::Builtin(*func)
-                );
-            }
-            Ok(())
-        }
-        
-        // import { math } from "tbx"
-        // import { math as Math } from "tbx"
-        ImportKind::Default(name) => {
-            // For `import math from "tbx::math"` — import whole module as a namespace
-            let module_name = module.ok_or_else(|| {
-                RuntimeError::ImportError(format!("Default imports from 'tbx' not supported. Use 'tbx::{}' or named imports.", name.to_lowercase()))
-            })?;
-            
-            let tbx_module = toolbox.get_module(module_name).ok_or_else(|| {
-                RuntimeError::ImportError(format!("Unknown toolbox module: {}", module_name))
-            })?;
-            
-            ctx.env.insert(
-                name.clone(),
-                (AssignKind::Const, Value::Namespace(name.clone()), Ownership::Borrowed, Moved::False, 0)
-            );
-            
-            for (fn_name, func) in &tbx_module.functions {
-                ctx.fns.insert(
-                    format!("{}.{}", name, fn_name),
-                    Callable::Builtin(*func)
-                );
-            }
-            Ok(())
-        }
-    }
-}
-
 async fn load_module(
     path: &str,
     current_file: &str,
@@ -3891,30 +3778,19 @@ async fn load_module(
     let file_path = resolve_module_path(path, current_file);
 
     let source = std::fs::read_to_string(&file_path)
-        .unwrap_or_else(|_| panic!("Could not read module '{}'", file_path));
+        .unwrap_or_else(|_| panic!("Could not read module '{}'", file_path.clone()));
     
     let tokens = ngn::lexer::tokenize(&source);
     
-    let mut preliminary_parser = Parser::new(tokens.clone(), HashMap::new());
-    let preliminary_ast = preliminary_parser
-        .parse_program()
-        .unwrap_or_else(|e| panic!("Parse error in '{}': {}", file_path, e));
-    
-    let mut enums: HashMap<String, EnumDef> = HashMap::new();
-    for stmt in &preliminary_ast {
-        if let Stmt::EnumDef(enum_def) = stmt {
-            enums.insert(enum_def.name.clone(), enum_def.clone());
-        }
-    }
-    
-    let mut parser = Parser::new(tokens, enums);
+    // Single pass - enums collected during parse
+    let mut parser = Parser::new(tokens, HashMap::new(), file_path.clone());
     let stmts = parser
         .parse_program()
         .unwrap_or_else(|e| panic!("Parse error in '{}': {}", file_path, e));
     
     module_cache.insert(path.to_string(), ModuleExports::default());
     
-    let exports = Box::pin(run_module(&stmts, current_file,  module_cache, toolbox, false)).await;
+    let exports = Box::pin(run_module(&stmts, &file_path, module_cache, toolbox, false)).await;
     
     module_cache.insert(path.to_string(), exports.clone());
     

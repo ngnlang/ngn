@@ -4,16 +4,17 @@ use crate::runtime::{ExportKind, ImportKind, ImportStmt};
 use std::collections::HashMap;
 use std::iter::Peekable;
 use std::vec::IntoIter;
-use crate::utils::infer_enum_name;
+use crate::utils::{infer_enum_name, resolve_module_path};
 use crate::utils::parse_type;
 
 pub struct Parser {
     tokens: Peekable<IntoIter<(usize, Token, usize)>>,
     enums: HashMap<String, EnumDef>,
+    current_file: String,
 }
 
 impl Parser {
-    pub fn new(tokens: Vec<(usize, Token, usize)>, enums: HashMap<String, EnumDef>) -> Self {
+    pub fn new(tokens: Vec<(usize, Token, usize)>, enums: HashMap<String, EnumDef>, current_file: String) -> Self {
         // remove comment tokens - only used for syntax highlighting
         let filtered_tokens: Vec<_> = tokens
             .into_iter()
@@ -23,6 +24,7 @@ impl Parser {
         Parser {
             tokens: filtered_tokens.into_iter().peekable(),
             enums,
+            current_file,
         }
     }
 
@@ -33,7 +35,11 @@ impl Parser {
         self.skip_newlines();
         
         while !self.is_at_end() {
-            stmts.push(self.parse_statement()?);
+            let current_stmt = self.parse_statement()?;
+            if let Stmt::EnumDef(enum_def) = &current_stmt {
+                self.enums.insert(enum_def.name.clone(), enum_def.clone());
+            }
+            stmts.push(current_stmt);
             self.skip_newlines();
         }
         
@@ -92,6 +98,31 @@ impl Parser {
             Token::CaretEq => Ok("^=".to_string()),
             _ => Err("Not a compound operator".to_string()),
         }
+    }
+
+    fn process_imported_enums(&mut self, source: &str) -> Result<(), String> {
+        // Skip standard library imports - they don't have enums we need at parse time
+        if source.starts_with("tbx::") {
+            return Ok(());
+        }
+
+        let path = resolve_module_path(source, &self.current_file);
+        
+        let file_source = std::fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read {}: {}", path, e))?;
+        
+        let tokens = crate::lexer::tokenize(&file_source);
+        
+        // Single pass - enums collected during parse
+        let mut imported_parser = Parser::new(tokens, self.enums.clone(), path);
+        imported_parser.parse_program()?;
+        
+        // Take all enums
+        for (name, enum_def) in imported_parser.enums {
+            self.enums.insert(name, enum_def);
+        }
+        
+        Ok(())
     }
 
     fn parse_statement(&mut self) -> Result<Stmt, String> {
@@ -949,6 +980,9 @@ impl Parser {
             }
             _ => return Err("Expected string after 'from'".into()),
         };
+
+        // Eagerly parse imported file for enums ===
+        self.process_imported_enums(&source)?;
         
         Ok(Stmt::Import(ImportStmt { kind, source }))
     }

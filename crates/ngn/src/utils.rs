@@ -118,3 +118,46 @@ where
     let ownership = if owned { Ownership::Owned } else { Ownership::Borrowed };
     Ok((base_type, ownership))
 }
+
+pub fn resolve_module_path(import_path: &str, current_file: &str) -> String {
+    use std::path::{Path, PathBuf};
+    
+    let current_dir = Path::new(current_file)
+        .parent()
+        .unwrap_or(Path::new("."));
+    
+    let resolved: PathBuf = if import_path.starts_with("./") || import_path.starts_with("../") {
+        // Relative import
+        current_dir.join(import_path)
+    } else {
+        // Bare import - treat as relative to current directory
+        current_dir.join(import_path)
+    };
+    
+    // Add .ngn extension if not present
+    let with_extension = if resolved.extension().is_some() {
+        resolved
+    } else {
+        resolved.with_extension("ngn")
+    };
+    
+    // Normalize the path (resolve .. and .)
+    normalize_path(&with_extension)
+}
+
+fn normalize_path(path: &std::path::Path) -> String {
+    let mut components = Vec::new();
+    
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                components.pop();
+            }
+            std::path::Component::CurDir => {}
+            c => components.push(c),
+        }
+    }
+    
+    let result: std::path::PathBuf = components.iter().collect();
+    result.to_string_lossy().to_string()
+}
