@@ -58,8 +58,15 @@ impl RuntimeContext {
     /// Partial clone for independent environments
     pub fn fork_with_env(
         &self,
-        env: HashMap<String, (AssignKind, Value, Ownership, Moved)>
+        mut env: HashMap<String, (AssignKind, Value, Ownership, Moved)>
     ) -> Self {
+        // Functions should have access to statics/globals
+        for (k, v) in &self.env {
+            if v.0 == AssignKind::Static {
+                env.insert(k.clone(), v.clone());
+            }
+        }
+
         Self {
             env,
             fns: self.fns.clone(),
