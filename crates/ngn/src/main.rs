@@ -1502,7 +1502,15 @@ fn collect_vars_from_expr(e: &Expr, vars: &mut Vec<String>) {
         Expr::MakeState(expr) => {
             collect_vars_from_expr(expr, vars);
         }
-        _ => {}
+        Expr::CompoundAssign { name, op: _, value } => {
+            vars.push(name.clone());
+            collect_vars_from_expr(value, vars);
+        }
+        Expr::Assign { name, value } => {
+            vars.push(name.clone());
+            collect_vars_from_expr(value, vars);
+        }
+        _ => { eprintln!("Missing match: collecting vars for {:?}", e); }
     }
 }
 
