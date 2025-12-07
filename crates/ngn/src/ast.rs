@@ -284,7 +284,7 @@ pub struct ClosureDef {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClosureValue {
     pub def: Box<ClosureDef>,
-    pub captured_env: HashMap<String, (AssignKind, Value, Ownership, Moved)>,
+    pub captured_env: HashMap<String, (AssignKind, Value, Ownership, Moved, usize)>,
     pub live_vars: Vec<String>,
 }
 

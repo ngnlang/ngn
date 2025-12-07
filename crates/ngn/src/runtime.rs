@@ -36,7 +36,7 @@ pub struct ModuleExports {
 
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeContext {
-    pub env: HashMap<String, (AssignKind, Value, Ownership, Moved)>,
+    pub env: HashMap<String, (AssignKind, Value, Ownership, Moved, usize)>,
     pub fns: HashMap<String, Callable>,
     pub models: HashMap<String, ModelDef>,
     pub roles: HashMap<String, RoleDef>,
@@ -45,6 +45,7 @@ pub struct RuntimeContext {
     pub enums: HashMap<String, EnumDef>,
     pub exports: ModuleExports,
     pub module_cache: HashMap<String, ModuleExports>,
+    pub scope_depth: usize,
 }
 
 impl RuntimeContext {
@@ -58,7 +59,7 @@ impl RuntimeContext {
     /// Partial clone for independent environments
     pub fn fork_with_env(
         &self,
-        mut env: HashMap<String, (AssignKind, Value, Ownership, Moved)>
+        mut env: HashMap<String, (AssignKind, Value, Ownership, Moved, usize)>
     ) -> Self {
         // Functions should have access to statics/globals
         for (k, v) in &self.env {
@@ -77,6 +78,7 @@ impl RuntimeContext {
             enums: self.enums.clone(),
             exports: ModuleExports::default(),
             module_cache: self.module_cache.clone(),
+            scope_depth: self.scope_depth.clone(),
         }
     }
 
@@ -92,6 +94,7 @@ impl RuntimeContext {
             enums: self.enums.clone(),
             exports: ModuleExports::default(),
             module_cache: self.module_cache.clone(),
+            scope_depth: self.scope_depth.clone(),
         }
     }
 }

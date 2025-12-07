@@ -287,8 +287,8 @@ fn method_mutation_type(body: &[Stmt]) -> MethodMutationType {
     }
 }
 
-fn can_mutate(var_name: &str, env: &HashMap<String, (AssignKind, Value, Ownership, Moved)>) -> bool {
-    if let Some((kind, _, ownership, _)) = env.get(var_name) {
+fn can_mutate(var_name: &str, env: &HashMap<String, (AssignKind, Value, Ownership, Moved, usize)>) -> bool {
+    if let Some((kind, _, ownership, _, _)) = env.get(var_name) {
         // Only Var with Owned can mutate
         matches!(kind, AssignKind::Var) && matches!(ownership, Ownership::Owned)
     } else {
@@ -611,7 +611,7 @@ fn infer_value_type(v: &Value) -> Type {
 
 fn infer_expr_type(
     e: &Expr,
-    env: &HashMap<String, (AssignKind, Value, Ownership, Moved)>,
+    env: &HashMap<String, (AssignKind, Value, Ownership, Moved, usize)>,
     fns: &HashMap<String, Callable>,
     models: &HashMap<String, ModelDef>,
     model_methods: &mut HashMap<(String, String), FnDef>,
@@ -691,7 +691,7 @@ fn infer_expr_type(
         }
         Expr::Not(_) => Type::Bool,
         Expr::Var(name) | Expr::Const(name) | Expr::Static(name) => {
-            if let Some((_, v, _ownership, _moved)) = env.get(name) {
+            if let Some((_, v, _ownership, _moved, _)) = env.get(name) {
                 infer_value_type(v)
             } else if fns.contains_key(name) {
                 Type::Function
@@ -713,9 +713,9 @@ fn infer_expr_type(
             }
 
             // Check if it's a function value in the environment
-            if let Some((_, Value::Function(fn_def), _ownership, _moved)) = env.get(name) {
+            if let Some((_, Value::Function(fn_def), _ownership, _moved, _)) = env.get(name) {
                 fn_def.return_type.clone().unwrap_or(Type::Void)
-            } else if let Some((_, Value::Closure(closure), _ownership, _moved)) = env.get(name) {
+            } else if let Some((_, Value::Closure(closure), _ownership, _moved, _)) = env.get(name) {
                 // Closure return type
                 closure.def.return_type.clone().unwrap_or(Type::Void)
             } else if let Some(Callable::UserDefined(fn_def)) = fns.get(name) {
@@ -751,7 +751,7 @@ fn infer_expr_type(
         Expr::MethodCall { object, method, args: _ } => {
             // Handle StateActor and Channel methods, as well as Namespace function call
             if let Expr::Var(var_name) = object.as_ref() {
-                if let Some((_, Value::Namespace(ns), _, _)) = env.get(var_name) {
+                if let Some((_, Value::Namespace(ns), _, _, _)) = env.get(var_name) {
                     let qualified_name = format!("{}.{}", ns, method);
                     if let Some(Callable::UserDefined(fn_def)) = fns.get(&qualified_name) {
                         return fn_def.return_type.clone().unwrap_or(Type::Void);
@@ -760,12 +760,12 @@ fn infer_expr_type(
                         return Type::Void;
                     }
                 }
-                if let Some((_, Value::StateActor(_, _, inner_type), _, _)) = env.get(var_name) {
+                if let Some((_, Value::StateActor(_, _, inner_type), _, _, _)) = env.get(var_name) {
                     match method.as_str() {
                         "read" | "write" | "update" => return inner_type.clone(),
                         _ => panic!("Unknown state method: {}", method),
                     }
-                } else if let Some((_, Value::Channel(_, _, inner_type), _, _)) = env.get(var_name) {
+                } else if let Some((_, Value::Channel(_, _, inner_type), _, _, _)) = env.get(var_name) {
                     match method.as_str() {
                         "close" => return inner_type.clone(),
                         _ => panic!("Unknown channel method: {}", method),
@@ -1019,10 +1019,10 @@ fn types_compatible(expected: &Type, actual: &Type) -> bool {
     }
 }
 
-fn get_ownership(e: &Expr, env: &HashMap<String, (AssignKind, Value, Ownership, Moved)>) -> Ownership {
+fn get_ownership(e: &Expr, env: &HashMap<String, (AssignKind, Value, Ownership, Moved, usize)>) -> Ownership {
     match e {
         Expr::Var(name) => {
-            env.get(name).map(|(_, _, o, _)| o.clone()).unwrap_or(Ownership::Borrowed)
+            env.get(name).map(|(_, _, o, _, _)| o.clone()).unwrap_or(Ownership::Borrowed)
         }
         Expr::Add(_, _) => Ownership::Owned,  // String concat returns owned
         _ => Ownership::Borrowed,
@@ -1036,8 +1036,8 @@ fn is_copy_type(t: &Type) -> bool {
 fn match_pattern(
     val: &Value,
     pattern: &Pattern,
-    env: &HashMap<String, (AssignKind, Value, Ownership, Moved)>,
-) -> Option<HashMap<String, (AssignKind, Value, Ownership, Moved)>> {
+    env: &HashMap<String, (AssignKind, Value, Ownership, Moved, usize)>,
+) -> Option<HashMap<String, (AssignKind, Value, Ownership, Moved, usize)>> {
     let mut new_env = env.clone();
     
     match pattern {
@@ -1113,7 +1113,7 @@ fn match_pattern(
                         if let Some(data_val) = data {
                             new_env.insert(
                                 binding_name.clone(),
-                                (AssignKind::Var, (**data_val).clone(), Ownership::Owned, Moved::False),
+                                (AssignKind::Var, (**data_val).clone(), Ownership::Owned, Moved::False, 0),
                             );
                         }
                     }
@@ -1238,7 +1238,7 @@ async fn execute_callable(
     match callable {
         Callable::UserDefined(fn_def) => {
             // Create new scope for function
-            let mut fn_env: HashMap<String, (AssignKind, Value, Ownership, Moved)> = HashMap::new();
+            let mut fn_env: HashMap<String, (AssignKind, Value, Ownership, Moved, usize)> = HashMap::new();
             let fn_arg_count = fn_def.params.len();
             
             // Bind parameters
@@ -1260,8 +1260,8 @@ async fn execute_callable(
                 // Mark as moved if param expects Owned
                 if *param_ownership == Ownership::Owned {
                     if let Expr::Var(var_name) = arg_expr {
-                        if let Some((k, v, o, _)) = ctx.env.get(var_name) {
-                            ctx.env.insert(var_name.clone(), (k.clone(), v.clone(), o.clone(), Moved::True));
+                        if let Some((k, v, o, _, sd)) = ctx.env.get(var_name) {
+                            ctx.env.insert(var_name.clone(), (k.clone(), v.clone(), o.clone(), Moved::True, sd.clone()));
                         }
                     }
                 }
@@ -1274,12 +1274,13 @@ async fn execute_callable(
                     }
                 }
 
-                fn_env.insert(param_name.clone(), (AssignKind::Var, arg_val, ownership, Moved::False));
+                fn_env.insert(param_name.clone(), (AssignKind::Var, arg_val, ownership, Moved::False, ctx.scope_depth + 1));
             }
             
             // Execute function body
             if let Some(body) = &fn_def.body {
                 let mut fn_ctx = ctx.fork_with_env(fn_env);
+                fn_ctx.scope_depth = ctx.scope_depth + 1;  // Nested function = deeper scope
                 let flow = execute_block(body, &mut fn_ctx, fn_def.return_type.as_ref()).await;
                 match flow {
                     ControlFlow::Return(val) => val,
@@ -1341,7 +1342,7 @@ async fn call_closure(
 
             closure_ctx.env.insert(
                 param_name.clone(),
-                (AssignKind::Const, arg_val, ownership, Moved::False),
+                (AssignKind::Const, arg_val, ownership, Moved::False, 0),
             );
         } else {
             panic!("Closure expects {} arguments, got {}", closure.def.params.len(), args.len());
@@ -1836,12 +1837,12 @@ async fn eval_expr(
         }
         Expr::Assign { name, value } => {
             let v = eval_expr(value, ctx).await;
-            ctx.env.insert(name.clone(), (AssignKind::Var, v.clone(), Ownership::Owned, Moved::False));
+            ctx.env.insert(name.clone(), (AssignKind::Var, v.clone(), Ownership::Owned, Moved::False, 0));
             v
         }
         Expr::CompoundAssign { name, op: _, value } => {
             let v = eval_expr(value, ctx).await;
-            ctx.env.insert(name.clone(), (AssignKind::Var, v.clone(), Ownership::Owned, Moved::False));
+            ctx.env.insert(name.clone(), (AssignKind::Var, v.clone(), Ownership::Owned, Moved::False, 0));
             v
         }
         Expr::Regex(pattern) => {
@@ -1854,7 +1855,7 @@ async fn eval_expr(
             }
         }
         Expr::Var(name) => {
-            if let Some((_, v, ownership, moved)) = ctx.env.get(name) {
+            if let Some((_, v, ownership, moved, _)) = ctx.env.get(name) {
                 if let Moved::True = *moved {
                     panic!("Variable '{}' has been moved", name);
                 }
@@ -1893,7 +1894,7 @@ async fn eval_expr(
             }
         }
         Expr::Const(name) => {
-            if let Some((_, v, _ownership, moved)) = ctx.env.get(name) {
+            if let Some((_, v, _ownership, moved, _scope_depth)) = ctx.env.get(name) {
                 if let Moved::True = *moved {
                     panic!("Constant '{}' has been moved", name);
                 }
@@ -1909,7 +1910,7 @@ async fn eval_expr(
             }
         },
         Expr::Static(name) => {
-            if let Some((_, v, _ownership, _moved)) = ctx.env.get(name) {
+            if let Some((_, v, _ownership, _moved, _scope_depth)) = ctx.env.get(name) {
                 v.clone()
             } else {
                 panic!("Undefined static: {}", name);
@@ -1950,7 +1951,7 @@ async fn eval_expr(
 
                 // Check direct assignments
                 for var_name in &analysis.directly_assigned {
-                    if let Some((kind, value, _, _)) = ctx.env.get(var_name) {
+                    if let Some((kind, value, _, _, _)) = ctx.env.get(var_name) {
                         if matches!(kind, AssignKind::Var) {
                             if !matches!(value, Value::StateActor(_, _, _)) {
                                 panic!(
@@ -1969,7 +1970,7 @@ async fn eval_expr(
 
                 // Check .update()/.set()/.get() calls on non-StateActor vars
                 for var_name in &analysis.state_method_calls {
-                    if let Some((_, value, _, _)) = ctx.env.get(var_name) {
+                    if let Some((_, value, _, _, _)) = ctx.env.get(var_name) {
                         if !matches!(value, Value::StateActor(_, _, _)) {
                             panic!(
                                 "Cannot call .update()/.set()/.get() on '{}'; use 'var {} = state(value)' to create shared state",
@@ -2115,7 +2116,7 @@ async fn eval_expr(
                         if let Some(ref name) = param_name {
                             closure_env.insert(
                                 name.clone(),
-                                (AssignKind::Var, current.clone(), Ownership::Owned, Moved::False)
+                                (AssignKind::Var, current.clone(), Ownership::Owned, Moved::False, 0)
                             );
                         }
                         
@@ -2130,14 +2131,14 @@ async fn eval_expr(
                                 } else {
                                     param_name.as_ref()
                                         .and_then(|name| fn_ctx.env.get(name))
-                                        .map(|(_, v, _, _)| v.clone())
+                                        .map(|(_, v, _, _, _)| v.clone())
                                         .unwrap_or(current.clone())
                                 }
                             }
                             _ => {
                                 param_name.as_ref()
                                     .and_then(|name| fn_ctx.env.get(name))
-                                    .map(|(_, v, _, _)| v.clone())
+                                    .map(|(_, v, _, _,_ )| v.clone())
                                     .unwrap_or(current.clone())
                             }
                         };
@@ -2168,7 +2169,7 @@ async fn eval_expr(
             }
 
             // Try variable lookup first (handles function references)
-            if let Some((_, value, _ownership, _moved)) = ctx.env.get(name) {
+            if let Some((_, value, _ownership, _moved, _)) = ctx.env.get(name) {
                 if let Value::Closure(closure) = value {
                     return call_closure(&closure.clone(), args, ctx).await;
                 }
@@ -2267,10 +2268,10 @@ async fn eval_expr(
                         
                         // Update the original variable
                         if let Expr::Var(var_name) = object.as_ref() {
-                            if let Some((kind, _, ownership, _)) = ctx.env.get(var_name) {
+                            if let Some((kind, _, ownership, _, scope_depth)) = ctx.env.get(var_name) {
                                 match ownership {
                                     Ownership::Owned => {
-                                        ctx.env.insert(var_name.clone(), (kind.clone(), updated_obj, ownership.clone(), Moved::False));
+                                        ctx.env.insert(var_name.clone(), (kind.clone(), updated_obj, ownership.clone(), Moved::False, scope_depth.clone()));
                                     }
                                     Ownership::Borrowed => {
                                         panic!("Cannot directly assign field on borrowed instance '{}'.", var_name);
@@ -2373,7 +2374,7 @@ async fn eval_expr(
             // Handle Namespace, StateActor and Channel methods
             if let Expr::Var(var_name) = object.as_ref() {
                 let namespace_info = {
-                    if let Some((_, Value::Namespace(ns), _, _)) = ctx.env.get(var_name) {
+                    if let Some((_, Value::Namespace(ns), _, _, _)) = ctx.env.get(var_name) {
                         Some(ns.clone())
                     } else {
                         None
@@ -2405,7 +2406,7 @@ async fn eval_expr(
                                 }
                                 fn_env.insert(
                                     param_name.clone(),
-                                    (AssignKind::Var, arg_val, ownership.clone(), Moved::False)
+                                    (AssignKind::Var, arg_val, ownership.clone(), Moved::False, 0)
                                 );
                             }
                             
@@ -2429,7 +2430,7 @@ async fn eval_expr(
                             panic!("Function '{}' not found in namespace '{}'", method, ns);
                         }
                     }
-                } else if let Some((_, Value::StateActor(tx, rx, inner_type), ownership, _)) = ctx.env.get(var_name) {
+                } else if let Some((_, Value::StateActor(tx, rx, inner_type), ownership, _, _)) = ctx.env.get(var_name) {
                     let tx = tx.clone();
                     let rx = rx.clone();
                     let inner_type = inner_type.clone();
@@ -2466,7 +2467,7 @@ async fn eval_expr(
                         }
                         _ => panic!("Unknown state method: {}", method),
                     }
-                } else if let Some((_, Value::Channel(_, rx_arc, _), _, _)) = ctx.env.get(var_name) {
+                } else if let Some((_, Value::Channel(_, rx_arc, _), _, _, _)) = ctx.env.get(var_name) {
                     match method.as_str() {
                         "close" => {
                             let mut rx = rx_arc.lock().await;
@@ -2484,7 +2485,7 @@ async fn eval_expr(
                     // Static method call: Model.method(...)
                     if let Some(method_def) = ctx.model_methods.get(&(model_name.clone(), method.clone())).cloned() {
                         // Create new scope for the static method (no `this`)
-                        let mut method_env: HashMap<String, (AssignKind, Value, Ownership, Moved)> = HashMap::new();
+                        let mut method_env: HashMap<String, (AssignKind, Value, Ownership, Moved, usize)> = HashMap::new();
                         
                         // Bind parameters
                         for (i, (param_name, param_type, param_ownership)) in method_def.params.iter().enumerate() {
@@ -2506,7 +2507,7 @@ async fn eval_expr(
 
                                 method_env.insert(
                                     param_name.clone(),
-                                    (AssignKind::Const, arg_val, param_ownership.clone(), Moved::False),
+                                    (AssignKind::Const, arg_val, param_ownership.clone(), Moved::False, 0),
                                 );
                             } else {
                                 panic!("Method {} expects {} arguments, got {}", method, method_def.params.len(), args.len());
@@ -2578,8 +2579,8 @@ async fn eval_expr(
                         
                         // Update the original variable
                         if let Expr::Var(var_name) = object.as_ref() {
-                            if let Some((kind, _, ownership, _)) = ctx.env.get(var_name) {
-                                ctx.env.insert(var_name.clone(), (kind.clone(), Value::Array(arr), ownership.clone(), Moved::False));
+                            if let Some((kind, _, ownership, _, scope_depth)) = ctx.env.get(var_name) {
+                                ctx.env.insert(var_name.clone(), (kind.clone(), Value::Array(arr), ownership.clone(), Moved::False, scope_depth.clone()));
                             }
                         }
                         
@@ -2616,8 +2617,8 @@ async fn eval_expr(
                         
                         // Update the original variable
                         if let Expr::Var(var_name) = object.as_ref() {
-                            if let Some((kind, _, ownership, _)) = ctx.env.get(var_name) {
-                                ctx.env.insert(var_name.clone(), (kind.clone(), Value::Array(arr), ownership.clone(), Moved::False));
+                            if let Some((kind, _, ownership, _, scope_depth)) = ctx.env.get(var_name) {
+                                ctx.env.insert(var_name.clone(), (kind.clone(), Value::Array(arr), ownership.clone(), Moved::False, scope_depth.clone()));
                             }
                         }
                         
@@ -2653,8 +2654,8 @@ async fn eval_expr(
                         
                         // Update the original variable
                         if let Expr::Var(var_name) = object.as_ref() {
-                            if let Some((kind, _, ownership, _)) = ctx.env.get(var_name) {
-                                ctx.env.insert(var_name.clone(), (kind.clone(), Value::Array(arr), ownership.clone(), Moved::False));
+                            if let Some((kind, _, ownership, _, scope_depth)) = ctx.env.get(var_name) {
+                                ctx.env.insert(var_name.clone(), (kind.clone(), Value::Array(arr), ownership.clone(), Moved::False, scope_depth.clone()));
                             }
                         }
                         
@@ -2712,8 +2713,8 @@ async fn eval_expr(
                         
                         // Update the original variable
                         if let Expr::Var(var_name) = object.as_ref() {
-                            if let Some((kind, _, ownership, _)) = ctx.env.get(var_name) {
-                                ctx.env.insert(var_name.clone(), (kind.clone(), Value::Array(arr.clone()), ownership.clone(), Moved::False));
+                            if let Some((kind, _, ownership, _, scope_depth)) = ctx.env.get(var_name) {
+                                ctx.env.insert(var_name.clone(), (kind.clone(), Value::Array(arr.clone()), ownership.clone(), Moved::False, scope_depth.clone()));
                             }
                         }
 
@@ -2919,8 +2920,8 @@ async fn eval_expr(
                         
                         // Update the original variable
                         if let Expr::Var(var_name) = object.as_ref() {
-                            if let Some((kind, _, ownership, _)) = ctx.env.get(var_name) {
-                                ctx.env.insert(var_name.clone(), (kind.clone(), Value::String(s), ownership.clone(), Moved::False));
+                            if let Some((kind, _, ownership, _, scope_depth)) = ctx.env.get(var_name) {
+                                ctx.env.insert(var_name.clone(), (kind.clone(), Value::String(s), ownership.clone(), Moved::False, scope_depth.clone()));
                             }
                         }
                         
@@ -3070,8 +3071,8 @@ async fn eval_expr(
                         // Update the original variable if it's a var
                         if let Expr::Var(var_name) = object.as_ref() {
                             if can_mutate(var_name, &ctx.env) {
-                                if let Some((kind, _, ownership, _)) = ctx.env.get(var_name) {
-                                    ctx.env.insert(var_name.clone(), (kind.clone(), Value::Map(map.clone(), key_type.clone(), val_type.clone()), ownership.clone(), Moved::False));
+                                if let Some((kind, _, ownership, _, scope_depth)) = ctx.env.get(var_name) {
+                                    ctx.env.insert(var_name.clone(), (kind.clone(), Value::Map(map.clone(), key_type.clone(), val_type.clone()), ownership.clone(), Moved::False, scope_depth.clone()));
                                 }
                             }
                         }
@@ -3110,8 +3111,8 @@ async fn eval_expr(
                         // Update the original variable
                         if let Expr::Var(var_name) = object.as_ref() {
                             if can_mutate(var_name, &ctx.env) {
-                                if let Some((kind, _, ownership, _)) = ctx.env.get(var_name) {
-                                    ctx.env.insert(var_name.clone(), (kind.clone(), Value::Map(map, key_type, val_type), ownership.clone(), Moved::False));
+                                if let Some((kind, _, ownership, _, scope_depth)) = ctx.env.get(var_name) {
+                                    ctx.env.insert(var_name.clone(), (kind.clone(), Value::Map(map, key_type, val_type), ownership.clone(), Moved::False, scope_depth.clone()));
                                 }
                             }
                         }
@@ -3147,8 +3148,8 @@ async fn eval_expr(
                         // Update the original variable if it's a var
                         if let Expr::Var(var_name) = object.as_ref() {
                             if can_mutate(var_name, &ctx.env) {
-                                if let Some((kind, _, ownership, _)) = ctx.env.get(var_name) {
-                                    ctx.env.insert(var_name.clone(), (kind.clone(), Value::Set(set.clone(), val_type.clone()), ownership.clone(), Moved::False));
+                                if let Some((kind, _, ownership, _, scope_depth)) = ctx.env.get(var_name) {
+                                    ctx.env.insert(var_name.clone(), (kind.clone(), Value::Set(set.clone(), val_type.clone()), ownership.clone(), Moved::False, scope_depth.clone()));
                                 }
                             }
                         }
@@ -3176,8 +3177,8 @@ async fn eval_expr(
                         // Update the original variable
                         if let Expr::Var(var_name) = object.as_ref() {
                             if can_mutate(var_name, &ctx.env) {
-                                if let Some((kind, _, ownership, _)) = ctx.env.get(var_name) {
-                                    ctx.env.insert(var_name.clone(), (kind.clone(), Value::Set(set, val_type), ownership.clone(), Moved::False));
+                                if let Some((kind, _, ownership, _, scope_depth)) = ctx.env.get(var_name) {
+                                    ctx.env.insert(var_name.clone(), (kind.clone(), Value::Set(set, val_type), ownership.clone(), Moved::False, scope_depth.clone()));
                                 }
                             }
                         }
@@ -3201,7 +3202,7 @@ async fn eval_expr(
 
                     // Check if method mutates this and if caller has permission
                     if let Expr::Var(var_name) = object.as_ref() {
-                        if let Some((kind, _, ownership, _)) = ctx.env.get(var_name) {
+                        if let Some((kind, _, ownership, _, _)) = ctx.env.get(var_name) {
                             let mutation_type = method_def.body.as_ref()
                                 .map(|body| method_mutation_type(body))
                                 .unwrap_or(MethodMutationType::None);
@@ -3227,12 +3228,12 @@ async fn eval_expr(
                     }
 
                     // Create new scope for method
-                    let mut method_env: HashMap<String, (AssignKind, Value, Ownership, Moved)> = HashMap::new();
+                    let mut method_env: HashMap<String, (AssignKind, Value, Ownership, Moved, usize)> = HashMap::new();
 
                     // Bind `this` as first implicit parameter
                     method_env.insert(
                         "this".to_string(),
-                        (AssignKind::Var, obj_val.clone(), Ownership::Owned, Moved::False),
+                        (AssignKind::Var, obj_val.clone(), Ownership::Owned, Moved::False, 0),
                     );
                     
                     // Bind explicit parameters (skip first param if it matches signature)
@@ -3241,17 +3242,17 @@ async fn eval_expr(
                             let arg_val = eval_expr(&args[i], ctx).await;
                             method_env.insert(
                                 param_name.clone(),
-                                (AssignKind::Var, arg_val, param_ownership.clone(), Moved::False),
+                                (AssignKind::Var, arg_val, param_ownership.clone(), Moved::False, 0),
                             );
                         }
                     }
 
                     // Sync `this` back to the original variable
                     if let Expr::Var(var_name) = object.as_ref() {
-                        if let Some((_, updated_obj, _, _)) = method_env.get("this") {
+                        if let Some((_, updated_obj, _, _, _)) = method_env.get("this") {
                             // Get the original ownership from the outer env
-                            if let Some((kind, _, original_ownership, _)) = ctx.env.get(var_name) {
-                                ctx.env.insert(var_name.clone(), (kind.clone(), updated_obj.clone(), original_ownership.clone(), Moved::False));
+                            if let Some((kind, _, original_ownership, _, scope_depth)) = ctx.env.get(var_name) {
+                                ctx.env.insert(var_name.clone(), (kind.clone(), updated_obj.clone(), original_ownership.clone(), Moved::False, scope_depth.clone()));
                             }
                         }
                     }
@@ -3282,35 +3283,33 @@ async fn eval_expr(
                 .into_iter()
                 .filter(|p| !param_names.contains(p))
                 .collect();
-
-            let owned_vars: Vec<String> = ctx.env
-                .iter()
-                .filter(|(_, (kind, _, ownership, _))| {
-                    matches!(kind, AssignKind::Var) && *ownership == Ownership::Owned
-                })
-                .map(|(name, _)| name.clone())
-                .collect();
-
-            // Referenced variables should not include ones that are owned or defined in closure params
-            let read_vars: Vec<String> = referenced_vars.clone()
-                .into_iter()
-                .filter(|ref_var| !owned_vars.contains(ref_var) && !param_names.contains(ref_var))
-                .collect();
             
-            // Owned vars should be live
-            let mut live_vars = Vec::new();
-            for owned_var in owned_vars {
-                if referenced_vars.contains(&owned_var) {
-                    live_vars.push(owned_var);
-                }
-            }
+            // All referenced vars (except closure params) should be captured
+            let all_captured: Vec<String> = referenced_vars
+                .iter()
+                .filter(|v| !param_names.contains(*v))
+                .cloned()
+                .collect();
 
-            // Combine live_vars and read_vars for captured_env
-            let all_captured = [live_vars.clone(), read_vars].concat();
+            // Only depth 0 owned vars should be live
+            let live_vars: Vec<String> = all_captured
+                .iter()
+                .filter(|v| {
+                    ctx.env.get(*v)
+                        .map(|(kind, _, ownership, _, depth)| {
+                            matches!(kind, AssignKind::Var)
+                                && *ownership == Ownership::Owned
+                                && *depth == 0
+                        })
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .collect();
+
             let captured_env = all_captured
-                .into_iter()
+                .iter()
                 .filter_map(|var_name| {
-                    ctx.env.get(&var_name).map(|val| (var_name, val.clone()))
+                    ctx.env.get(var_name).map(|val| (var_name.clone(), val.clone()))
                 })
                 .collect();
 
@@ -3399,7 +3398,7 @@ async fn execute_stmt(
                 }
             }
 
-            ctx.env.insert(name.clone(), (kind.clone(), v, ownership.clone(), Moved::False));
+            ctx.env.insert(name.clone(), (kind.clone(), v, ownership.clone(), Moved::False, 0));
             
             ControlFlow::None
         }
@@ -3409,7 +3408,7 @@ async fn execute_stmt(
                 panic!("Variable '{}' not declared", name);
             }
 
-            let (kind, existing_val, ownership, _moved) = ctx.env.get(name).unwrap().clone();
+            let (kind, existing_val, ownership, moved, scope_depth) = ctx.env.get(name).unwrap().clone();
             
             // Disallow direct reassignment of StateActor
             if matches!(existing_val, Value::StateActor(_, _, _)) {
@@ -3433,7 +3432,7 @@ async fn execute_stmt(
                         panic!("Type error: variable {} is {:?}, cannot assign {:?}", name, existing_type, actual_type);
                     }
 
-                    ctx.env.insert(name.clone(), (kind.clone(), v, ownership, _moved));
+                    ctx.env.insert(name.clone(), (kind.clone(), v, ownership, moved, scope_depth));
                     ControlFlow::None
                 }
                 kind => panic!("Cannot reassign for {}", match kind {
@@ -3830,7 +3829,7 @@ pub fn resolve_toolbox_import(
             // Register namespace marker
             ctx.env.insert(
                 namespace.clone(),
-                (AssignKind::Const, Value::Namespace(namespace.clone()), Ownership::Borrowed, Moved::False)
+                (AssignKind::Const, Value::Namespace(namespace.clone()), Ownership::Borrowed, Moved::False, 0)
             );
             
             // Register all functions with namespace prefix
@@ -3857,7 +3856,7 @@ pub fn resolve_toolbox_import(
             
             ctx.env.insert(
                 name.clone(),
-                (AssignKind::Const, Value::Namespace(name.clone()), Ownership::Borrowed, Moved::False)
+                (AssignKind::Const, Value::Namespace(name.clone()), Ownership::Borrowed, Moved::False, 0)
             );
             
             for (fn_name, func) in &tbx_module.functions {
@@ -3960,7 +3959,7 @@ async fn run_module(
                                 
                                 ctx.env.insert(
                                     namespace.clone(),
-                                    (AssignKind::Const, Value::Namespace(namespace.clone()), Ownership::Borrowed, Moved::False)
+                                    (AssignKind::Const, Value::Namespace(namespace.clone()), Ownership::Borrowed, Moved::False, 0)
                                 );
                                 
                                 for (name, func) in &tbx_module.functions {
@@ -3983,7 +3982,7 @@ async fn run_module(
                                 
                                 ctx.env.insert(
                                     local_name.clone(),
-                                    (AssignKind::Const, Value::Namespace(local_name.clone()), Ownership::Borrowed, Moved::False)
+                                    (AssignKind::Const, Value::Namespace(local_name.clone()), Ownership::Borrowed, Moved::False, 0)
                                 );
                                 
                                 for (name, func) in &tbx_module.functions {
@@ -4042,7 +4041,7 @@ async fn run_module(
                                 // Store namespace marker in env
                                 ctx.env.insert(
                                     namespace.clone(),
-                                    (AssignKind::Const, Value::Namespace(namespace.clone()), Ownership::Borrowed, Moved::False)
+                                    (AssignKind::Const, Value::Namespace(namespace.clone()), Ownership::Borrowed, Moved::False, 0)
                                 );
 
                                 // Store qualified functions
