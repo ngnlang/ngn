@@ -760,7 +760,7 @@ impl Parser {
                     let (ty, own) = parse_type(&mut self.tokens)?;
                     (Some(ty), own)
                 } else {
-                    (None, Ownership:: Borrowed)
+                    (None, Ownership::Borrowed)
                 };
                 
                 params.push((name, ty, ownership));
@@ -1192,15 +1192,15 @@ impl Parser {
         while !matches!(self.current_token(), Some(Token::Or)) {
             let name = self.expect_ident()?;
             
-            let param_type = if matches!(self.current_token(), Some(Token::Colon)) {
+            let (ty, ownership) = if matches!(self.current_token(), Some(Token::Colon)) {
                 self.advance();
                 let (ty, ownership) = parse_type(&mut self.tokens)?;
-                Some((ty, ownership))
+                (Some(ty), ownership)
             } else {
-                None
+                (None, Ownership::Borrowed)
             };
             
-            params.push((name, param_type));
+            params.push((name, ty, ownership));
             
             if matches!(self.current_token(), Some(Token::Comma)) {
                 self.advance();

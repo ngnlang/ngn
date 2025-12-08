@@ -343,7 +343,7 @@ fn normalize_regex_pattern(pattern: &str) -> String {
 fn make_identity_closure(inner_type: &Type, ownership: &Ownership) -> Value {
     Value::Closure(ClosureValue {
         def: Box::new(ClosureDef {
-            params: vec![("n".to_string(), Some((inner_type.clone(), ownership.clone())))],
+            params: vec![("n".to_string(), Some(inner_type.clone()), ownership.clone())],
             body: vec![Stmt::Return(Some(Expr::Var("n".to_string())))],
             return_type: Some(inner_type.clone()),
         }),
@@ -355,7 +355,7 @@ fn make_identity_closure(inner_type: &Type, ownership: &Ownership) -> Value {
 fn make_const_closure(value: Value, inner_type: &Type, ownership: &Ownership) -> Value {
     Value::Closure(ClosureValue {
         def: Box::new(ClosureDef {
-            params: vec![("_".to_string(), Some((inner_type.clone(), ownership.clone())))],
+            params: vec![("_".to_string(), Some(inner_type.clone()), ownership.clone())],
             body: vec![Stmt::Return(Some(value_to_expr(&value)))],
             return_type: Some(inner_type.clone()),
         }),
@@ -1268,7 +1268,7 @@ async fn execute_callable(
                     _ => Value::Void,
                 }
             } else {
-                panic!("Cannot call function '{}' as it has not body.", name);
+                panic!("Cannot call function '{}' as it has no body.", name);
             }
         }
         Callable::Builtin(func) => {
@@ -1299,27 +1299,38 @@ async fn call_closure(
     }
     
     // Bind parameters
-    for (i, (param_name, param_type_ownership)) in closure.def.params.iter().enumerate() {
+    for (i, (param_name, param_type, param_ownership)) in closure.def.params.iter().enumerate() {
         if i < args.len() {
-            let arg_val = eval_expr(&args[i], ctx).await;
+            let arg_expr = &args[i];
+            let ownership = get_ownership(arg_expr, &ctx.env);
+            let arg_val = eval_expr(&arg_expr, ctx).await;
 
-            // Type check if parameter has a type annotation
-            let ownership = match param_type_ownership {
-                Some((expected_type, ownership)) => {
-                    // Type check if parameter has a type annotation
-                    let actual_type = infer_value_type(&arg_val);
-                    if !types_compatible(expected_type, &actual_type) {
-                        panic!(
-                            "Closure param '{}' expects {}, got {}",
-                            param_name,
-                            format_type_for_error(expected_type),
-                            format_type_for_error(&actual_type)
-                        );
+            // Only error if param expects Owned but arg is Borrowed
+            if *param_ownership == Ownership::Owned && ownership == Ownership::Borrowed {
+                panic!("Closure param '{}' expects owned, but got borrowed", param_name);
+            }
+            
+            // Mark as moved if param expects Owned
+            if *param_ownership == Ownership::Owned {
+                if let Expr::Var(var_name) = arg_expr {
+                    if let Some((k, v, o, _, sd)) = ctx.env.get(var_name) {
+                        ctx.env.insert(var_name.clone(), (k.clone(), v.clone(), o.clone(), Moved::True, sd.clone()));
                     }
-                    ownership.clone()
                 }
-                None => Ownership::Borrowed,
-            };
+            }
+
+            // Validate parameter type
+            if let Some(expected_type) = param_type {
+                let actual_type = infer_value_type(&arg_val);
+                if !types_compatible(expected_type, &actual_type) {
+                    panic!(
+                        "Closure param '{}' expects {}, got {}",
+                        param_name,
+                        format_type_for_error(expected_type),
+                        format_type_for_error(&actual_type)
+                    );
+                }
+            }
 
             closure_ctx.env.insert(
                 param_name.clone(),
@@ -2100,7 +2111,7 @@ async fn eval_expr(
                         let mut closure_env = closure.captured_env.clone();
 
                         let param_name = closure.def.params.first()
-                            .map(|(name, _)| name.clone());
+                            .map(|(name, _, _)| name.clone());
                         
                         if let Some(ref name) = param_name {
                             closure_env.insert(
@@ -3265,7 +3276,7 @@ async fn eval_expr(
         Expr::Closure(closure_def) => {
             let param_names: Vec<String> = closure_def.params
                 .iter()
-                .map(|(name, _)| name.clone())
+                .map(|(name, _, _)| name.clone())
                 .collect();
 
             let referenced_vars: Vec<String> = find_referenced_vars(&closure_def.body)

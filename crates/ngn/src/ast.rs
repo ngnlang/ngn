@@ -276,7 +276,7 @@ pub struct RoleDef {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClosureDef {
-    pub params: Vec<(String, Option<(Type, Ownership)>)>,
+    pub params: Vec<(String, Option<Type>, Ownership)>,
     pub body: Vec<Stmt>,
     pub return_type: Option<Type>,
 }
