@@ -6,7 +6,7 @@ An expressive and easy to use programming language.
 
 ## Status
 
-Extremely early development.
+Make it work - extremely early development.
 
 ## `main()`
 
@@ -693,6 +693,8 @@ Closures are similar to functions, but have important differences:
 - assign them with `const`, then call it like a function.
 - access to vars and consts from its outer environment.
 - uses pipe syntax to wrap params
+
+> param ownership transfer is the same as functions.
 
 ```ngn
 const add = |a, b| a + b
