@@ -312,7 +312,8 @@ fn is_literal(e: &Expr) -> bool {
         Expr::F32(_) |
         Expr::String(_) |
         Expr::Bool(_) |
-        Expr::Array(_)
+        Expr::Array(_) |
+        Expr::Closure(_)
     )
 }
 
@@ -1010,11 +1011,29 @@ fn types_compatible(expected: &Type, actual: &Type) -> bool {
 }
 
 fn get_ownership(e: &Expr, env: &HashMap<String, (AssignKind, Value, Ownership, Moved, usize)>) -> Ownership {
+    if is_literal(e) { 
+        return Ownership::Owned;
+    }
+    
     match e {
         Expr::Var(name) => {
             env.get(name).map(|(_, _, o, _, _)| o.clone()).unwrap_or(Ownership::Borrowed)
         }
-        Expr::Add(_, _) => Ownership::Owned,  // String concat returns owned
+        // Expressions that produce new values are owned
+        Expr::Add(_, _) |
+        Expr::Subtract(_, _) |
+        Expr::Multiply(_, _) |
+        Expr::Divide(_, _) |
+        Expr::Negative(_) |
+        Expr::Power(_, _) |
+        Expr::Modulo(_, _) |
+        Expr::InterpolatedString(_) |
+        Expr::CreateMap( .. ) |
+        Expr::CreateSet( .. ) |
+        Expr::MakeChannel(_) |
+        Expr::MakeState(_) |
+        Expr::Call { .. } |
+        Expr::MethodCall { .. } => Ownership::Owned,
         _ => Ownership::Borrowed,
     }
 }
