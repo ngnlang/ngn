@@ -3164,10 +3164,8 @@ async fn eval_expr(
                         
                         // Update the original variable
                         if let Some(var_name) = root_var {
-                            if can_mutate(&var_name, &ctx.env) {
-                                if let Some((kind, _, ownership, _, scope_depth)) = ctx.env.get(&var_name) {
-                                    ctx.env.insert(var_name.clone(), (kind.clone(), Value::Map(map, key_type, val_type), ownership.clone(), Moved::False, scope_depth.clone()));
-                                }
+                            if let Some((kind, _, ownership, _, scope_depth)) = ctx.env.get(&var_name) {
+                                ctx.env.insert(var_name.clone(), (kind.clone(), Value::Map(map, key_type, val_type), ownership.clone(), Moved::False, scope_depth.clone()));
                             }
                         }
                         
@@ -3256,10 +3254,8 @@ async fn eval_expr(
                         
                         // Update the original variable
                         if let Some(var_name) = root_var {
-                            if can_mutate(&var_name, &ctx.env) {
-                                if let Some((kind, _, ownership, _, scope_depth)) = ctx.env.get(&var_name) {
-                                    ctx.env.insert(var_name.clone(), (kind.clone(), Value::Set(set, val_type), ownership.clone(), Moved::False, scope_depth.clone()));
-                                }
+                            if let Some((kind, _, ownership, _, scope_depth)) = ctx.env.get(&var_name) {
+                                ctx.env.insert(var_name.clone(), (kind.clone(), Value::Set(set, val_type), ownership.clone(), Moved::False, scope_depth.clone()));
                             }
                         }
                         
