@@ -3073,6 +3073,18 @@ async fn eval_expr(
             if let Value::Map(mut map, key_type, val_type) = obj_val.clone() {
                 match method.as_str() {
                     "set" => {
+                        let root_var = find_root_var(object);
+
+                        // Check mutability before any mutation
+                        if let Some(ref var_name) = root_var {
+                            if !can_mutate(&var_name, &ctx.env) {
+                                panic!(
+                                    "Cannot call mutating method 'set' on immutable map '{}'",
+                                    var_name
+                                );
+                            }
+                        }
+
                         if args.len() != 2 {
                             panic!("set() requires key and value arguments");
                         }
@@ -3097,15 +3109,13 @@ async fn eval_expr(
                         map.insert(map_key, val);
                         
                         // Update the original variable if it's a var
-                        if let Some(var_name) = find_root_var(object) {
-                            if can_mutate(&var_name, &ctx.env) {
-                                if let Some((kind, _, ownership, _, scope_depth)) = ctx.env.get(&var_name) {
-                                    ctx.env.insert(
-                                        var_name,
-                                        (kind.clone(), Value::Map(map.clone(), key_type.clone(), val_type.clone()),
-                                        ownership.clone(), Moved::False, scope_depth.clone())
-                                    );
-                                }
+                        if let Some(var_name) = root_var {
+                            if let Some((kind, _, ownership, _, scope_depth)) = ctx.env.get(&var_name) {
+                                ctx.env.insert(
+                                    var_name,
+                                    (kind.clone(), Value::Map(map.clone(), key_type.clone(), val_type.clone()),
+                                    ownership.clone(), Moved::False, scope_depth.clone())
+                                );
                             }
                         }
                         
@@ -3132,6 +3142,18 @@ async fn eval_expr(
                         return Value::Bool(map.contains_key(&map_key));
                     }
                     "remove" => {
+                        let root_var = find_root_var(object);
+
+                        // Check mutability before any mutation
+                        if let Some(ref var_name) = root_var {
+                            if !can_mutate(&var_name, &ctx.env) {
+                                panic!(
+                                    "Cannot call mutating method 'remove' on immutable map '{}'",
+                                    var_name
+                                );
+                            }
+                        }
+
                         if args.is_empty() {
                             panic!("remove() requires a key argument");
                         }
@@ -3141,9 +3163,9 @@ async fn eval_expr(
                         let removed = map.remove(&map_key);
                         
                         // Update the original variable
-                        if let Expr::Var(var_name) = object.as_ref() {
-                            if can_mutate(var_name, &ctx.env) {
-                                if let Some((kind, _, ownership, _, scope_depth)) = ctx.env.get(var_name) {
+                        if let Some(var_name) = root_var {
+                            if can_mutate(&var_name, &ctx.env) {
+                                if let Some((kind, _, ownership, _, scope_depth)) = ctx.env.get(&var_name) {
                                     ctx.env.insert(var_name.clone(), (kind.clone(), Value::Map(map, key_type, val_type), ownership.clone(), Moved::False, scope_depth.clone()));
                                 }
                             }
@@ -3162,6 +3184,18 @@ async fn eval_expr(
             if let Value::Set(mut set, val_type) = obj_val.clone() {
                 match method.as_str() {
                     "add" => {
+                        let root_var = find_root_var(object);
+
+                        // Check mutability before any mutation
+                        if let Some(ref var_name) = root_var {
+                            if !can_mutate(&var_name, &ctx.env) {
+                                panic!(
+                                    "Cannot call mutating method 'add' on immutable set '{}'",
+                                    var_name
+                                );
+                            }
+                        }
+
                         if args.len() != 1 {
                             panic!("add() requires value argument");
                         }
@@ -3178,15 +3212,13 @@ async fn eval_expr(
                         set.insert(set_val);
 
                         // Update the original variable if it's a var
-                        if let Some(var_name) = find_root_var(object) {
-                            if can_mutate(&var_name, &ctx.env) {
-                                if let Some((kind, _, ownership, _, scope_depth)) = ctx.env.get(&var_name) {
-                                    ctx.env.insert(
-                                        var_name,
-                                        (kind.clone(), Value::Set(set.clone(), val_type.clone()),
-                                        ownership.clone(), Moved::False, scope_depth.clone())
-                                    );
-                                }
+                        if let Some(var_name) = root_var {
+                            if let Some((kind, _, ownership, _, scope_depth)) = ctx.env.get(&var_name) {
+                                ctx.env.insert(
+                                    var_name,
+                                    (kind.clone(), Value::Set(set.clone(), val_type.clone()),
+                                    ownership.clone(), Moved::False, scope_depth.clone())
+                                );
                             }
                         }
                         
@@ -3202,6 +3234,18 @@ async fn eval_expr(
                         return Value::Bool(set.contains(&set_val));
                     }
                     "remove" => {
+                        let root_var = find_root_var(object);
+
+                        // Check mutability before any mutation
+                        if let Some(ref var_name) = root_var {
+                            if !can_mutate(&var_name, &ctx.env) {
+                                panic!(
+                                    "Cannot call mutating method 'remove' on immutable set '{}'",
+                                    var_name
+                                );
+                            }
+                        }
+
                         if args.is_empty() {
                             panic!("remove() requires a key argument");
                         }
@@ -3211,9 +3255,9 @@ async fn eval_expr(
                         let removed = set.remove(&set_val);
                         
                         // Update the original variable
-                        if let Expr::Var(var_name) = object.as_ref() {
-                            if can_mutate(var_name, &ctx.env) {
-                                if let Some((kind, _, ownership, _, scope_depth)) = ctx.env.get(var_name) {
+                        if let Some(var_name) = root_var {
+                            if can_mutate(&var_name, &ctx.env) {
+                                if let Some((kind, _, ownership, _, scope_depth)) = ctx.env.get(&var_name) {
                                     ctx.env.insert(var_name.clone(), (kind.clone(), Value::Set(set, val_type), ownership.clone(), Moved::False, scope_depth.clone()));
                                 }
                             }
