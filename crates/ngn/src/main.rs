@@ -451,6 +451,15 @@ fn set_value_to_value(sv: &SetValue) -> Value {
     }
 }
 
+/// For chained method calls, recurse until you get to the var
+fn find_root_var(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Var(name) => Some(name.clone()),
+        Expr::MethodCall { object, .. } => find_root_var(object),
+        _ => None,
+    }
+}
+
 fn infer_value_type(v: &Value) -> Type {
     match v {
         Value::I64(_) => Type::I64,
@@ -3064,15 +3073,19 @@ async fn eval_expr(
                         if !types_compatible(&val_type, actual_val_type) {
                             panic!("Value type mismatch: expected {:?} got {:?}", &val_type, actual_val_type);
                         }
-                        
+
                         let map_key = value_to_map_key(key);
                         map.insert(map_key, val);
                         
                         // Update the original variable if it's a var
-                        if let Expr::Var(var_name) = object.as_ref() {
-                            if can_mutate(var_name, &ctx.env) {
-                                if let Some((kind, _, ownership, _, scope_depth)) = ctx.env.get(var_name) {
-                                    ctx.env.insert(var_name.clone(), (kind.clone(), Value::Map(map.clone(), key_type.clone(), val_type.clone()), ownership.clone(), Moved::False, scope_depth.clone()));
+                        if let Some(var_name) = find_root_var(object) {
+                            if can_mutate(&var_name, &ctx.env) {
+                                if let Some((kind, _, ownership, _, scope_depth)) = ctx.env.get(&var_name) {
+                                    ctx.env.insert(
+                                        var_name,
+                                        (kind.clone(), Value::Map(map.clone(), key_type.clone(), val_type.clone()),
+                                        ownership.clone(), Moved::False, scope_depth.clone())
+                                    );
                                 }
                             }
                         }
@@ -3144,12 +3157,16 @@ async fn eval_expr(
                         
                         let set_val = value_to_set_value(&val);
                         set.insert(set_val);
-                        
+
                         // Update the original variable if it's a var
-                        if let Expr::Var(var_name) = object.as_ref() {
-                            if can_mutate(var_name, &ctx.env) {
-                                if let Some((kind, _, ownership, _, scope_depth)) = ctx.env.get(var_name) {
-                                    ctx.env.insert(var_name.clone(), (kind.clone(), Value::Set(set.clone(), val_type.clone()), ownership.clone(), Moved::False, scope_depth.clone()));
+                        if let Some(var_name) = find_root_var(object) {
+                            if can_mutate(&var_name, &ctx.env) {
+                                if let Some((kind, _, ownership, _, scope_depth)) = ctx.env.get(&var_name) {
+                                    ctx.env.insert(
+                                        var_name,
+                                        (kind.clone(), Value::Set(set.clone(), val_type.clone()),
+                                        ownership.clone(), Moved::False, scope_depth.clone())
+                                    );
                                 }
                             }
                         }
