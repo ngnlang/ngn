@@ -64,6 +64,7 @@ fn main() {
 - `array<type>`
 - `void`
 - `map<key_type, value_type>`
+- `set<value_type>`
 - `channel<type>`
 
 ### explicit
@@ -654,6 +655,9 @@ const m = map<i64, string>()
 // add an entry
 m.set(1, "one") // returns the map
 
+// chain set
+m.set(2, "two").set(3, "three")
+
 // checks if an entry exists, based on key
 m.has(1) // returns a bool
 
@@ -677,6 +681,9 @@ const s = set<string>()
 
 // add a value
 s.add("one") // returns the set
+
+// chain add
+s.add("two").add("three")
 
 // checks if a value exists
 s.has("one') // returns a bool
