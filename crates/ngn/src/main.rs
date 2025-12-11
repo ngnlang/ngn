@@ -3621,15 +3621,15 @@ async fn execute_stmt(
                         matched = true;
                         let pattern_env = new_env;
 
-                         // Sync modified variables back to outer env
-                        for (name, value) in &pattern_env {
+                        let mut pattern_ctx = ctx.fork_with_env(pattern_env);
+                        let flow = execute_block(stmts, &mut pattern_ctx, None).await;
+
+                        // Sync variables back to outer env
+                        for (name, value) in &pattern_ctx.env {
                             if ctx.env.contains_key(name) {
                                 ctx.env.insert(name.clone(), value.clone());
                             }
                         }
-
-                        let mut pattern_ctx = ctx.fork_with_env(pattern_env);
-                        let flow = execute_block(stmts, &mut pattern_ctx, None).await;
 
                         match (match_type, flow) {
                             (MatchType::One, ControlFlow::Next) => continue,
