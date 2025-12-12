@@ -177,6 +177,12 @@ pub enum Stmt {
     WhileOnce { condition: Expr, body: Vec<Stmt> },
     Until { condition: Expr, body: Vec<Stmt> },
     UntilOnce { condition: Expr, body: Vec<Stmt> },
+    For { 
+        binding: String,
+        index_binding: Option<String>,
+        iterable: ForIterable,
+        body: Vec<Stmt>,
+    },
     Break,
     Next,
     FnDef(FnDef),
@@ -299,4 +305,11 @@ pub enum Pattern {
     Literal(Expr),
     EnumVariant { enum_name: String, variant: String, binding: Option<String> },
     Wildcard,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ForIterable {
+    Collection(Expr),
+    CountReceive(Expr, Expr),
+    MaybeReceive(Expr),
 }

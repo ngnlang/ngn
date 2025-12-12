@@ -157,6 +157,7 @@ impl Parser {
             Some(Token::If) => self.parse_if_stmt(),
             Some(Token::While) => self.parse_while_stmt(),
             Some(Token::Until) => self.parse_until_stmt(),
+            Some(Token::For) => self.parse_for_stmt(),
             Some(Token::Match) => self.parse_match_stmt(),
             Some(Token::Fn) => self.parse_fn_def(),
             Some(Token::Import) => self.parse_import_stmt(),
@@ -543,6 +544,53 @@ impl Parser {
         } else {
             Ok(Stmt::Until { condition, body })
         }
+    }
+
+    fn parse_for_stmt(&mut self) -> Result<Stmt, String> {
+        self.advance();
+
+        self.expect(Token::LParen)?;
+
+        let binding = self.expect_ident()?;
+
+        let index_binding = if matches!(self.current_token(), Some(Token::Comma)) {
+            self.advance();
+            Some(self.expect_ident()?)
+        } else { None };
+
+        match self.current_token() {
+            Some(Token::Ident(s)) if s == "in" => self.advance(),
+            _ => return Err("Expected 'in' in for loop".to_string()),
+        };
+
+        let expr = self.parse_expr()?;
+        let iterable = match expr {
+            Expr::CountReceive(channel, count_expr) => {
+                ForIterable::CountReceive(*channel, *count_expr)
+            }
+            Expr::MaybeReceive(channel) => {
+                ForIterable::MaybeReceive(*channel)
+            }
+            Expr::Receive(_) => {
+                return Err("Use <- with a number, ?, or expression in for loop, not bare <-".to_string());
+            }
+            other => ForIterable::Collection(other)
+        };
+
+        self.expect(Token::RParen)?;
+
+        let body = if matches!(self.current_token(), Some(Token::LBrace)) {
+            self.advance();
+            self.skip_newlines();
+            let parsed_body = self.parse_block()?;
+            self.expect(Token::RBrace)?;
+
+            parsed_body
+        } else {
+            vec![self.parse_statement()?]
+        };
+
+        Ok(Stmt::For { binding, index_binding, iterable, body })
     }
 
     fn parse_match_stmt(&mut self) -> Result<Stmt, String> {

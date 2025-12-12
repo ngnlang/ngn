@@ -6,8 +6,10 @@ impl std::fmt::Display for Token {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
-    Any, Var, Const, Static,
-    If, Not, While, Until, Match, Echo, Print, Break, Next, True, False,
+    Var, Const, Static,
+    If, Not, While, Until, For, Match,
+    Echo, Print, Sleep, Thread, Channel,
+    Break, Next, True, False,
     StarStar, EqEq, NotEq, LessEq, GreaterEq, Or, And,
     Plus, Minus, One, Once, Star, Slash, Percent, Caret, Eq, Less, Greater,
     Colon, Comma, Period,
@@ -16,11 +18,11 @@ pub enum Token {
     Newline, Comment(String),
     Fn, Return, ShortReturn,
     Ident(String), String(String), Float(f64), Integer(i64),
-    Model, Role, Extend, With,
+    Model, Role, Extend,
+    With, From, As, Any,
     Regex(String), Enum, InterpolatedString(Vec<InterpolationToken>),
     LArrow, LArrowMaybe,
-    Thread, Channel, Sleep,
-    Import, Export, Default, From, As,
+    Import, Export, Default,
     Map, Set,
 }
 
@@ -447,6 +449,7 @@ pub fn tokenize(input: &str) -> Vec<(usize, Token, usize)> {
                     "as" => Token::As,
                     "map" => Token::Map,
                     "set" => Token::Set,
+                    "for" => Token::For,
                     _ => Token::Ident(ident),
                 };
                 tokens.push((start, token, end));

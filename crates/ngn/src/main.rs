@@ -8,7 +8,7 @@ use regex::Regex as RegexLib;
 use std::fs;
 use std::collections::HashSet;
 use ngn::ast::{
-    ClosureDef, ClosureValue, EnumDef, FnDef, InterpolationPart, MapKey, MethodMutationType, ModelDef, Moved, Ownership, Pattern, RoleDef, SetValue, Type 
+    ClosureDef, ClosureValue, EnumDef, FnDef, ForIterable, InterpolationPart, MapKey, MethodMutationType, ModelDef, Moved, Ownership, Pattern, RoleDef, SetValue, Type 
 };
 
 use async_recursion::async_recursion;
@@ -1587,6 +1587,17 @@ fn analyze_stmt(stmt: &Stmt, analysis: &mut ThreadVarAnalysis) {
         | Stmt::Until { condition, body }
         | Stmt::UntilOnce { condition, body } => {
             analyze_expr(condition, analysis);
+            for s in body { analyze_stmt(s, analysis); }
+        }
+        Stmt::For { binding: _, index_binding: _, iterable, body } => {
+            match iterable {
+                ForIterable::Collection(expr) => analyze_expr(expr, analysis),
+                ForIterable::CountReceive(channel, count) => {
+                    analyze_expr(channel, analysis);
+                    analyze_expr(count, analysis);
+                }
+                ForIterable::MaybeReceive(channel) => analyze_expr(channel, analysis),
+            }
             for s in body { analyze_stmt(s, analysis); }
         }
         Stmt::FnDef(_) | Stmt::ModelDef(_) | Stmt::RoleDef(_)
@@ -3608,6 +3619,161 @@ async fn execute_stmt(
                     break;
                 }
             }
+            ControlFlow::None
+        }
+        Stmt::For { binding, index_binding, iterable, body } => {
+            match iterable {
+                ForIterable::Collection(expr) => {
+                    let iter_val = eval_expr(expr, ctx).await;
+                    
+                    match iter_val {
+                        Value::Array(items) => {
+                            for (i, item) in items.into_iter().enumerate() {
+                                ctx.env.insert(
+                                    binding.clone(),
+                                    (AssignKind::Var, item, Ownership::Owned, Moved::False, ctx.scope_depth)
+                                );
+                                
+                                if let Some(ref idx_name) = index_binding {
+                                    ctx.env.insert(
+                                        idx_name.clone(),
+                                        (AssignKind::Var, Value::I64(i as i64), Ownership::Owned, Moved::False, ctx.scope_depth)
+                                    );
+                                }
+                                
+                                match execute_block(body, ctx, None).await {
+                                    ControlFlow::Break => break,
+                                    ControlFlow::Next => continue,
+                                    ControlFlow::Return(v) => return ControlFlow::Return(v),
+                                    ControlFlow::None => {}
+                                }
+                            }
+                        }
+                        
+                        Value::String(s) => {
+                            for (i, c) in s.chars().enumerate() {
+                                ctx.env.insert(
+                                    binding.clone(),
+                                    (AssignKind::Var, Value::String(c.to_string()), Ownership::Owned, Moved::False, ctx.scope_depth)
+                                );
+                                
+                                if let Some(ref idx_name) = index_binding {
+                                    ctx.env.insert(
+                                        idx_name.clone(),
+                                        (AssignKind::Var, Value::I64(i as i64), Ownership::Owned, Moved::False, ctx.scope_depth)
+                                    );
+                                }
+                                
+                                match execute_block(body, ctx, None).await {
+                                    ControlFlow::Break => break,
+                                    ControlFlow::Next => continue,
+                                    ControlFlow::Return(v) => return ControlFlow::Return(v),
+                                    ControlFlow::None => {}
+                                }
+                            }
+                        }
+                        
+                        _ => panic!("Cannot iterate over {:?}. Use .each() for maps and sets.", iter_val),
+                    }
+                }
+                
+                ForIterable::CountReceive(channel_expr, count_expr) => {
+                    let channel_val = eval_expr(channel_expr, ctx).await;
+                    let count_val = eval_expr(count_expr, ctx).await;
+                    
+                    let limit = match count_val {
+                        Value::U64(n) => n as i64,
+                        Value::U32(n) => n as i64,
+                        Value::I64(n) if n > 0 => n,
+                        Value::I32(n) if n > 0 => n as i64,
+                        _ => panic!("For loop receive count must be a positive integer"),
+                    };
+                    
+                    if let Value::Channel(_, rx, _) = channel_val {
+                        for i in 0..limit {
+                            let mut rx_guard = rx.lock().await;
+                            match rx_guard.recv().await {
+                                Some(val) => {
+                                    drop(rx_guard);
+                                    
+                                    ctx.env.insert(
+                                        binding.clone(),
+                                        (AssignKind::Var, val, Ownership::Owned, Moved::False, ctx.scope_depth)
+                                    );
+                                    
+                                    if let Some(ref idx_name) = index_binding {
+                                        ctx.env.insert(
+                                            idx_name.clone(),
+                                            (AssignKind::Var, Value::I64(i), Ownership::Owned, Moved::False, ctx.scope_depth)
+                                        );
+                                    }
+                                    
+                                    match execute_block(body, ctx, None).await {
+                                        ControlFlow::Break => break,
+                                        ControlFlow::Next => continue,
+                                        ControlFlow::Return(v) => return ControlFlow::Return(v),
+                                        ControlFlow::None => {}
+                                    }
+                                }
+                                None => panic!("Channel closed before receiving {} messages", limit),
+                            }
+                        }
+                    } else {
+                        panic!("Expected channel for <- receive");
+                    }
+                }
+                
+                ForIterable::MaybeReceive(expr) => {
+                    let channel_val = eval_expr(expr, ctx).await;
+                    
+                    if let Value::Channel(_, rx, _) = channel_val {
+                        let mut i: i64 = 0;
+                        
+                        loop {
+                            let mut rx_guard = rx.lock().await;
+                            match rx_guard.recv().await {
+                                Some(val) => {
+                                    drop(rx_guard);
+                                    
+                                    ctx.env.insert(
+                                        binding.clone(),
+                                        (AssignKind::Var, val, Ownership::Owned, Moved::False, ctx.scope_depth)
+                                    );
+                                    
+                                    if let Some(ref idx_name) = index_binding {
+                                        ctx.env.insert(
+                                            idx_name.clone(),
+                                            (AssignKind::Var, Value::I64(i), Ownership::Owned, Moved::False, ctx.scope_depth)
+                                        );
+                                    }
+                                    
+                                    match execute_block(body, ctx, None).await {
+                                        ControlFlow::Break => break,
+                                        ControlFlow::Next => {
+                                            i += 1;
+                                            continue;
+                                        }
+                                        ControlFlow::Return(v) => return ControlFlow::Return(v),
+                                        ControlFlow::None => {}
+                                    }
+                                    
+                                    i += 1;
+                                }
+                                None => break, // Channel closed, exit cleanly
+                            }
+                        }
+                    } else {
+                        panic!("Expected channel for <-? receive");
+                    }
+                }
+            }
+            
+            // Clean up bindings
+            ctx.env.remove(binding);
+            if let Some(idx_name) = index_binding {
+                ctx.env.remove(idx_name);
+            }
+            
             ControlFlow::None
         }
         Stmt::Match { expr, cases, default, match_type } => {
