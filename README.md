@@ -489,6 +489,21 @@ until once (condition) {
 }
 ```
 
+## `for`
+Run a statement block for each message in a channel or items in a collection.
+
+> Arrays have an `each` method, so you don't need to use a for loop with them unless you want to.
+
+```ngn
+for (msg in <-? channel) {
+  print(msg)
+}
+
+for (item in items) {
+  print(item)
+}
+```
+
 ## `if`
 Run a statement based on if a condition is true.
 
@@ -573,10 +588,10 @@ match any (value) {
 ```
 
 ## `fn` (functions)
-Functions have: 
-- access to globals (imports, statics, models, enums)
-- access to sibling functions
-- no access to outside vars or consts
+Functions create an isolated environment, meaning it can't access values outside of itself. If you need access to a value outside the environment, pass it as a parameter; but there are exceptions, which you can always access:
+
+- globals (imports, statics, models, enums, functions)
+- sibling functions
 
 ### Traditional block, explicit return
 ```ngn
@@ -697,32 +712,13 @@ s.size() // returns the number of values in the set
 
 ## Closures
 Closures are similar to functions, but have important differences:
-- assign them with `const`, then call it like a function.
-- access to vars and consts from its outer environment.
+- can assign them with `const`, then call like a function.
+- access to external values, even ones out side its environment
 - uses pipe syntax to wrap params
 
 > param ownership transfer is the same as functions.
 
-```ngn
-const add = |a, b| a + b
-
-const sum = add(3, 4)
-
-const doThing = || {
-  print("Hello")
-}
-doThing()
-```
-
-Again, closures have access to the state of their surrounding scope.
-```ngn
-const base = 10
-
-const add_base = |a| base + a
-print(add_base(3)) // 13
-```
-
-A variable's value within a closure is kept in sync with the outside environment.
+1. Outside values are kept in sync.
 ```ngn
 var count = 0
 
@@ -736,7 +732,7 @@ count = 100
 print(incrementBy(7)) // 107, not 7
 ```
 
-The closure can even mutate the outside var, if you'd like.
+2. A closure can mutate outside values.
 ```ngn
 var count = 0
 
@@ -753,7 +749,7 @@ incrementBy(7)
 print(count) // 107
 ```
 
-You can mimic classic "close over" behavior by returning a closure from a function.
+3. You can mimic classic "close over" behavior by returning a closure from a function.
 ```ngn
 fn main() {
   var count = 10
@@ -764,16 +760,34 @@ fn main() {
     }
   }
 
-  var add1 = adder(count)
+  const add1 = adder(count)
   // add1 becomes the returned closure from adder,
   // and the value of `c` is locked-in as 10
   // since that was the value of `count` when it was passed
 
   print(add1(3)) // 13
-  count = add1(5) // 15
+  count = add1(5) // sets count to 15
 
-  var add2 = adder(count) // `c` is 15 for this closure 
+  const add2 = adder(count) // param `c` is 15 for this closure 
   print(add2(5)) // 20
+}
+```
+Or, the closed over value can be within the function.
+```ngn
+fn main() {
+  fn make_counter() {
+    var count = 0
+    
+    return || {
+      count += 1
+      print(count)
+    }
+  }
+
+  const counter = make_counter()
+  counter()  // 1
+  counter()  // 2
+  counter()  // 3
 }
 ```
 
@@ -1081,7 +1095,7 @@ fn main() {
 }
 ```
 
-If you're unsure how much data is coming, use a `while` loop, and then close the channel at the end of the input in order to indicate there are no more messages coming. Here, we're simulating "unknown" amounts of data.
+If you're unsure how much data is coming, use a `for` loop, and then close the channel at the end of the input in order to indicate that no more messages can be sent. Below, we're simulating "unknown" amounts of data.
 
 ```ngn
 fn main() {
@@ -1094,17 +1108,8 @@ fn main() {
         c.close()
     })
 
-    // Loop forever until break
-    // because we don't know how much data is coming
-    while (true) {
-        // adding the ? means we might receive data
-        match (<-? c) {
-            Value(msg) => print("Got: {msg}"),
-            Null => {
-                print("Channel closed. Exiting loop.")
-                break
-            },
-        }
+    for (msg in <-? c) {
+      print("Got: {msg}")
     }
     
     print("Done")
