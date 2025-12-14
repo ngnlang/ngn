@@ -358,7 +358,7 @@ impl ExprParser {
                     } else {
                         None
                     };
-                    return Ok(Expr::MakeChannel(type_hint));
+                    return Ok(Expr::CreateChannel(type_hint));
                 }
                 // Used as identifier (e.g., variable named channel)
                 Ok(Expr::Var("channel".to_string()))
@@ -490,7 +490,7 @@ impl ExprParser {
                         self.advance(); // (
                         let initial_value = self.parse_assignment()?;
                         self.expect(Token::RParen)?;
-                        return Ok(Expr::MakeState(Box::new(initial_value)));
+                        return Ok(Expr::CreateState(Box::new(initial_value)));
                     }
                 }
                 

@@ -225,7 +225,7 @@ impl Parser {
         self.skip_newlines();        
         let value = self.parse_expr()?;
 
-        if let Expr::MakeChannel(_) = value {
+        if let Expr::CreateChannel(_) = value {
             if kind != AssignKind::Const {
                 let kind_str = match kind {
                     AssignKind::Var => "var",

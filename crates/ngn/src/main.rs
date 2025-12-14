@@ -887,7 +887,7 @@ fn infer_expr_type(
             }
         },
 
-        Expr::MakeChannel(hint) => {
+        Expr::CreateChannel(hint) => {
             if let Some(t) = hint {
                 Type::Channel(Box::new(t.clone()))
             } else {
@@ -935,7 +935,7 @@ fn infer_expr_type(
                 panic!("Type Error: Right side of <-? must be a channel");
             }
         }
-        Expr::MakeState(expr) => {
+        Expr::CreateState(expr) => {
             // Just infer the type of the inner expression - don't evaluate
             infer_expr_type(expr, env, fns, models, model_methods, enums)
         }
@@ -1050,8 +1050,8 @@ fn get_ownership(e: &Expr, env: &HashMap<String, (AssignKind, Value, Ownership, 
         Expr::InterpolatedString(_) |
         Expr::CreateMap( .. ) |
         Expr::CreateSet( .. ) |
-        Expr::MakeChannel(_) |
-        Expr::MakeState(_) |
+        Expr::CreateChannel(_) |
+        Expr::CreateState(_) |
         Expr::Call { .. } |
         Expr::MethodCall { .. } => Ownership::Owned,
         _ => Ownership::Borrowed,
@@ -1539,7 +1539,7 @@ fn collect_vars_from_expr(e: &Expr, vars: &mut Vec<String>) {
                 }
             }
         }
-        Expr::MakeState(expr) => {
+        Expr::CreateState(expr) => {
             collect_vars_from_expr(expr, vars);
         }
         Expr::CompoundAssign { name, op: _, value } => {
@@ -1650,7 +1650,7 @@ fn analyze_expr(expr: &Expr, analysis: &mut ThreadVarAnalysis) {
             analyze_expr(r, analysis);
         }
         Expr::Not(e) | Expr::Negative(e) | Expr::Receive(e)
-        | Expr::MaybeReceive(e) | Expr::Thread(e) | Expr::MakeState(e) => {
+        | Expr::MaybeReceive(e) | Expr::Thread(e) | Expr::CreateState(e) => {
             analyze_expr(e, analysis);
         }
         Expr::CountReceive(e, _) => analyze_expr(e, analysis),
@@ -1694,7 +1694,7 @@ fn analyze_expr(expr: &Expr, analysis: &mut ThreadVarAnalysis) {
         Expr::I64(_) | Expr::I32(_) | Expr::U64(_) | Expr::U32(_)
         | Expr::F64(_) | Expr::F32(_) | Expr::String(_) | Expr::Bool(_)
         | Expr::Var(_) | Expr::Const(_) | Expr::Static(_) | Expr::Regex(_)
-        | Expr::MakeChannel(_) | Expr::EnumVariant { data: None, .. } 
+        | Expr::CreateChannel(_) | Expr::EnumVariant { data: None, .. } 
         | Expr::Closure(_) => {}
     }
 }
@@ -2066,7 +2066,7 @@ async fn eval_expr(
                 panic!("thread expects a closure");
             }
         }
-        Expr::MakeChannel(hint) => {
+        Expr::CreateChannel(hint) => {
             // We already know hint is Some(...) because of strict mode check in infer_expr_type
             // But let's be safe and unwrap or default (strict mode logic handles panic elsewhere)
             let inner_type = hint.clone().expect("Channel must be typed");
@@ -2163,7 +2163,7 @@ async fn eval_expr(
                 panic!("Runtime Error: Cannot receive from non-channel type");
             }
         }
-        Expr::MakeState(initial_expr) => {
+        Expr::CreateState(initial_expr) => {
             let initial = eval_expr(initial_expr, ctx).await;
             
             let (cmd_tx, mut cmd_rx) = mpsc::channel::<Value>(32);
