@@ -690,7 +690,27 @@ fn infer_expr_type(
                 panic!("Unknown variable: {}", name);
             }
         }
-        Expr::Thread(_) => Type::Void, // must be before Expr::Call
+        Expr::Thread(closure_expr) => { // must be before Expr::Call
+            let inner_type = match closure_expr.as_ref() {
+                Expr::Closure(closure_def) => {
+                    closure_def.return_type.clone().unwrap_or(Type::Void)
+                }
+                Expr::Var(var_name) => {
+                    if let Some((_, value, _, _, _)) = env.get(var_name) {
+                        if let Value::Closure(closure_value) = value {
+                            closure_value.def.return_type.clone().unwrap_or(Type::Void)
+                        } else {
+                            Type::Void
+                        }
+                    } else {
+                        Type::Void
+                    }
+                }
+                _ => Type::Void
+            };
+            
+            Type::Channel(Box::new(inner_type))
+        }
         Expr::Call { name, args } => {
             if name == "sleep" {
                 if args.len() != 1 {
@@ -2019,18 +2039,29 @@ async fn eval_expr(
                     }
                 }
 
+                // Get return type from closure, default to Void
+                let return_type = closure.def.return_type.clone().unwrap_or(Type::Void);
+
+                // Create channel for the thread's result
+                let (tx, rx) = mpsc::channel::<Value>(1);
+                let thread_tx = tx.clone();
+
                 let mut thread_ctx = ctx.fork();
                 let thread_closure = closure.clone();
 
                 tokio::spawn(async move {
-                    call_closure(
+                    let result = call_closure(
                         &thread_closure,
                         &[], // Spawned threads take no arguments
                         &mut thread_ctx,
-                    ).await; 
+                    ).await;
+
+                    // Send the closure's return value to the channel
+                    let _ = thread_tx.send(result).await;
                 });
 
-                Value::Void
+                // Return channel that will receive the thread's result
+                Value::Channel(tx, Arc::new(Mutex::new(rx)), return_type)
             } else {
                 panic!("thread expects a closure");
             }

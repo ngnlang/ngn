@@ -1,4 +1,4 @@
-use crate::ast::{EnumDef, Expr, InterpolationPart};
+use crate::ast::{ClosureDef, EnumDef, Expr, InterpolationPart, Ownership, Type};
 use crate::lexer::{InterpolationToken, Token};
 use crate::utils::{infer_enum_name, parse_type};
 use std::collections::HashMap;
@@ -367,13 +367,13 @@ impl ExprParser {
                 self.advance();
                 if matches!(self.current_token(), Some(Token::LParen)) {
                     self.advance();
-                    let args = self.parse_fn_args()?;
+
+                    let closure_expr = self.parse()?;
+
                     self.expect(Token::RParen)?;
                     
-                    if args.len() == 1 {
-                        return Ok(Expr::Thread(Box::new(args[0].clone())));
-                    }
-                    return Ok(Expr::Call { name: "thread".to_string(), args });
+                    // Return as an ExprStmt wrapping your Expr::Thread
+                    return Ok(Expr::Thread(Box::new(closure_expr)));
                 }
                 Ok(Expr::Var("thread".to_string()))
             }
@@ -560,6 +560,12 @@ impl ExprParser {
                 self.expect(Token::RParen)?;
                 Ok(expr)
             }
+            Some(Token::Or) => {
+                self.advance();
+                let params = self.parse_closure_params()?;
+                self.expect(Token::Or)?;
+                self.parse_closure_body(params)
+            }
             Some(Token::Regex(pattern)) => {
                 self.advance();
                 Ok(Expr::Regex(pattern))
@@ -669,6 +675,98 @@ impl ExprParser {
         let mut parser = ExprParser::new(tokens, enums);
         parser.parse()
             .map_err(|e| format!("Failed to parse interpolated expression: {}", e))
+    }
+
+    fn parse_closure_params(&mut self) -> Result<Vec<(String, Option<Type>, Ownership)>, String> {
+        let mut params = Vec::new();
+        
+        while !matches!(self.current_token(), Some(Token::Or)) {
+            let name = match self.current_token() {
+                Some(Token::Ident(n)) => {
+                    self.advance();
+                    n
+                }
+                _ => return Err("Expected parameter name".to_string()),
+            };
+            
+            let (param_type, ownership) = if matches!(self.current_token(), Some(Token::Colon)) {
+                self.advance();
+                let (ty, own) = parse_type(&mut self.tokens)?;
+                (Some(ty), own)
+            } else {
+                (None, Ownership::Borrowed)
+            };
+            
+            params.push((name, param_type, ownership));
+            
+            if matches!(self.current_token(), Some(Token::Comma)) {
+                self.advance();
+            }
+        }
+        
+        Ok(params)
+    }
+
+    fn parse_closure_body(
+        &mut self,
+        params: Vec<(String, Option<Type>, Ownership)>,
+    ) -> Result<Expr, String> {
+        self.skip_newlines();
+        
+        // Optional return type
+        let return_type = if matches!(self.current_token(), Some(Token::Colon)) {
+            self.advance();
+            let (ty, _) = parse_type(&mut self.tokens)?;
+            Some(ty)
+        } else {
+            None
+        };
+        
+        self.skip_newlines();
+        
+        // Expect opening brace
+        self.expect(Token::LBrace)?;
+        
+        // Collect body tokens until matching RBrace
+        let mut body_tokens = Vec::new();
+        let mut brace_depth = 1;
+        
+        while brace_depth > 0 {
+            match self.current_token() {
+                Some(Token::LBrace) => {
+                    brace_depth += 1;
+                    body_tokens.push(self.advance().unwrap());
+                }
+                Some(Token::RBrace) => {
+                    brace_depth -= 1;
+                    if brace_depth > 0 {
+                        body_tokens.push(self.advance().unwrap());
+                    }
+                    // If brace_depth == 0, exit loop without consuming
+                }
+                None => return Err("Unexpected end of input in closure body".to_string()),
+                _ => {
+                    body_tokens.push(self.advance().unwrap());
+                }
+            }
+        }
+        
+        // Consume the final RBrace
+        self.expect(Token::RBrace)?;
+        
+        // Parse body tokens as statements using Parser
+        let mut parser = crate::parser::Parser::new(
+            body_tokens,
+            self.enums.clone(),
+            String::new(), // No file context needed for closure bodies
+        );
+        let body = parser.parse_program()?;
+        
+        Ok(Expr::Closure(Box::new(ClosureDef {
+            params,
+            body,
+            return_type,
+        })))
     }
 
     fn is_enum_variant(&self, name: &str) -> bool {
