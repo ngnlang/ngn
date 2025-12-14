@@ -225,19 +225,30 @@ impl Parser {
         self.skip_newlines();        
         let value = self.parse_expr()?;
 
-        if let Expr::CreateChannel(_) = value {
-            if kind != AssignKind::Const {
-                let kind_str = match kind {
-                    AssignKind::Var => "var",
-                    AssignKind::Static => "static",
-                    AssignKind::Const => "const", // Unreachable here, but satisfies the match
-                };
-
-                return Err(format!(
-                    "Channels must be declared with 'const'. Found '{}' for variable '{}'",
-                    kind_str, name
-                ));
+        fn kind_str(kind: AssignKind) -> &'static str {
+            match kind {
+                AssignKind::Var => "var",
+                AssignKind::Static => "static",
+                AssignKind::Const => "const",
             }
+        }
+
+        if matches!(
+            value, 
+            Expr::CreateChannel(_) | Expr::Closure(_)
+        ) && kind != AssignKind::Const
+        {
+            let kind_str = kind_str(kind);
+            let expr_type = match value {
+                Expr::CreateChannel(_) => "Channels",
+                Expr::Closure(_) => "Closures",
+                _ => unreachable!(),
+            };
+            return Err(format!(
+                "{} must be declared with 'const'. \
+                Found '{}' for '{}'",
+                expr_type, kind_str, name
+            ));
         }
         
         Ok(Stmt::Assign {
