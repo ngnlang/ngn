@@ -719,77 +719,77 @@ Closures are similar to functions, but have important differences:
 > param ownership transfer is the same as functions.
 
 1. Outside values are kept in sync.
-```ngn
-var count = 0
+    ```ngn
+    var count = 0
 
-const incrementBy = |a: i64| count + a
+    const incrementBy = |a: i64| count + a
 
-print(incrementBy(10)) // 10
+    print(incrementBy(10)) // 10
 
-print(incrementBy(5)) // 5
+    print(incrementBy(5)) // 5
 
-count = 100
-print(incrementBy(7)) // 107, not 7
-```
+    count = 100
+    print(incrementBy(7)) // 107, not 7
+    ```
 
 2. A closure can mutate outside values.
-```ngn
-var count = 0
+    ```ngn
+    var count = 0
 
-const incrementBy = |a: i64| count += a // calculate, mutate, return
+    const incrementBy = |a: i64| count += a // calculate, mutate, return
 
-incrementBy(10) // we're not capturing the returned value here, but you could
-print(count) // 10
+    incrementBy(10) // we're not capturing the returned value here, but you could
+    print(count) // 10
 
-incrementBy(5)
-print(count) // 15
+    incrementBy(5)
+    print(count) // 15
 
-count = 100
-incrementBy(7)
-print(count) // 107
-```
+    count = 100
+    incrementBy(7)
+    print(count) // 107
+    ```
 
 3. You can mimic classic "close over" behavior by returning a closure from a function.
-```ngn
-fn main() {
-  var count = 10
+    ```ngn
+    fn main() {
+      var count = 10
 
-  fn adder(c) {
-    return |m| {
-      return c + m
+      fn adder(c) {
+        return |m| {
+          return c + m
+        }
+      }
+
+      const add_it = adder(count)
+      // add_it becomes the returned closure from adder,
+      // and the value of `c` is locked-in as 10
+      // since that was the value of `count` when it was passed
+
+      print(add_it(3)) // 13
+      count = add_it(5) // sets count to 15
+
+      const add_me = adder(count) // param `c` is 15 for this closure 
+      print(add_me(5)) // 20
     }
-  }
+    ```
+    Or, the closed over value can be within the function.
+    ```ngn
+    fn main() {
+      fn make_counter() {
+        var count = 0
+        
+        return || {
+          count += 1
+          print(count)
+        }
+      }
 
-  const add1 = adder(count)
-  // add1 becomes the returned closure from adder,
-  // and the value of `c` is locked-in as 10
-  // since that was the value of `count` when it was passed
-
-  print(add1(3)) // 13
-  count = add1(5) // sets count to 15
-
-  const add2 = adder(count) // param `c` is 15 for this closure 
-  print(add2(5)) // 20
-}
-```
-Or, the closed over value can be within the function.
-```ngn
-fn main() {
-  fn make_counter() {
-    var count = 0
-    
-    return || {
-      count += 1
-      print(count)
+      const counter = make_counter()
+      counter()  // 1
+      counter()  // 2
+      counter()  // 3
     }
-  }
-
-  const counter = make_counter()
-  counter()  // 1
-  counter()  // 2
-  counter()  // 3
-}
-```
+    ```
 
 ## Objects and Composability
 You can create typed objects using models, then create a new instance of a model.
@@ -837,17 +837,17 @@ extend Dog with Animal {
 
 Now, putting it all together:
 ```ngn
-const dog = Dog {
+const my_dog = Dog {
   name: "Apollo",
   breed: "Labrador"
 }
-print(dog) // { name: Apollo, breed: Labrador }
-print(dog.name) // Apollo
+print(my_dog) // { name: Apollo, breed: Labrador }
+print(my_dog.name) // Apollo
 
-const fetched = dog.fetch("stick")
+const fetched = my_dog.fetch("stick")
 print(fetched) // either true or false
 
-dog.speak() // Woof, woof!
+my_dog.speak() // Woof, woof!
 ```
 
 ### Alternative for instantiating models
@@ -911,7 +911,7 @@ Send and receive data.
 
 ### <- syntax
 Use `<-` to both send and receive messages. Let's assume we have a channel called `line`.
-- `line <- "hello"` would send a message to the channel.
+- `line <- "hello"` would send a string message to the channel.
 - `<- line` would cause the program to stop and wait for a single message.
 
 Regarding the last point: if you had multiple things sending messages, you have the following options:
@@ -939,7 +939,7 @@ fn main() {
     // Send a message
     c <- "first"
 
-    // Close the channel
+    // Optionally close the channel for this example
     c.close()
 
     // Assign channel output to a variable
@@ -956,10 +956,9 @@ You can send a closure to a channel:
 ```ngn
 fn main() {
     const job_queue = channel(): fn
-    const done = channel(): bool
 
     // (See next section for details on threads)
-    thread(|| {
+    const done = thread(|| {
         print("Worker started")
         while (true) {
             match (<-? job_queue) {
@@ -969,7 +968,7 @@ fn main() {
         }
         print("Worker finished")
         
-        done <- true
+        return
     })
 
     job_queue <- |n: i64| { print("Task A executing with {n}") }
@@ -1017,7 +1016,7 @@ fn main() {
 ```
 
 ## Threads - Concurrency and Parallelism
-Allows you to do async work while, optionally, continuing to do work in the main thread. Threads take a closure with no parameters, but have access to their surrounding scope.
+Allows you to do work while, optionally, continuing to do work in the main thread. Threads take a closure with no parameters, but have access to their surrounding scope. They also return a channel, if that fits your usecase.
 
 Standalone threads are risky because as soon as the main program ends, all unfinished threads are killed. In the below example, `setData(value)` may never finish.
 ```ngn
@@ -1032,15 +1031,15 @@ fn main() {
     print(value)
 }
 ```
-In such cases, use a channel to await the thread.
+In such cases, use the returned channel to await the thread.
 ```ngn
 fn main() {
     const value = 100
-    const done = channel(): bool
 
-    thread(|| {
+    // "done" is a channel we can use for signaling
+    const done = thread(|| {
         setData(value)
-        done <- true
+        return true // returning from a thread sends that data to the created channel
     })
 
     // Continue doing other work while the thread runs
@@ -1050,37 +1049,27 @@ fn main() {
     <- done
 }
 ```
-Threads may run in parallel or sequentially unordered, but you can control the order in which you wait on their results.
+Threads may run in parallel or sequentially but unordered; however, you can control the order in which you wait on their results.
 ```ngn
 fn main() {
     print("1. Main started")
     
-    // Create a channel for each thread
-    const c = channel(): Result<string, string>
-    const d = channel(): Result<string, string>
-    
     // Create a thread, to do some async work
-    thread(|| {
+    const c = thread(|| {
         print("  2c. Thread c started (sleeping...)")
         sleep(2000)
         
         print("  3c. Thread c sending message")
-        const result = Ok("Hello from channel c!")
-        c <- result
-
-        print("  4c. Thread c finished")
+        return Ok("Hello from channel c!")
     })
 
     // Create a thread, to do some async work
-    thread(|| {
+    const d = thread(|| {
         print("  2d. Thread d started (sleeping...)")
         sleep(2000)
         
         print("  3d. Thread d sending message")
-
-        d <- Error("Oh this is bad channel d!")
-
-        print("  4d. Thread d finished")
+        return Error("Oh this is bad channel d!")
     })
     
     print("5. Main doing other work while thread runs...")
@@ -1099,6 +1088,9 @@ If you're unsure how much data is coming, use a `for` loop, and then close the c
 
 ```ngn
 fn main() {
+    // In this example, we can't use the thread's returned channel,
+    // because we need to close the channel from within the thread
+    // in order to signal the `for` loop to stop.
     const c = channel(): string
 
     thread(|| {
@@ -1125,7 +1117,7 @@ fn main() {
     
     thread(|| {
         // Pass a closure that mutates the data.
-        // The closure receives the current value of the state variable via a param.
+        // The closure receives the current value of `counter` via a param.
         counter.update(|n| n + 10) // implicit return used
         print("added 10")
         done <- true
@@ -1170,6 +1162,7 @@ fn main() {
   const tasks = [task1, task2, task3]
 
   // Spawn threads
+  // Optional index value as the second closure param
   tasks.each(|task, i| {
     thread(|| {
       const result = task()
