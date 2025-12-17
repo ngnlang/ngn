@@ -1,4 +1,5 @@
-use crate::ast::{EnumDef, Ownership, Type};
+use crate::ast::{EnumDef};
+use crate::types::{Ownership, Type};
 use std::{collections::HashMap, iter::Peekable};
 use crate::lexer::Token;
 

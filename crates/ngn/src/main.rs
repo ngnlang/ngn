@@ -7,14 +7,19 @@ use regex::Regex as RegexLib;
 
 use std::fs;
 use std::collections::HashSet;
+use std::collections::HashMap;
 use ngn::ast::{
-    ClosureDef, ClosureValue, EnumDef, FnDef, ForIterable, InterpolationPart, MapKey, MethodMutationType, ModelDef, Moved, Ownership, Pattern, RoleDef, SetValue, Type 
+    ClosureDef, EnumDef, Expr, FnDef, ForIterable, InterpolationPart, MatchType, MethodMutationType, ModelDef, Pattern, RoleDef, Stmt,
 };
+use ngn::value::{ClosureValue, ControlFlow, MapKey, SetValue, Value};
+use ngn::types::{AssignKind, Moved, Ownership, Type, is_numeric_type, types_compatible};
 
 use async_recursion::async_recursion;
 use tokio::sync::mpsc;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+
+use ngn::semantic::Analyzer;
 
 #[tokio::main]
 async fn main() {
@@ -26,15 +31,19 @@ async fn main() {
     let mut parser = Parser::new(tokens, HashMap::new(), file_path.to_string());
 
     match parser.parse_program() {
-        Ok(ast) => run(&ast, file_path).await,
+        Ok(ast) => {
+            let mut analyzer = Analyzer::new(file_path.to_string());
+            if let Err(errors) = analyzer.analyze(&ast) {
+                for e in errors {
+                    eprintln!("Analysis warning: {}", e);
+                    // std::process::exit(1); - eventually stop
+                }
+            };
+            run(&ast, file_path).await;
+        }
         Err(e) => eprintln!("Parse error: {}", e),
     }
 }
-
-use std::collections::HashMap;
-use ngn::ast::{Expr, Stmt};
-
-use ngn::ast::{AssignKind, ControlFlow, MatchType, Value};
 
 fn is_valid_type(t: &Type, models: &HashMap<String, ModelDef>, enums: &HashMap<String, EnumDef>) -> bool {
     match t {
@@ -50,6 +59,8 @@ fn is_valid_type(t: &Type, models: &HashMap<String, ModelDef>, enums: &HashMap<S
             is_valid_type(val_type, models, enums)
         }
         Type::Channel(inner) => is_valid_type(inner, models, enums),
+        Type::StateActor(inner) => is_valid_type(inner, models, enums),
+        Type::Namespace(_) => true,
         Type::Model(name) => models.contains_key(name),
         Type::Enum(name, _) => enums.contains_key(name),
         Type::Generic(_) => false, // Generics aren't valid unless resolved
@@ -101,6 +112,8 @@ fn format_type_for_error(t: &Type) -> String {
             }
         }
         Type::Channel(inner) => format!("channel<{}>", format_type_for_error(inner)),
+        Type::StateActor(inner) => format!("state<{}>", format_type_for_error(inner)),
+        Type::Namespace(name) => format!("namespace({})", name),
         Type::Map(key_type, val_type) => {
             format!("map<{}, {}>", 
                 format_type_for_error(key_type), 
@@ -315,10 +328,6 @@ fn is_literal(e: &Expr) -> bool {
         Expr::Array(_) |
         Expr::Closure(_)
     )
-}
-
-fn is_numeric_type(t: &Type) -> bool {
-    matches!(t, Type::I64 | Type::I32 | Type::U64 | Type::U32 | Type::F64 | Type::F32)
 }
 
 fn to_usize(v: &Value) -> Result<usize, String> {
@@ -776,9 +785,9 @@ fn infer_expr_type(
                         "read" | "write" | "update" => return inner_type.clone(),
                         _ => panic!("Unknown state method: {}", method),
                     }
-                } else if let Some((_, Value::Channel(_, _, inner_type), _, _, _)) = env.get(var_name) {
+                } else if let Some((_, Value::Channel(_, _, _), _, _, _)) = env.get(var_name) {
                     match method.as_str() {
-                        "close" => return inner_type.clone(),
+                        "close" => return Type::Void,
                         _ => panic!("Unknown channel method: {}", method),
                     }
                 }
@@ -981,52 +990,6 @@ fn infer_expr_type(
                 Type::Set(Box::new(val_type))
             }
         }
-    }
-}
-
-fn types_compatible(expected: &Type, actual: &Type) -> bool {
-    if let Type::Generic(name) = actual {
-        if name == "_" { return true; }
-    }
-    if let Type::Generic(name) = expected {
-        if name == "_" { return true; }
-    }
-    match (expected, actual) {
-        (Type::I64, Type::I64) => true,
-        (Type::I32, Type::I32) => true,
-        (Type::U64, Type::U64) => true,
-        (Type::U32, Type::U32) => true,
-        (Type::F64, Type::F64) => true,
-        (Type::F32, Type::F32) => true,
-        (Type::Str, Type::Str) => true,
-        (Type::String, Type::String) => true,
-        (Type::Bool, Type::Bool) => true,
-        (Type::Array(e1), Type::Array(e2)) => types_compatible(e1, e2),
-        (Type::Channel(t1), Type::Channel(t2)) => types_compatible(t1, t2),
-        (Type::Function, Type::Function) => true,
-        (Type::Void, Type::Void) => true,
-        (Type::Model(a), Type::Model(b)) => a == b,
-        (Type::Regex, Type::Regex) => true,
-        (Type::Enum(name1, args1), Type::Enum(name2, args2)) => {
-            // Both must be the same enum
-            if name1 != name2 {
-                return false;
-            }
-
-            // For built-in enums, allow empty args to match anything
-            if (name1 == "Maybe" || name1 == "Result") && args2.is_empty() {
-                return true;
-            }
-
-            // Check all type arguments match
-            if args1.len() != args2.len() {
-                return false;
-            }
-
-            // Check all type arguments match
-            args1.iter().zip(args2.iter()).all(|(a, b)| types_compatible(a, b))
-        }
-        _ => false,
     }
 }
 

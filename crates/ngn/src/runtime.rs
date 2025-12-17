@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use crate::{ast::{AssignKind, EnumDef, FnDef, ModelDef, Moved, Ownership, RoleDef, Stmt, Value}, error::RuntimeError};
+use crate::{ast::{EnumDef, FnDef, ModelDef, RoleDef, Stmt}, error::RuntimeError};
+use crate::{types::{AssignKind, Moved, Ownership}};
+use crate::{value::Value};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ImportKind {

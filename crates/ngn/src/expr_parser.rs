@@ -1,4 +1,5 @@
-use crate::ast::{ClosureDef, EnumDef, Expr, InterpolationPart, Ownership, Type};
+use crate::ast::{ClosureDef, EnumDef, Expr, InterpolationPart};
+use crate::types::{Ownership, Type};
 use crate::lexer::{InterpolationToken, Token};
 use crate::utils::{infer_enum_name, parse_type};
 use std::collections::HashMap;

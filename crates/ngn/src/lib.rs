@@ -6,4 +6,7 @@ pub mod lexer;
 pub use lexer::Token;
 pub mod parser;
 pub mod toolbox;
+pub mod types;
 pub mod utils;
+pub mod value;
+pub mod semantic;

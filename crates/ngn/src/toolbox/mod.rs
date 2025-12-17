@@ -2,7 +2,7 @@ pub mod math;
 
 use std::collections::HashMap;
 
-use crate::{ast::Value, error::RuntimeError};
+use crate::{value::Value, error::RuntimeError};
 
 pub type BuiltinFn = fn(Vec<Value>) -> Result<Value, RuntimeError>;
 
