@@ -21,27 +21,61 @@ use tokio::sync::Mutex;
 
 use ngn::semantic::Analyzer;
 
+use clap::Parser as ClapParser;
+use std::path::PathBuf;
+
+#[derive(ClapParser, Debug)]
+#[command(author, version, about = "The ngn runtime", long_about = None)]
+struct Cli {
+    /// The path to the source file to run
+    #[arg(value_name = "FILE")]
+    file_path: Option<PathBuf>,
+
+    /// Optional: Output debug info (AST)
+    #[arg(short, long)]
+    debug: bool,
+}
+
 #[tokio::main]
 async fn main() {
-    let file_path = "closeoverbug.ngn";
-    let source = fs::read_to_string(file_path)
+    let cli = Cli::parse();
+
+    let file_path_buf = match cli.file_path {
+        Some(path) => path,
+        None => {
+            eprintln!("Usage: ngn <file_path>");
+            // TODO: Ideally, start a REPL here if no file is provided
+            std::process::exit(1);
+        }
+    };
+
+    let file_path = file_path_buf.to_string_lossy().to_string();
+
+    let source = fs::read_to_string(&file_path)
         .expect("Failed to read ngn file");
 
     let tokens = ngn::lexer::tokenize(&source);
-    let mut parser = Parser::new(tokens, HashMap::new(), file_path.to_string());
+    let mut parser = Parser::new(tokens, HashMap::new(), file_path.clone());
 
     match parser.parse_program() {
         Ok(ast) => {
-            let mut analyzer = Analyzer::new(file_path.to_string());
+            if cli.debug {
+                eprintln!("{:#?}", ast);
+            }
+
+            let mut analyzer = Analyzer::new(file_path.clone());
             if let Err(errors) = analyzer.analyze(&ast) {
                 for e in errors {
                     eprintln!("Analysis warning: {}", e);
-                    // std::process::exit(1); - eventually stop
+                    std::process::exit(1);
                 }
             };
-            run(&ast, file_path).await;
+            run(&ast, &file_path).await;
         }
-        Err(e) => eprintln!("Parse error: {}", e),
+        Err(e) => {
+            eprintln!("Parse error: {}", e);
+            std::process::exit(1);
+        }
     }
 }
 
@@ -3557,11 +3591,11 @@ async fn load_module(
     module_cache: &mut HashMap<String, ModuleExports>,
     toolbox: &Toolbox,
 ) -> ModuleExports {
-    if let Some(exports) = module_cache.get(path) {
+    let file_path = resolve_module_path(path, current_file);
+
+    if let Some(exports) = module_cache.get(&file_path) {
         return exports.clone();
     }
-    
-    let file_path = resolve_module_path(path, current_file);
 
     let source = std::fs::read_to_string(&file_path)
         .unwrap_or_else(|_| panic!("Could not read module '{}'", file_path.clone()));
@@ -3574,11 +3608,11 @@ async fn load_module(
         .parse_program()
         .unwrap_or_else(|e| panic!("Parse error in '{}': {}", file_path, e));
     
-    module_cache.insert(path.to_string(), ModuleExports::default());
+    module_cache.insert(file_path.clone(), ModuleExports::default());
     
     let exports = Box::pin(run_module(&stmts, &file_path, module_cache, toolbox, false)).await;
     
-    module_cache.insert(path.to_string(), exports.clone());
+    module_cache.insert(file_path.clone(), exports.clone());
     
     exports
 }

@@ -176,7 +176,16 @@ fn normalize_path(path: &std::path::Path) -> String {
     for component in path.components() {
         match component {
             std::path::Component::ParentDir => {
-                components.pop();
+                match components.last() {
+                    Some(std::path::Component::Normal(_)) => {
+                        // If we are inside a folder, go back up
+                        components.pop();
+                    }
+                    _ => {
+                        // If stack is empty, or we already have '..', keep the '..'
+                        components.push(component);
+                    }
+                }
             }
             std::path::Component::CurDir => {}
             c => components.push(c),
