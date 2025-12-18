@@ -102,7 +102,31 @@ where
             }
             Type::Channel(Box::new(type_args[0].clone()))
         },
-        "fn" => Type::Function,
+        "fn" => {
+            // Syntax: fn<(arg1, arg2) -> return_type> or fn<() -> return_type>
+            // For simplicity, also allow: fn<return_type> for () -> T
+            
+            if type_args.is_empty() {
+                // Bare `fn` with no type info
+                Type::Function {
+                    params: vec![],
+                    return_type: Box::new(Type::Void),
+                }
+            } else if type_args.len() == 1 {
+                // fn<return_type> means () -> return_type
+                Type::Function {
+                    params: vec![],
+                    return_type: Box::new(type_args[0].clone()),
+                }
+            } else {
+                // fn<arg1, arg2, ..., return_type> - last is return, rest are params
+                let (param_types, return_type) = type_args.split_at(type_args.len() - 1);
+                Type::Function {
+                    params: param_types.to_vec(),
+                    return_type: Box::new(return_type[0].clone()),
+                }
+            }
+        },
         "void" => Type::Void,
         "Result" | "Maybe" => {
             Type::Enum(type_name.to_string(), type_args)

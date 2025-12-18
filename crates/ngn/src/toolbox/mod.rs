@@ -1,4 +1,5 @@
 pub mod math;
+pub mod signatures;
 
 use std::collections::HashMap;
 

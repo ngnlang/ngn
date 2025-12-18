@@ -49,7 +49,12 @@ fn is_valid_type(t: &Type, models: &HashMap<String, ModelDef>, enums: &HashMap<S
     match t {
         Type::I64 | Type::I32 | Type::U64 | Type::U32 
         | Type::F64 | Type::F32 | Type::Str | Type::Bool 
-        | Type::Void | Type::Function | Type::Regex | Type::String => true,
+        | Type::Void | Type::Regex | Type::String => true,
+
+        Type::Function { params, return_type } => {
+            params.iter().all(|p| is_valid_type(p, models, enums))
+                && is_valid_type(return_type, models, enums)
+        }
         
         Type::Array(inner) => is_valid_type(inner, models, enums),
         Type::Map(key_type, val_type) => {
@@ -94,7 +99,13 @@ fn format_type_for_error(t: &Type) -> String {
                 .join(", ");
             format!("{{ {} }}", fields)
         }
-        Type::Function => "function".to_string(),
+        Type::Function { params, return_type } => {
+            let params_str = params.iter()
+                .map(|p| format_type_for_error(p))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("fn<({}) -> {}>", params_str, format_type_for_error(return_type))
+        }
         Type::Void => "void".to_string(),
         Type::Model(name) => name.clone(),
         Type::Regex => "regex".to_string(),
@@ -447,20 +458,6 @@ fn value_to_set_value(v: &Value) -> SetValue {
     }
 }
 
-fn set_value_to_value(sv: &SetValue) -> Value {
-    match sv {
-        SetValue::String(s) => Value::String(s.clone()),
-        SetValue::I64(n) => Value::I64(*n),
-        SetValue::I32(n) => Value::I32(*n),
-        SetValue::U64(n) => Value::U64(*n),
-        SetValue::U32(n) => Value::U32(*n),
-        SetValue::Bool(b) => Value::Bool(*b),
-        SetValue::EnumValue(enum_name, variant) => {
-            Value::EnumValue(enum_name.clone(), variant.clone(), None)
-        }
-    }
-}
-
 /// For chained method calls, recurse until you get to the var
 fn find_root_var(expr: &Expr) -> Option<String> {
     match expr {
@@ -482,22 +479,24 @@ fn infer_value_type(v: &Value) -> Type {
         Value::Bool(_) => Type::Bool,
         Value::Array(arr) => {
             if arr.is_empty() {
-                Type::Array(Box::new(Type::I64))
+                Type::Array(Box::new(Type::I64)) // default
             } else {
-                let elem_type = infer_value_type(&arr[0]);
-                
-                for elem in arr.iter().skip(1) {
-                    let elem_val_type = infer_value_type(elem);
-                    if !types_compatible(&elem_type, &elem_val_type) {
-                        panic!("Type error: mixed types in array {:?}", arr);
-                    }
-                }
-                
-                Type::Array(Box::new(elem_type))
+                Type::Array(Box::new(infer_value_type(&arr[0])))
             }
-        }
-        Value::Function(_) => Type::Function,
-        Value::Closure(_) => Type::Function,
+        },
+        Value::Function(fn_def) => Type::Function {
+            params: fn_def.params.iter()
+                .map(|(_, ty, _)| ty.clone().unwrap_or(Type::Void))
+                .collect(),
+            return_type: Box::new(fn_def.return_type.clone().unwrap_or(Type::Void)),
+        },
+
+        Value::Closure(closure) => Type::Function {
+            params: closure.def.params.iter()
+                .map(|(_, ty, _)| ty.clone().unwrap_or(Type::Void))
+                .collect(),
+            return_type: Box::new(closure.def.return_type.clone().unwrap_or(Type::Void)),
+        },
         Value::Void => Type::Void,
         Value::Object(model_name, _) => Type::Model(model_name.clone()),
         Value::Regex(_) => Type::Regex,
@@ -535,461 +534,13 @@ fn infer_value_type(v: &Value) -> Type {
                 }
             }
         },
-        Value::Channel(_, _, inner_type) => {
-            // Runtime channels are type-erased (they hold `Value`), 
-            // so we can't know the strict inner type without storing extra metadata.
-            // For now, return a generic channel.
-            Type::Channel(Box::new(inner_type.clone()))
+        Value::Channel(_, _, inner_type) => Type::Channel(Box::new(inner_type.clone())),
+        Value::StateActor(_, _, inner_type) => Type::StateActor(Box::new(inner_type.clone())),
+        Value::Namespace(name) => Type::Namespace(name.clone()),
+        Value::Map(_, key_type, val_type) => {
+            Type::Map(Box::new(key_type.clone()), Box::new(val_type.clone()))
         }
-        Value::StateActor(_, _, inner_type) => inner_type.clone(),
-        Value::Namespace(_) => Type::Void,
-        Value::Map(map, key_type, val_type) => {
-            if map.is_empty() {
-                // Empty map
-                Type::Map(Box::new(key_type.clone()), Box::new(val_type.clone()))
-            } else {
-                // Infer from first entry
-                let (first_key, first_val) = map.iter().next().unwrap();
-                
-                let key_type = match first_key {
-                    MapKey::String(_) => Type::Str,
-                    MapKey::I64(_) => Type::I64,
-                    MapKey::I32(_) => Type::I32,
-                    MapKey::U64(_) => Type::U64,
-                    MapKey::U32(_) => Type::U32,
-                    MapKey::Bool(_) => Type::Bool,
-                    MapKey::Enum(enum_name, _) => Type::Enum(enum_name.clone(), vec![]),
-                };
-                
-                let val_type = infer_value_type(first_val);
-                
-                // Validate all entries match
-                for (key, val) in map.iter() {
-                    let k_type = match key {
-                        MapKey::String(_) => Type::Str,
-                        MapKey::I64(_) => Type::I64,
-                        MapKey::I32(_) => Type::I32,
-                        MapKey::U64(_) => Type::U64,
-                        MapKey::U32(_) => Type::U32,
-                        MapKey::Bool(_) => Type::Bool,
-                        MapKey::Enum(enum_name, _) => Type::Enum(enum_name.clone(), vec![]),
-                    };
-                    let v_type = infer_value_type(val);
-                    
-                    if !types_compatible(&key_type, &k_type) || !types_compatible(&val_type, &v_type) {
-                        panic!("Type error: mixed types in map");
-                    }
-                }
-                
-                Type::Map(Box::new(key_type), Box::new(val_type))
-            }
-        },
-        Value::Set(set, val_type) => {
-            if set.is_empty() {
-                // Empty set
-                Type::Set(Box::new(val_type.clone()))
-            } else {
-                // Infer from first entry
-                let first_val = set.iter().next().unwrap();
-                
-                let val_type = infer_value_type(&set_value_to_value(first_val));
-                
-                // Validate all entries match
-                for val in set.iter() {
-                    let v_type = infer_value_type(&set_value_to_value(val));
-                    
-                    if !types_compatible(&val_type, &v_type) {
-                        panic!("Type error: mixed types in set");
-                    }
-                }
-                
-                Type::Set(Box::new(val_type))
-            }
-        }
-    }
-}
-
-fn infer_expr_type(
-    e: &Expr,
-    env: &HashMap<String, (AssignKind, Value, Ownership, Moved, usize)>,
-    fns: &HashMap<String, Callable>,
-    models: &HashMap<String, ModelDef>,
-    model_methods: &mut HashMap<(String, String), FnDef>,
-    enums: &HashMap<String, EnumDef>,
-) -> Type {
-    match e {
-        Expr::I64(_) => Type::I64,
-        Expr::I32(_) => Type::I32,
-        Expr::U64(_) => Type::U64,
-        Expr::U32(_) => Type::U32,
-        Expr::F64(_) => Type::F64,
-        Expr::F32(_) => Type::F32,
-        Expr::String(_) => Type::Str,
-        Expr::InterpolatedString(_) => Type::String,
-        Expr::Bool(_) => Type::Bool,
-        Expr::Array(exprs) => {
-            if exprs.is_empty() {
-                Type::Array(Box::new(Type::I64))
-            } else {
-                let elem_type = infer_expr_type(&exprs[0], env, fns, models, model_methods, enums);
-                for expr in exprs.iter().skip(1) {
-                    let other_type = infer_expr_type(expr, env, fns, models, model_methods, enums);
-                    if !types_compatible(&elem_type, &other_type) {
-                        panic!("Array type error: mixed types");
-                    }
-                }
-                Type::Array(Box::new(elem_type))
-            }
-        }
-        Expr::Add(a, b) => {
-            let left = infer_expr_type(a, env, fns, models, model_methods, enums);
-            let right = infer_expr_type(b, env, fns, models, model_methods, enums);
-            if is_numeric_type(&left) && is_numeric_type(&right) {
-                // Both numeric—return left type (they must match due to strict typing)
-                if left == right {
-                    left
-                } else {
-                    panic!("Type error: cannot add {:?} and {:?}", left, right);
-                }
-            } else if matches!(left, Type::String) && matches!(right, Type::String) {
-                Type::String
-            } else if matches!(left, Type::Str) && matches!(right, Type::Str) {
-                Type::String
-            } else {
-                panic!("Type error: cannot add {:?} and {:?}", left, right);
-            }
-        }
-        Expr::Subtract(a, b) | Expr::Multiply(a, b) | Expr::Divide(a, b) | Expr::Modulo(a, b) => {
-            let left = infer_expr_type(a, env, fns, models, model_methods, enums);
-            let right = infer_expr_type(b, env, fns, models, model_methods, enums);
-            
-            if !is_numeric_type(&left) || !is_numeric_type(&right) || left != right {
-                panic!("Type error: arithmetic requires matching numeric types");
-            }
-            left
-        }
-        Expr::Power(a, b) => {
-            let left = infer_expr_type(a, env, fns, models, model_methods, enums);
-            let right = infer_expr_type(b, env, fns, models, model_methods, enums);
-            
-            if !is_numeric_type(&left) || !is_numeric_type(&right) || left != right {
-                panic!("Type error: power requires matching numeric types");
-            }
-            left
-        }
-
-        Expr::Negative(e) => {
-            let t = infer_expr_type(e, env, fns, models, model_methods, enums);
-            if !is_numeric_type(&t) {
-                panic!("Type error: cannot negate non-number");
-            }
-            t
-        }
-        Expr::Equal(_, _) | Expr::NotEqual(_, _) | Expr::LessThan(_, _) | 
-        Expr::LessThanOrEqual(_, _) | Expr::GreaterThan(_, _) | Expr::GreaterThanOrEqual(_, _) => {
-            Type::Bool
-        }
-        Expr::Not(_) => Type::Bool,
-        Expr::Var(name) | Expr::Const(name) | Expr::Static(name) => {
-            if let Some((_, v, _ownership, _moved, _)) = env.get(name) {
-                infer_value_type(v)
-            } else if fns.contains_key(name) {
-                Type::Function
-            } else {
-                panic!("Unknown variable: {}", name);
-            }
-        }
-        Expr::Thread(closure_expr) => { // must be before Expr::Call
-            let inner_type = match closure_expr.as_ref() {
-                Expr::Closure(closure_def) => {
-                    closure_def.return_type.clone().unwrap_or(Type::Void)
-                }
-                Expr::Var(var_name) => {
-                    if let Some((_, value, _, _, _)) = env.get(var_name) {
-                        if let Value::Closure(closure_value) = value {
-                            closure_value.def.return_type.clone().unwrap_or(Type::Void)
-                        } else {
-                            Type::Void
-                        }
-                    } else {
-                        Type::Void
-                    }
-                }
-                _ => Type::Void
-            };
-            
-            Type::Channel(Box::new(inner_type))
-        }
-        Expr::Call { name, args } => {
-            if name == "sleep" {
-                if args.len() != 1 {
-                    panic!("Type Error: sleep() takes exactly 1 argument");
-                }
-                let arg_type = infer_expr_type(&args[0], env, fns, models, model_methods, enums);
-                if !matches!(arg_type, Type::I64 | Type::I32 | Type::U64 | Type::U32) {
-                    panic!("Type Error: sleep() expects a number, got {:?}", arg_type);
-                }
-                return Type::Void;
-            }
-
-            // Check if it's a function value in the environment
-            if let Some((_, Value::Function(fn_def), _ownership, _moved, _)) = env.get(name) {
-                fn_def.return_type.clone().unwrap_or(Type::Void)
-            } else if let Some((_, Value::Closure(closure), _ownership, _moved, _)) = env.get(name) {
-                // Closure return type
-                closure.def.return_type.clone().unwrap_or(Type::Void)
-            } else if let Some(Callable::UserDefined(fn_def)) = fns.get(name) {
-                fn_def.return_type.clone().unwrap_or(Type::Void)
-            } else if let Some(Callable::Builtin(_)) = fns.get(name) {
-                // Builtins don't have return_type metadata—decide what to do
-                Type::Void  // or panic, or store metadata separately
-            } else {
-                panic!("Unknown function: {}", name);
-            }
-        }
-        Expr::Assign { value, .. } => infer_expr_type(value, env, fns, models, model_methods, enums),
-        Expr::CompoundAssign { value, .. } => infer_expr_type(value, env, fns, models, model_methods, enums),
-        Expr::Regex(_) => Type::Regex,
-        Expr::ModelInstance { name, .. } => Type::Model(name.clone()),
-        Expr::FieldAccess { object, field, value: _ } => {
-            let obj_type = infer_expr_type(object, env, fns, models, model_methods, enums);
-            match obj_type {
-                Type::Model(model_name) => {
-                    if let Some(model_def) = models.get(&model_name) {
-                        // Find field in model definition
-                        model_def.fields.iter()
-                            .find(|(name, _)| name == field)
-                            .map(|(_, field_type)| field_type.clone())
-                            .unwrap_or_else(|| panic!("Field '{}' not found on model '{}'", field, model_name))
-                    } else {
-                        panic!("Unknown model: {}", model_name);
-                    }
-                }
-                _ => panic!("Cannot access field on type {:?}", obj_type),
-            }
-        }
-        Expr::MethodCall { object, method, args: _ } => {
-            // Handle StateActor and Channel methods, as well as Namespace function call
-            if let Expr::Var(var_name) = object.as_ref() {
-                if let Some((_, Value::Namespace(ns), _, _, _)) = env.get(var_name) {
-                    let qualified_name = format!("{}.{}", ns, method);
-                    if let Some(Callable::UserDefined(fn_def)) = fns.get(&qualified_name) {
-                        return fn_def.return_type.clone().unwrap_or(Type::Void);
-                    } else if let Some(Callable::Builtin(_)) = fns.get(&qualified_name) {
-                        // Builtins don't carry return type metadata
-                        return Type::Void;
-                    }
-                }
-                if let Some((_, Value::StateActor(_, _, inner_type), _, _, _)) = env.get(var_name) {
-                    match method.as_str() {
-                        "read" | "write" | "update" => return inner_type.clone(),
-                        _ => panic!("Unknown state method: {}", method),
-                    }
-                } else if let Some((_, Value::Channel(_, _, _), _, _, _)) = env.get(var_name) {
-                    match method.as_str() {
-                        "close" => return Type::Void,
-                        _ => panic!("Unknown channel method: {}", method),
-                    }
-                }
-            }
-
-            // Check for static method on model
-            if let Expr::Var(model_name) = &**object {
-                if models.contains_key(model_name) {
-                    if let Some(method_def) = model_methods.get(&(model_name.clone(), method.clone())) {
-                        return method_def.return_type.clone().unwrap_or(Type::Void);
-                    }
-                }
-            }
-
-            let obj_type = infer_expr_type(object, env, fns, models, model_methods, enums);
-            match obj_type {
-                Type::I64 | Type::I32 | Type::U64 | Type::U32 | Type::F64 | Type::F32 => {
-                    match method.as_str() {
-                        _ => panic!("Unknown number method: {}", method),
-                    }
-                }
-                Type::Array(inner_type) => {
-                    match method.as_str() {
-                        "push" | "size" | "splice" => Type::I64,
-                        "pull" => *inner_type,
-                        "slice" | "copy" => Type::Array(inner_type),
-                        "each" => Type::Void,
-                        _ => panic!("Unknown array method: {}", method),
-                    }
-                }
-                Type::Str | Type::String => {
-                    match method.as_str() {
-                        "includes" | "starts" | "ends" => Type::Bool,
-                        "replace" | "slice" | "copy" | "upper" | "lower" | "trim" | "repeat" => Type::String,
-                        "split" => Type::Array(Box::new(Type::String)),
-                        "index" | "length" => Type::I64,
-                        _ => panic!("Unknown string method: {}", method),
-                    }
-                }
-                Type::Map(key_type, val_type) => {
-                    match method.as_str() {
-                        "set" => Type::Map(key_type.clone(), val_type.clone()),
-                        "get" => (*val_type).clone(),
-                        "has" => Type::Bool,
-                        "remove" => (*val_type).clone(),
-                        "size" => Type::I64,
-                        _ => panic!("Unknown map method: {}", method),
-                    }
-                }
-                Type::Set(val_type) => {
-                    match method.as_str() {
-                        "add" => Type::Set(val_type.clone()),
-                        "get" => (*val_type).clone(),
-                        "has" => Type::Bool,
-                        "remove" => (*val_type).clone(),
-                        "size" => Type::I64,
-                        _ => panic!("Unknown set method: {}", method),
-                    }
-                }
-                Type::Model(model_name) => {
-                    if let Some(fn_def) = model_methods.get(&(model_name.clone(), method.clone())) {
-                        if let Some(return_type) = &fn_def.return_type {
-                            return return_type.clone()
-                        } else {
-                            return Type::Void
-                        }
-                    }
-                    Type::Void
-                }
-                _ => panic!("Cannot call method on type {:?}", obj_type),
-            }
-        }
-        Expr::Closure(_) => Type::Function,
-        Expr::EnumVariant { enum_name, variant, data } => {
-            match enum_name.as_str() {
-                "Result" => {
-                    if let Some(expr) = data {
-                        let data_type = infer_expr_type(expr, env, fns, models, model_methods, enums);
-                        let wildcard = Type::Generic("_".to_string());
-
-                        if variant == "Ok" {
-                            Type::Enum("Result".to_string(), vec![data_type, wildcard])
-                        } else {
-                            Type::Enum("Result".to_string(), vec![wildcard, data_type])
-                        }
-                    } else {
-                        Type::Enum("Result".to_string(), vec![])
-                    }
-                }
-                "Maybe" => {
-                    if let Some(expr) = data {
-                        let data_type = infer_expr_type(expr, env, fns, models, model_methods, enums);
-                        Type::Enum("Maybe".to_string(), vec![data_type])
-                    } else {
-                        Type::Enum("Maybe".to_string(), vec![])
-                    }
-                }
-                _ => {
-                    if let Some(expr) = data {
-                        let data_type = infer_expr_type(expr, env, fns, models, model_methods, enums);
-                        Type::Enum(enum_name.clone(), vec![data_type])
-                    } else {
-                        Type::Enum(enum_name.clone(), vec![])
-                    }
-                }
-            }
-        },
-
-        Expr::CreateChannel(hint) => {
-            if let Some(t) = hint {
-                Type::Channel(Box::new(t.clone()))
-            } else {
-                panic!("Type Error: channel() requires a type annotation, e.g., channel(): string");
-            }
-        }
-
-        Expr::Send(chan_expr, val_expr) => {
-            let chan_type = infer_expr_type(chan_expr, env, fns, models, model_methods, enums);
-            let val_type = infer_expr_type(val_expr, env, fns, models, model_methods, enums);
-
-            match chan_type {
-                Type::Channel(inner) => {
-                    if !types_compatible(&inner, &val_type) {
-                        panic!("Type Error: Cannot send {:?} to channel of type {:?}", val_type, inner);
-                    }
-                },
-                _ => panic!("Type Error: Left side of <- must be a channel"),
-            }
-            Type::Void
-        }
-
-        Expr::Receive(chan_expr) => {
-            let chan_type = infer_expr_type(chan_expr, env, fns, models, model_methods, enums);
-            match chan_type {
-                Type::Channel(inner) => *inner,
-                _ => panic!("Type Error: Right side of <- must be a channel"),
-            }
-        }
-
-        Expr::CountReceive(chan_expr, _message_count) => {
-            let chan_type = infer_expr_type(chan_expr, env, fns, models, model_methods, enums);
-            match chan_type {
-                Type::Channel(inner) => *inner,
-                _ => panic!("Type Error: Right side of <-n must be a channel"),
-            }
-        }
-
-        Expr::MaybeReceive(chan_expr) => {
-            let chan_type = infer_expr_type(chan_expr, env, fns, models, model_methods, enums);
-            if let Type::Channel(inner) = chan_type {
-                // Wrap inner type in Maybe
-                Type::Enum("Maybe".to_string(), vec![*inner])
-            } else {
-                panic!("Type Error: Right side of <-? must be a channel");
-            }
-        }
-        Expr::CreateState(expr) => {
-            // Just infer the type of the inner expression - don't evaluate
-            infer_expr_type(expr, env, fns, models, model_methods, enums)
-        }
-        Expr::CreateMap(pairs, key_type, val_type) => {
-            if pairs.is_empty() {
-                Type::Map(Box::new(key_type.clone()), Box::new(val_type.clone()))
-            } else {
-                // Infer from first pair
-                let (key_expr, val_expr) = &pairs[0];
-                let key_type = infer_expr_type(key_expr, env, fns, models, model_methods, enums);
-                let val_type = infer_expr_type(val_expr, env, fns, models, model_methods, enums);
-                
-                // Validate all pairs match
-                for (k_expr, v_expr) in pairs.iter() {
-                    let k_type = infer_expr_type(k_expr, env, fns, models, model_methods, enums);
-                    let v_type = infer_expr_type(v_expr, env, fns, models, model_methods, enums);
-                    
-                    if !types_compatible(&key_type, &k_type) || !types_compatible(&val_type, &v_type) {
-                        panic!("Type error: mixed types in map");
-                    }
-                }
-                
-                Type::Map(Box::new(key_type), Box::new(val_type))
-            }
-        }
-        Expr::CreateSet(values, val_type) => {
-            if values.is_empty() {
-                Type::Set(Box::new(val_type.clone()))
-            } else {
-                // Infer from first pair
-                let val_expr = &values[0];
-                let val_type = infer_expr_type(val_expr, env, fns, models, model_methods, enums);
-                
-                // Validate all values match
-                for v_expr in values.iter() {
-                    let v_type = infer_expr_type(v_expr, env, fns, models, model_methods, enums);
-                    
-                    if !types_compatible(&val_type, &v_type) {
-                        panic!("Type error: mixed types in set");
-                    }
-                }
-                
-                Type::Set(Box::new(val_type))
-            }
-        }
+        Value::Set(_, val_type) => Type::Set(Box::new(val_type.clone())),
     }
 }
 
@@ -3420,19 +2971,16 @@ async fn execute_stmt(
 ) -> ControlFlow {
     match stmt {
         Stmt::Echo(e) => {
-            let _type = infer_expr_type(e, &ctx.env, &ctx.fns, &ctx.models, &mut ctx.model_methods, &ctx.enums);
             let v = eval_expr(e, ctx).await;
             print!("{}", format_value(&v));
             ControlFlow::None
         }
         Stmt::Print(e) => {
-            let _type = infer_expr_type(e, &ctx.env, &ctx.fns, &ctx.models, &mut ctx.model_methods, &ctx.enums);
             let v = eval_expr(e, ctx).await;
             println!("{}", format_value(&v));
             ControlFlow::None
         }
         Stmt::ExprStmt(e) => {
-            let _type = infer_expr_type(e, &ctx.env, &ctx.fns, &ctx.models, &mut ctx.model_methods, &ctx.enums);
             eval_expr(e, ctx).await;
             ControlFlow::None
         }
@@ -3484,7 +3032,6 @@ async fn execute_stmt(
             ControlFlow::None
         }
         Stmt::Reassign { name, value } => {
-            let _type = infer_expr_type(value, &ctx.env, &ctx.fns, &ctx.models, &mut ctx.model_methods, &ctx.enums);
             if !ctx.env.contains_key(name) {
                 panic!("Variable '{}' not declared", name);
             }
@@ -3526,14 +3073,12 @@ async fn execute_stmt(
         Stmt::Break => ControlFlow::Break,
         Stmt::Next => ControlFlow::Next,
         Stmt::If { condition, then_block, else_ifs, else_block } => {
-            let _cond_type = infer_expr_type(condition, &ctx.env, &ctx.fns, &ctx.models, &mut ctx.model_methods, &ctx.enums);
             let cond_value = eval_expr(condition, ctx).await;
 
             if is_truthy(&cond_value) {
                 execute_block(then_block, ctx, None).await
             } else {
                 for (else_if_cond, else_if_stmts) in else_ifs {
-                    let _type = infer_expr_type(else_if_cond, &ctx.env, &ctx.fns, &ctx.models, &mut ctx.model_methods, &ctx.enums);
                     let else_if_value = eval_expr(else_if_cond, ctx).await;
                     if is_truthy(&else_if_value) {
                         return execute_block(else_if_stmts, ctx, None).await;
@@ -3549,7 +3094,6 @@ async fn execute_stmt(
         }
         Stmt::While { condition, body } => {
             loop {
-                let _cond_type = infer_expr_type(condition, &ctx.env, &ctx.fns, &ctx.models, &mut ctx.model_methods, &ctx.enums);
                 let cond_value = eval_expr(condition, ctx).await;
                 if !is_truthy(&cond_value) {
                     break;
@@ -3573,7 +3117,6 @@ async fn execute_stmt(
                     ControlFlow::None => {}
                 }
 
-                let _cond_type = infer_expr_type(condition, &ctx.env, &ctx.fns, &ctx.models, &mut ctx.model_methods, &ctx.enums);
                 let cond_value = eval_expr(condition, ctx).await;
                 if !is_truthy(&cond_value) {
                     break;
@@ -3583,7 +3126,6 @@ async fn execute_stmt(
         }
         Stmt::Until { condition, body } => {
             loop {
-                let _cond_type = infer_expr_type(condition, &ctx.env, &ctx.fns, &ctx.models, &mut ctx.model_methods, &ctx.enums);
                 let cond_value = eval_expr(condition, ctx).await;
                 if is_truthy(&cond_value) {
                     break;
@@ -3607,7 +3149,6 @@ async fn execute_stmt(
                     ControlFlow::None => {}
                 }
 
-                let _cond_type = infer_expr_type(condition, &ctx.env, &ctx.fns, &ctx.models, &mut ctx.model_methods, &ctx.enums);
                 let cond_value = eval_expr(condition, ctx).await;
                 if is_truthy(&cond_value) {
                     break;
@@ -3771,7 +3312,6 @@ async fn execute_stmt(
             ControlFlow::None
         }
         Stmt::Match { expr, cases, default, match_type } => {
-            let _expr_type = infer_expr_type(expr, &ctx.env, &ctx.fns, &ctx.models, &mut ctx.model_methods, &ctx.enums);
             let val = eval_expr(expr, ctx).await;
             let mut matched = false;
             
@@ -3832,7 +3372,6 @@ async fn execute_stmt(
         Stmt::Return(expr_opt) => {
             let val = match expr_opt {
                 Some(e) => {
-                    let _type = infer_expr_type(e, &ctx.env, &ctx.fns, &ctx.models, &mut ctx.model_methods, &ctx.enums);
                     eval_expr(e, ctx).await
                 }
                 None => Value::Void,

@@ -1,10 +1,13 @@
 use std::collections::HashMap;
+use crate::lexer::tokenize;
 use crate::runtime::ExportKind;
 use crate::runtime::ImportKind;
 use crate::toolbox::ImportSource;
 use crate::toolbox::parse_import_source;
+use crate::toolbox::signatures::get_builtin_signature;
 use crate::types::*;
 use crate::ast::*;
+use crate::utils::parse_type;
 use crate::utils::resolve_module_path;
 
 #[derive(Debug)]
@@ -38,6 +41,22 @@ pub struct AnalyzedModule {
     models: HashMap<String, ModelDef>,
     enums: HashMap<String, EnumDef>,
     default: Option<String>,
+}
+
+pub fn parse_builtin_type(s: &str) -> Type {
+    if s == "T" {
+        return Type::Generic("T".to_string());
+    }
+
+    let tokens = tokenize(s);
+    let mut peekable = tokens.into_iter().peekable();
+    
+    // We unwrap here because builtin signatures must be valid syntax.
+    // If they aren't, it's a compiler bug, so panic is acceptable.
+    match parse_type(&mut peekable) {
+        Ok((ty, _)) => ty,
+        Err(e) => panic!("Invalid builtin type signature '{}': {}", s, e),
+    }
 }
 
 impl Analyzer {
@@ -85,6 +104,27 @@ impl Analyzer {
         let mut analyzer = Self::new(current_file);
         analyzer.module_cache = cache;
         analyzer
+    }
+
+    pub fn register_builtin(&mut self, name: &str, alias: &str) {
+        if let Some((_, params_def, return_def)) = get_builtin_signature(name) {
+            let params = params_def.iter()
+                .map(|(p_name, p_type_str)| {
+                    // Use the helper here
+                    (p_name.to_string(), Some(parse_builtin_type(p_type_str)), Ownership::Borrowed)
+                })
+                .collect();
+
+            let fn_def = FnDef {
+                name: alias.to_string(),
+                params,
+                body: None,
+                // Use the helper here
+                return_type: Some(parse_builtin_type(return_def)),
+            };
+
+            self.functions.insert(alias.to_string(), fn_def);
+        }
     }
 
     pub fn analyze(&mut self, stmts: &[Stmt]) -> Result<(), Vec<String>> {
@@ -521,13 +561,17 @@ impl Analyzer {
                                 
                                 // Register each imported function
                                 // Note: We don't have full type info for builtins
-                                for (_original, alias) in names {
-                                    self.functions.insert(alias.clone(), FnDef {
-                                        name: alias.clone(),
-                                        params: vec![],
-                                        body: None,
-                                        return_type: None,
-                                    });
+                                for (original, alias) in names {
+                                    self.register_builtin(original, alias);
+
+                                    if !self.functions.contains_key(alias) {
+                                        self.functions.insert(alias.clone(), FnDef {
+                                            name: alias.clone(),
+                                            params: vec![],
+                                            body: None,
+                                            return_type: None,
+                                        });
+                                    }
                                 }
                             }
                             
@@ -907,37 +951,30 @@ impl Analyzer {
 
             Expr::Not(_) => Type::Bool,
             Expr::Var(name) | Expr::Const(name) | Expr::Static(name) => {
-                if let Some(sym) = self.lookup(name) {
+                if let Some(sym) = self.lookup(name).cloned() {
                     sym.ty.clone()
-                } else if self.functions.contains_key(name) {
-                    Type::Function
+                } else if let Some(fn_def) = self.functions.get(name).cloned() {
+                    let param_types: Vec<Type> = fn_def.params
+                        .iter()
+                        .map(|(_, ty, _)| ty.clone().unwrap_or(Type::Void))
+                        .collect();
+                    
+                    Type::Function {
+                        params: param_types,
+                        return_type: Box::new(fn_def.return_type.clone().unwrap_or(Type::Void)),
+                    }
                 } else {
                     self.error(format!("'{}' not defined", name));
                     Type::Void
                 }
             }
-            Expr::Thread(closure_expr) => { // must be before Expr::Call
-                let inner_type = match closure_expr.as_ref() {
-                    Expr::Closure(closure_def) => {
-                        closure_def.return_type.clone().unwrap_or(Type::Void)
-                    }
-                    Expr::Var(var_name) => {
-                        if let Some(sym) = self.lookup(var_name) {
-                            if sym.ty == Type::Function {
-                                // TODO: we'd need to store return type info
-                                // For now, can't know the return type
-                                Type::Void
-                            } else {
-                                self.error(format!("thread expects closure, got {:?}", sym.ty));
-                                Type::Void
-                            }
-                        } else {
-                            self.error(format!("'{}' not defined", var_name));
-                            Type::Void
-                        }
-                    }
-                    _ => {
-                        self.error(format!("thread expects a closure"));
+            Expr::Thread(closure_expr) => {
+                let closure_type = self.check_expr(closure_expr);
+                
+                let inner_type = match closure_type {
+                    Type::Function { return_type, .. } => *return_type,
+                    other => {
+                        self.error(format!("thread expects closure, got {:?}", other));
                         Type::Void
                     }
                 };
@@ -965,19 +1002,93 @@ impl Analyzer {
 
                 // User-defined function
                 if let Some(fn_def) = self.functions.get(name).cloned() {
-                    self.validate_args(name, &fn_def.params, &arg_types);
-                    return fn_def.return_type.clone().unwrap_or(Type::Void);
+                    
+                    // Check if the function uses a Generic "T"
+                    // This looks for "T" in parameters OR return type
+                    let uses_generic_t = fn_def.params.iter().any(|(_, t, _)| matches!(t, Some(Type::Generic(g)) if g == "T"))
+                        || matches!(&fn_def.return_type, Some(Type::Generic(g)) if g == "T");
+
+                    if uses_generic_t {
+                        // 1. Validate Arity
+                        if fn_def.params.len() != arg_types.len() {
+                            self.error(format!("'{}' expects {} arguments, got {}", name, fn_def.params.len(), arg_types.len()));
+                            return Type::Void;
+                        }
+
+                        // 2. Resolve "T" based on the arguments
+                        let mut resolved_t: Option<Type> = None;
+
+                        for (_, ((param_name, param_type, _), arg_type)) in fn_def.params.iter().zip(arg_types.iter()).enumerate() {
+                            match param_type {
+                                Some(Type::Generic(g)) if g == "T" => {
+                                    // We found an argument that maps to "T".
+                                    
+                                    // Check if arg is numeric (constraint for math funcs)
+                                    if !is_numeric_type(arg_type) {
+                                        self.error(format!("Argument '{}' must be numeric, got {:?}", param_name, arg_type));
+                                        return Type::Void;
+                                    }
+
+                                    match &resolved_t {
+                                        None => {
+                                            // First time seeing T, lock it in
+                                            resolved_t = Some(arg_type.clone());
+                                        }
+                                        Some(prev) => {
+                                            // If T appears multiple times, subsequent args must match the first one
+                                            // e.g. min(i64, f64) might be invalid if you enforce strict matching
+                                            if prev != arg_type {
+                                                self.error(format!("Type mismatch for generic argument '{}'. Expected {:?}, got {:?}", param_name, prev, arg_type));
+                                            }
+                                        }
+                                    }
+                                }
+                                Some(other) => {
+                                    // Regular concrete type check
+                                    if !types_compatible(other, arg_type) {
+                                        self.error(format!("Argument '{}' expected {:?}, got {:?}", param_name, other, arg_type));
+                                    }
+                                }
+                                None => {}
+                            }
+                        }
+
+                        // 3. Determine Return Type
+                        if let Some(Type::Generic(g)) = &fn_def.return_type {
+                            if g == "T" {
+                                // Return the resolved type (e.g., if input was i64, return i64)
+                                return resolved_t.unwrap_or(Type::Void);
+                            }
+                        }
+                        
+                        // Fallback for concrete returns (though unlikely in this context)
+                        return fn_def.return_type.clone().unwrap_or(Type::Void);
+
+                    } else {
+                        // Standard validation for non-generic functions
+                        self.validate_args(name, &fn_def.params, &arg_types);
+                        return fn_def.return_type.clone().unwrap_or(Type::Void);
+                    }
                 }
 
                 // Variable that might be a function/closure
-                if let Some(sym) = self.lookup(name) {
-                    // Function, or Void (untyped param - might be callable)
-                    if sym.ty == Type::Function || sym.ty == Type::Void {
-                        // Same limitation: don't know return type
-                        return Type::Void;
-                    } else {
-                        self.error(format!("'{}' is not callable", name));
-                        return Type::Void;
+                if let Some(sym) = self.lookup(name).cloned() {
+                    match &sym.ty {
+                        Type::Function { params, return_type } => {
+                            self.validate_args(name, 
+                                &params.iter()
+                                    .enumerate()
+                                    .map(|(i, t)| (format!("arg{}", i), Some(t.clone()), Ownership::Owned))
+                                    .collect::<Vec<_>>(),
+                                &arg_types
+                            );
+                            return *return_type.clone();
+                        }
+                        Type::Void => return Type::Void, // untyped param
+                        other => {
+                            self.error(format!("'{}' is not callable (type: {:?})", name, other));
+                            return Type::Void;
+                        }
                     }
                 }
 
@@ -1124,7 +1235,19 @@ impl Analyzer {
                     }
                 }
             }
-            Expr::Closure(_) => Type::Function,
+            Expr::Closure(closure_def) => {
+                let param_types: Vec<Type> = closure_def.params
+                    .iter()
+                    .map(|(_, ty, _)| ty.clone().unwrap_or(Type::Void))
+                    .collect();
+                
+                let return_type = closure_def.return_type.clone().unwrap_or(Type::Void);
+                
+                Type::Function {
+                    params: param_types,
+                    return_type: Box::new(return_type),
+                }
+            }
             Expr::EnumVariant { enum_name, variant, data } => {
                 match enum_name.as_str() {
                     "Result" => {
