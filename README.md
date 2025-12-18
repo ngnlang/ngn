@@ -593,6 +593,8 @@ Functions create an isolated environment, meaning it can't access values outside
 - globals (imports, statics, models, enums, functions)
 - sibling functions
 
+You must provide param types and a return type. If passing a function as a param, you can mark the param like `fn<param1_type, param2_type, paramN_type, return_type>`. For brevity and initial clarity, we do not show types in the below examples.
+
 ### Traditional block, explicit return
 ```ngn
 fn add(a, b) {
