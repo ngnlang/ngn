@@ -23,7 +23,7 @@ use ngn::semantic::Analyzer;
 
 #[tokio::main]
 async fn main() {
-    let file_path = "main.ngn";
+    let file_path = "closeoverbug.ngn";
     let source = fs::read_to_string(file_path)
         .expect("Failed to read ngn file");
 

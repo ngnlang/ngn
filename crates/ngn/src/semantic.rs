@@ -13,7 +13,6 @@ use crate::utils::resolve_module_path;
 #[derive(Debug)]
 pub struct Analyzer {
     scopes: Vec<HashMap<String, Symbol>>,
-    functions: HashMap<String, FnDef>,
     models: HashMap<String, ModelDef>,
     model_methods: HashMap<(String, String), FnDef>,
     loop_depth: usize,
@@ -33,6 +32,8 @@ pub struct Symbol {
     pub kind: AssignKind,
     pub ownership: Ownership,
     pub defined_at: usize, // scope depth
+    pub fn_def: Option<FnDef>,
+    pub module_def: Option<AnalyzedModule>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -62,6 +63,7 @@ pub fn parse_builtin_type(s: &str) -> Type {
 impl Analyzer {
     pub fn new(current_file: String) -> Self {
         let mut enums = HashMap::new();
+        let global_scope = HashMap::new();
     
         // Built-in Result<T, E>
         enums.insert("Result".to_string(), EnumDef {
@@ -84,8 +86,7 @@ impl Analyzer {
         });
 
         Self {
-            scopes: vec![HashMap::new()],
-            functions: HashMap::new(),
+            scopes: vec![global_scope],
             models: HashMap::new(),
             model_methods: HashMap::new(),
             loop_depth: 0,
@@ -110,20 +111,36 @@ impl Analyzer {
         if let Some((_, params_def, return_def)) = get_builtin_signature(name) {
             let params = params_def.iter()
                 .map(|(p_name, p_type_str)| {
-                    // Use the helper here
                     (p_name.to_string(), Some(parse_builtin_type(p_type_str)), Ownership::Borrowed)
                 })
                 .collect();
 
+            let return_type = parse_builtin_type(return_def);
             let fn_def = FnDef {
                 name: alias.to_string(),
                 params,
                 body: None,
-                // Use the helper here
-                return_type: Some(parse_builtin_type(return_def)),
+                return_type: Some(return_type.clone()),
             };
 
-            self.functions.insert(alias.to_string(), fn_def);
+            let ty = Type::Function {
+                params: fn_def.params.iter()
+                    .map(|(_, t, _)| t.clone().unwrap_or(Type::Void))
+                    .collect(),
+                return_type: Box::new(return_type),
+            };
+
+            // Insert into GLOBAL SCOPE (index 0)
+            if let Some(global_scope) = self.scopes.first_mut() {
+                global_scope.insert(alias.to_string(), Symbol {
+                    ty,
+                    kind: AssignKind::Const,
+                    ownership: Ownership::Owned,
+                    defined_at: 0,
+                    fn_def: Some(fn_def),
+                    module_def: None,
+                });
+            }
         }
     }
 
@@ -132,7 +149,19 @@ impl Analyzer {
         for stmt in stmts {
             match stmt {
                 Stmt::FnDef(fn_def) => {
-                    self.functions.insert(fn_def.name.clone(), fn_def.clone());
+                    let ty = Type::Function {
+                        params: fn_def.params.iter().map(|(_, t, _)| t.clone().unwrap_or(Type::Void)).collect(),
+                        return_type: Box::new(fn_def.return_type.clone().unwrap_or(Type::Void))
+                    };
+
+                    self.scopes[0].insert(fn_def.name.clone(), Symbol {
+                        ty,
+                        kind: AssignKind::Const,
+                        ownership: Ownership::Owned,
+                        defined_at: 0,
+                        fn_def: Some(fn_def.clone()),
+                        module_def: None,
+                    });
                 }
                 Stmt::ModelDef(model_def) => {
                     self.models.insert(model_def.name.clone(), model_def.clone());
@@ -300,6 +329,8 @@ impl Analyzer {
                     kind: kind.clone(),
                     ownership: ownership.clone(),
                     defined_at: self.current_depth(),
+                    fn_def: None,
+                    module_def: None,
                 });
             }
 
@@ -410,10 +441,22 @@ impl Analyzer {
             }
 
             Stmt::FnDef(fn_def) => {
-                // TODO should also define `this`` if it's a method—but since standalone functions don't have `this``, you might want to track whether you're inside a method vs a function.
-                
                 // Register nested functions
-                self.functions.insert(fn_def.name.clone(), fn_def.clone());
+                if self.current_depth() > 0 {
+                    let ty = Type::Function {
+                        params: fn_def.params.iter().map(|(_, t, _)| t.clone().unwrap_or(Type::Void)).collect(),
+                        return_type: Box::new(fn_def.return_type.clone().unwrap_or(Type::Void))
+                    };
+                    
+                    self.define(&fn_def.name, Symbol {
+                        ty,
+                        kind: AssignKind::Const,
+                        ownership: Ownership::Owned,
+                        defined_at: self.current_depth(),
+                        fn_def: Some(fn_def.clone()),
+                        module_def: None,
+                    });
+                }
 
                 // Save previous (for nested functions/closures)
                 let prev_return_type = self.current_return_type.clone();
@@ -440,6 +483,8 @@ impl Analyzer {
                         kind: AssignKind::Var,
                         ownership: ownership.clone(),
                         defined_at: self.current_depth(),
+                        fn_def: None,
+                        module_def: None,
                     });
                 }
                 
@@ -475,6 +520,8 @@ impl Analyzer {
                     kind: AssignKind::Const,
                     ownership: Ownership::Owned,
                     defined_at: 0,
+                    fn_def: None,
+                    module_def: None,
                 });
             }
 
@@ -522,6 +569,8 @@ impl Analyzer {
                         kind: AssignKind::Const,
                         ownership: Ownership::Borrowed,
                         defined_at: self.current_depth(),
+                        fn_def: None,
+                        module_def: None,
                     });
 
                     // Define parameters
@@ -531,6 +580,8 @@ impl Analyzer {
                             kind: AssignKind::Var,
                             ownership: ownership.clone(),
                             defined_at: self.current_depth(),
+                            fn_def: None,
+                            module_def: None,
                         });
                     }
 
@@ -564,34 +615,87 @@ impl Analyzer {
                                 for (original, alias) in names {
                                     self.register_builtin(original, alias);
 
-                                    if !self.functions.contains_key(alias) {
-                                        self.functions.insert(alias.clone(), FnDef {
+                                    // If register_builtin failed to find the signature, we fallback
+                                    if self.lookup(alias).is_none() {
+                                        // self.error(format!("Unknown builtin '{}'", original)); // Optional: strict mode
+                                        
+                                        // Insert fallback into CURRENT SCOPE (likely global scope)
+                                        // This prevents "unknown function" crashes but will likely warn about 0 args later
+                                        let fallback_def = FnDef {
                                             name: alias.clone(),
                                             params: vec![],
                                             body: None,
                                             return_type: None,
+                                        };
+
+                                        let ty = Type::Function { 
+                                            params: vec![], 
+                                            return_type: Box::new(Type::Void) 
+                                        };
+
+                                        self.define(alias, Symbol {
+                                            ty,
+                                            kind: AssignKind::Const,
+                                            ownership: Ownership::Owned,
+                                            defined_at: self.current_depth(),
+                                            fn_def: Some(fallback_def),
+                                            module_def: None,
                                         });
                                     }
                                 }
                             }
                             
                             ImportKind::Namespace(namespace) => {
-                                let _module_name = match &module {
+                                let module_name = match &module {
                                     Some(m) => m.clone(),
                                     None => {
                                         self.error("Namespace imports from 'tbx' require a module".to_string());
                                         return;
                                     }
                                 };
+
+                                // Create a "virtual" Module for the toolbox
+                                let mut virtual_module = AnalyzedModule::default();
+
+                                // Populate virtual module with the builtins for this module (e.g., "math")
+                                // We scan our builtin signatures to find ones that belong to this module.
+                                // (Assuming you have a way to know which builtins are in "math". 
+                                // If not, you might have to register ALL builtins or add a mapping)
+                                
+                                // Simple approach: predefined list for known toolboxes
+                                let builtins = match module_name.as_str() {
+                                    "math" => vec!["abs", "round", "floor", "ceil", "sin"],
+                                    // Add other modules here
+                                    _ => vec![],
+                                };
+
+                                for name in builtins {
+                                    if let Some((_, params_def, return_def)) = get_builtin_signature(name) {
+                                        let params = params_def.iter()
+                                            .map(|(p_name, p_type_str)| {
+                                                (p_name.to_string(), Some(parse_builtin_type(p_type_str)), Ownership::Borrowed)
+                                            })
+                                            .collect();
+
+                                        let fn_def = FnDef {
+                                            name: name.to_string(),
+                                            params,
+                                            body: None,
+                                            return_type: Some(parse_builtin_type(return_def)),
+                                        };
+                                        
+                                        virtual_module.functions.insert(name.to_string(), fn_def);
+                                    }
+                                }
                                 
                                 self.define(namespace, Symbol {
                                     ty: Type::Namespace(namespace.clone()),
                                     kind: AssignKind::Const,
                                     ownership: Ownership::Borrowed,
                                     defined_at: self.current_depth(),
+                                    fn_def: None,
+                                    module_def: Some(virtual_module),
                                 });
-                                
-                                // TODO: If you have toolbox metadata with function signatures, register qualified names here
                             }
                             
                             ImportKind::Default(local_name) => {
@@ -608,6 +712,8 @@ impl Analyzer {
                                     kind: AssignKind::Const,
                                     ownership: Ownership::Borrowed,
                                     defined_at: self.current_depth(),
+                                    fn_def: None,
+                                    module_def: None,
                                 });
                             }
                         }
@@ -623,7 +729,22 @@ impl Analyzer {
                                     if let Some(fn_def) = module_exports.functions.get(original) {
                                         let mut imported_fn = fn_def.clone();
                                         imported_fn.name = local.clone();
-                                        self.functions.insert(local.clone(), imported_fn);
+                                        
+                                        let ty = Type::Function {
+                                            params: imported_fn.params.iter()
+                                                .map(|(_, t, _)| t.clone().unwrap_or(Type::Void))
+                                                .collect(),
+                                            return_type: Box::new(imported_fn.return_type.clone().unwrap_or(Type::Void)),
+                                        };
+
+                                        self.define(local, Symbol {
+                                            ty,
+                                            kind: AssignKind::Const,
+                                            ownership: Ownership::Owned,
+                                            defined_at: self.current_depth(),
+                                            fn_def: Some(imported_fn),
+                                            module_def: None,
+                                        });
                                     } else if let Some(model_def) = module_exports.models.get(original) {
                                         self.models.insert(local.clone(), model_def.clone());
                                     } else if let Some(enum_def) = module_exports.enums.get(original) {
@@ -652,7 +773,22 @@ impl Analyzer {
                                 if let Some(fn_def) = module_exports.functions.get(&default_name) {
                                     let mut renamed = fn_def.clone();
                                     renamed.name = local_name.clone();
-                                    self.functions.insert(local_name.clone(), renamed);
+                                    
+                                    let ty = Type::Function {
+                                        params: renamed.params.iter()
+                                            .map(|(_, t, _)| t.clone().unwrap_or(Type::Void))
+                                            .collect(),
+                                        return_type: Box::new(renamed.return_type.clone().unwrap_or(Type::Void)),
+                                    };
+
+                                    self.define(local_name, Symbol {
+                                        ty,
+                                        kind: AssignKind::Const,
+                                        ownership: Ownership::Owned,
+                                        defined_at: self.current_depth(),
+                                        fn_def: Some(renamed),
+                                        module_def: None,
+                                    });
                                 } else {
                                     self.error(format!(
                                         "Default export '{}' not found in '{}'", 
@@ -667,14 +803,27 @@ impl Analyzer {
                                     kind: AssignKind::Const,
                                     ownership: Ownership::Borrowed,
                                     defined_at: self.current_depth(),
+                                    fn_def: None,
+                                    module_def: None,
                                 });
                                 
                                 // Register qualified functions
                                 for (name, fn_def) in &module_exports.functions {
-                                    self.functions.insert(
-                                        format!("{}.{}", namespace, name),
-                                        fn_def.clone(),
-                                    );
+                                    let qualified_name = format!("{}.{}", namespace, name);
+        
+                                    let ty = Type::Function {
+                                        params: fn_def.params.iter().map(|(_, t, _)| t.clone().unwrap_or(Type::Void)).collect(),
+                                        return_type: Box::new(fn_def.return_type.clone().unwrap_or(Type::Void))
+                                    };
+
+                                    self.define(&qualified_name, Symbol {
+                                        ty,
+                                        kind: AssignKind::Const,
+                                        ownership: Ownership::Owned,
+                                        defined_at: self.current_depth(),
+                                        fn_def: Some(fn_def.clone()),
+                                        module_def: None,
+                                    });
                                 }
                                 
                                 // Register qualified models
@@ -778,6 +927,8 @@ impl Analyzer {
                     kind: AssignKind::Const,  // loop var typically immutable
                     ownership: Ownership::Borrowed,
                     defined_at: self.current_depth(),
+                    fn_def: None,
+                    module_def: None,
                 });
 
                 // Define index if present
@@ -787,6 +938,8 @@ impl Analyzer {
                         kind: AssignKind::Const,
                         ownership: Ownership::Owned,
                         defined_at: self.current_depth(),
+                        fn_def: None,
+                        module_def: None,
                     });
                 }
 
@@ -834,6 +987,8 @@ impl Analyzer {
                                                     kind: AssignKind::Const,
                                                     ownership: Ownership::Borrowed,
                                                     defined_at: self.current_depth(),
+                                                    fn_def: None,
+                                                    module_def: None,
                                                 });
                                             }
                                         }
@@ -953,16 +1108,6 @@ impl Analyzer {
             Expr::Var(name) | Expr::Const(name) | Expr::Static(name) => {
                 if let Some(sym) = self.lookup(name).cloned() {
                     sym.ty.clone()
-                } else if let Some(fn_def) = self.functions.get(name).cloned() {
-                    let param_types: Vec<Type> = fn_def.params
-                        .iter()
-                        .map(|(_, ty, _)| ty.clone().unwrap_or(Type::Void))
-                        .collect();
-                    
-                    Type::Function {
-                        params: param_types,
-                        return_type: Box::new(fn_def.return_type.clone().unwrap_or(Type::Void)),
-                    }
                 } else {
                     self.error(format!("'{}' not defined", name));
                     Type::Void
@@ -1001,78 +1146,78 @@ impl Analyzer {
                 let arg_types: Vec<Type> = args.iter().map(|a| self.check_expr(a)).collect();
 
                 // User-defined function
-                if let Some(fn_def) = self.functions.get(name).cloned() {
-                    
-                    // Check if the function uses a Generic "T"
-                    // This looks for "T" in parameters OR return type
-                    let uses_generic_t = fn_def.params.iter().any(|(_, t, _)| matches!(t, Some(Type::Generic(g)) if g == "T"))
-                        || matches!(&fn_def.return_type, Some(Type::Generic(g)) if g == "T");
+                if let Some(sym) = self.lookup(name).cloned() {
+                    // If the symbol has a concrete FnDef (it's a real function definition)
+                    if let Some(fn_def) = &sym.fn_def {
+                        // Check if the function uses a Generic "T"
+                        // This looks for "T" in parameters OR return type
+                        let uses_generic_t = fn_def.params.iter().any(|(_, t, _)| matches!(t, Some(Type::Generic(g)) if g == "T"))
+                            || matches!(&fn_def.return_type, Some(Type::Generic(g)) if g == "T");
 
-                    if uses_generic_t {
-                        // 1. Validate Arity
-                        if fn_def.params.len() != arg_types.len() {
-                            self.error(format!("'{}' expects {} arguments, got {}", name, fn_def.params.len(), arg_types.len()));
-                            return Type::Void;
-                        }
+                        if uses_generic_t {
+                            // 1. Validate Arity
+                            if fn_def.params.len() != arg_types.len() {
+                                self.error(format!("'{}' expects {} arguments, got {}", name, fn_def.params.len(), arg_types.len()));
+                                return Type::Void;
+                            }
 
-                        // 2. Resolve "T" based on the arguments
-                        let mut resolved_t: Option<Type> = None;
+                            // 2. Resolve "T" based on the arguments
+                            let mut resolved_t: Option<Type> = None;
 
-                        for (_, ((param_name, param_type, _), arg_type)) in fn_def.params.iter().zip(arg_types.iter()).enumerate() {
-                            match param_type {
-                                Some(Type::Generic(g)) if g == "T" => {
-                                    // We found an argument that maps to "T".
-                                    
-                                    // Check if arg is numeric (constraint for math funcs)
-                                    if !is_numeric_type(arg_type) {
-                                        self.error(format!("Argument '{}' must be numeric, got {:?}", param_name, arg_type));
-                                        return Type::Void;
-                                    }
-
-                                    match &resolved_t {
-                                        None => {
-                                            // First time seeing T, lock it in
-                                            resolved_t = Some(arg_type.clone());
+                            for (_, ((param_name, param_type, _), arg_type)) in fn_def.params.iter().zip(arg_types.iter()).enumerate() {
+                                match param_type {
+                                    Some(Type::Generic(g)) if g == "T" => {
+                                        // We found an argument that maps to "T".
+                                        
+                                        // Check if arg is numeric (constraint for math funcs)
+                                        if !is_numeric_type(arg_type) {
+                                            self.error(format!("Argument '{}' must be numeric, got {:?}", param_name, arg_type));
+                                            return Type::Void;
                                         }
-                                        Some(prev) => {
-                                            // If T appears multiple times, subsequent args must match the first one
-                                            // e.g. min(i64, f64) might be invalid if you enforce strict matching
-                                            if prev != arg_type {
-                                                self.error(format!("Type mismatch for generic argument '{}'. Expected {:?}, got {:?}", param_name, prev, arg_type));
+
+                                        match &resolved_t {
+                                            None => {
+                                                // First time seeing T, lock it in
+                                                resolved_t = Some(arg_type.clone());
+                                            }
+                                            Some(prev) => {
+                                                // If T appears multiple times, subsequent args must match the first one
+                                                // e.g. min(i64, f64) might be invalid if you enforce strict matching
+                                                if prev != arg_type {
+                                                    self.error(format!("Type mismatch for generic argument '{}'. Expected {:?}, got {:?}", param_name, prev, arg_type));
+                                                }
                                             }
                                         }
                                     }
-                                }
-                                Some(other) => {
-                                    // Regular concrete type check
-                                    if !types_compatible(other, arg_type) {
-                                        self.error(format!("Argument '{}' expected {:?}, got {:?}", param_name, other, arg_type));
+                                    Some(other) => {
+                                        // Regular concrete type check
+                                        if !types_compatible(other, arg_type) {
+                                            self.error(format!("Argument '{}' expected {:?}, got {:?}", param_name, other, arg_type));
+                                        }
                                     }
+                                    None => {}
                                 }
-                                None => {}
                             }
-                        }
 
-                        // 3. Determine Return Type
-                        if let Some(Type::Generic(g)) = &fn_def.return_type {
-                            if g == "T" {
-                                // Return the resolved type (e.g., if input was i64, return i64)
-                                return resolved_t.unwrap_or(Type::Void);
+                            // 3. Determine Return Type
+                            if let Some(Type::Generic(g)) = &fn_def.return_type {
+                                if g == "T" {
+                                    // Return the resolved type (e.g., if input was i64, return i64)
+                                    return resolved_t.unwrap_or(Type::Void);
+                                }
                             }
-                        }
-                        
-                        // Fallback for concrete returns (though unlikely in this context)
-                        return fn_def.return_type.clone().unwrap_or(Type::Void);
+                            
+                            // Fallback for concrete returns (though unlikely in this context)
+                            return fn_def.return_type.clone().unwrap_or(Type::Void);
 
-                    } else {
-                        // Standard validation for non-generic functions
-                        self.validate_args(name, &fn_def.params, &arg_types);
-                        return fn_def.return_type.clone().unwrap_or(Type::Void);
+                        } else {
+                            // Standard validation for non-generic functions
+                            self.validate_args(name, &fn_def.params, &arg_types);
+                            return fn_def.return_type.clone().unwrap_or(Type::Void);
+                        }
                     }
-                }
 
-                // Variable that might be a function/closure
-                if let Some(sym) = self.lookup(name).cloned() {
+                    // Variable that might be a function/closure
                     match &sym.ty {
                         Type::Function { params, return_type } => {
                             self.validate_args(name, 
@@ -1199,13 +1344,15 @@ impl Analyzer {
                     Type::Namespace(ns) => {
                         let qualified_name = format!("{}.{}", ns, method);
                         
-                        if let Some(fn_def) = self.functions.get(&qualified_name).cloned() {
-                            self.validate_args(&qualified_name, &fn_def.params, &arg_types);
-                            return fn_def.return_type.clone().unwrap_or(Type::Void);
-                        } else {
-                            self.error(format!("unknown function '{}' in namespace '{}'", method, ns));
-                            return Type::Void;
+                        if let Some(sym) = self.lookup(&qualified_name).cloned() {
+                            if let Some(fn_def) = &sym.fn_def {
+                                self.validate_args(&qualified_name, &fn_def.params, &arg_types);
+                                return fn_def.return_type.clone().unwrap_or(Type::Void);
+                            }
                         }
+
+                        self.error(format!("unknown function '{}' in namespace '{}'", method, ns));
+                        return Type::Void;
                     }
                     Type::StateActor(inner_type) => {
                         return match method.as_str() {
