@@ -58,7 +58,7 @@ fn main() {
 ## Types
 
 - `string`
-- `i64`, `i32`, `u64`, `u32`, `f64`, `f32`
+- `i64`, `i32`, `i16`, `i8`, `u64`, `u32`, `u16`, `u8`, `f64`, `f32`
 - `bool`
 - `array`
 - `array<type>`
