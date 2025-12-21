@@ -1031,8 +1031,12 @@ impl Analyzer {
         match expr {
             Expr::I64(_) => Type::I64,
             Expr::I32(_) => Type::I32,
+            Expr::I16(_) => Type::I16,
+            Expr::I8(_) => Type::I8,
             Expr::U64(_) => Type::U64,
             Expr::U32(_) => Type::U32,
+            Expr::U16(_) => Type::U16,
+            Expr::U8(_) => Type::U8,
             Expr::F64(_) => Type::F64,
             Expr::F32(_) => Type::F32,
             Expr::String(_) => Type::Str,
@@ -1137,7 +1141,7 @@ impl Analyzer {
                         self.error(format!("sleep() takes exactly 1 argument"));
                     }
                     let arg_type = self.check_expr(&args[0]);
-                    if !matches!(arg_type, Type::I64 | Type::I32 | Type::U64 | Type::U32) {
+                    if !matches!(arg_type, Type::I64 | Type::I32 | Type::I16 | Type::I8 | Type::U64 | Type::U32 | Type::U16 | Type::U8) {
                         self.error(format!("sleep() expects an integer, got {:?}", arg_type));
                     }
                     return Type::Void;
@@ -1275,7 +1279,7 @@ impl Analyzer {
                 let arg_types: Vec<Type> = args.iter().map(|a| self.check_expr(a)).collect();
 
                 match obj_type {
-                    Type::I64 | Type::I32 | Type::U64 | Type::U32 | Type::F64 | Type::F32 => {
+                    Type::I64 | Type::I32 | Type::I16 | Type::I8 | Type::U64 | Type::U32 | Type::U16 | Type::U8 | Type::F64 | Type::F32 => {
                         match method.as_str() {
                             _ => {
                                 self.error(format!("Unknown number method: {}", method));

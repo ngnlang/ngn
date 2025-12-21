@@ -10,8 +10,12 @@ pub fn abs(args: Vec<Value>) -> Result<Value, RuntimeError> {
     match &args[0] {
         Value::I64(n) => Ok(Value::I64(n.abs())),
         Value::I32(n) => Ok(Value::I32(n.abs())),
+        Value::I16(n) => Ok(Value::I16(n.abs())),
+        Value::I8(n) => Ok(Value::I8(n.abs())),
         Value::U64(n) => Ok(Value::U64(*n)),
         Value::U32(n) => Ok(Value::U32(*n)),
+        Value::U16(n) => Ok(Value::U16(*n)),
+        Value::U8(n) => Ok(Value::U8(*n)),
         Value::F64(n) => Ok(Value::F64(n.abs())),
         Value::F32(n) => Ok(Value::F32(n.abs())),
         _ => Err(RuntimeError::TypeError("abs expects numeric type".into())),
@@ -27,8 +31,12 @@ pub fn round(args: Vec<Value>) -> Result<Value, RuntimeError> {
         Value::F32(n) => Ok(Value::F32(n.round())),
         Value::I64(n) => Ok(Value::I64(*n)),
         Value::I32(n) => Ok(Value::I32(*n)),
+        Value::I16(n) => Ok(Value::I16(*n)),
+        Value::I8(n) => Ok(Value::I8(*n)),
         Value::U64(n) => Ok(Value::U64(*n)),
         Value::U32(n) => Ok(Value::U32(*n)),
+        Value::U16(n) => Ok(Value::U16(*n)),
+        Value::U8(n) => Ok(Value::U8(*n)),
         _ => Err(RuntimeError::TypeError("round expects numeric type".into())),
     }
 }
@@ -42,8 +50,12 @@ pub fn floor(args: Vec<Value>) -> Result<Value, RuntimeError> {
         Value::F32(n) => Ok(Value::F32(n.floor())),
         Value::I64(n) => Ok(Value::I64(*n)),
         Value::I32(n) => Ok(Value::I32(*n)),
+        Value::I16(n) => Ok(Value::I16(*n)),
+        Value::I8(n) => Ok(Value::I8(*n)),
         Value::U64(n) => Ok(Value::U64(*n)),
         Value::U32(n) => Ok(Value::U32(*n)),
+        Value::U16(n) => Ok(Value::U16(*n)),
+        Value::U8(n) => Ok(Value::U8(*n)),
         _ => Err(RuntimeError::TypeError("floor expects numeric type".into())),
     }
 }
@@ -57,8 +69,12 @@ pub fn ceil(args: Vec<Value>) -> Result<Value, RuntimeError> {
         Value::F32(n) => Ok(Value::F32(n.ceil())),
         Value::I64(n) => Ok(Value::I64(*n)),
         Value::I32(n) => Ok(Value::I32(*n)),
+        Value::I16(n) => Ok(Value::I16(*n)),
+        Value::I8(n) => Ok(Value::I8(*n)),
         Value::U64(n) => Ok(Value::U64(*n)),
         Value::U32(n) => Ok(Value::U32(*n)),
+        Value::U16(n) => Ok(Value::U16(*n)),
+        Value::U8(n) => Ok(Value::U8(*n)),
         _ => Err(RuntimeError::TypeError("ceil expects numeric type".into())),
     }
 }

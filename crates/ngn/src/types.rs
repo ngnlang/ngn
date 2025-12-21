@@ -5,8 +5,12 @@ use std::collections::HashMap;
 pub enum Type {
     I64,
     I32,
+    I16,
+    I8,
     U64,
     U32,
+    U16,
+    U8,
     F64,
     F32,
     String, // owned
@@ -50,7 +54,7 @@ pub enum Moved {
 }
 
 pub fn is_numeric_type(t: &Type) -> bool {
-    matches!(t, Type::I64 | Type::I32 | Type::U64 | Type::U32 | Type::F64 | Type::F32)
+    matches!(t, Type::I64 | Type::I32 | Type::I16 | Type::I8 | Type::U64 | Type::U32 | Type::U16 | Type::U8 | Type::F64 | Type::F32)
 }
 
 pub fn types_compatible(expected: &Type, actual: &Type) -> bool {
@@ -69,8 +73,12 @@ pub fn types_compatible(expected: &Type, actual: &Type) -> bool {
     match (expected, actual) {
         (Type::I64, Type::I64) => true,
         (Type::I32, Type::I32) => true,
+        (Type::I16, Type::I16) => true,
+        (Type::I8, Type::I8) => true,
         (Type::U64, Type::U64) => true,
         (Type::U32, Type::U32) => true,
+        (Type::U16, Type::U16) => true,
+        (Type::U8, Type::U8) => true,
         (Type::F64, Type::F64) => true,
         (Type::F32, Type::F32) => true,
         (Type::Str, Type::Str) => true,

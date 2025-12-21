@@ -81,8 +81,12 @@ where
     let base_type = match type_name.as_str() {
         "i64" => Type::I64,
         "i32" => Type::I32,
+        "i16" => Type::I16,
+        "i8" => Type::I8,
         "u64" => Type::U64,
         "u32" => Type::U32,
+        "u16" => Type::U16,
+        "u8" => Type::U8,
         "f64" => Type::F64,
         "f32" => Type::F32,
         "string" => Type::Str,

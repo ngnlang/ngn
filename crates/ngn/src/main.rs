@@ -81,7 +81,8 @@ async fn main() {
 
 fn is_valid_type(t: &Type, models: &HashMap<String, ModelDef>, enums: &HashMap<String, EnumDef>) -> bool {
     match t {
-        Type::I64 | Type::I32 | Type::U64 | Type::U32 
+        Type::I64 | Type::I32 | Type::I16 | Type::I8
+        | Type::U64 | Type::U32 | Type::U16 | Type::U8
         | Type::F64 | Type::F32 | Type::Str | Type::Bool 
         | Type::Void | Type::Regex | Type::String => true,
 
@@ -110,7 +111,7 @@ fn is_valid_type(t: &Type, models: &HashMap<String, ModelDef>, enums: &HashMap<S
 fn is_hashable_type(t: &Type) -> bool {
     matches!(
         t,
-        Type::Generic(_) | Type::Str | Type::String | Type::I64 | Type::I32 | Type::U64 | Type::U32 | Type::Bool | Type::Enum(_, _)
+        Type::Generic(_) | Type::Str | Type::String | Type::I64 | Type::I32 | Type::I16 | Type::I8 | Type::U64 | Type::U32 | Type::U16 | Type::U8 | Type::Bool | Type::Enum(_, _)
     )
 }
 
@@ -118,8 +119,12 @@ fn format_type_for_error(t: &Type) -> String {
     match t {
         Type::I64 => "i64".to_string(),
         Type::I32 => "i32".to_string(),
+        Type::I16 => "i16".to_string(),
+        Type::I8 => "i8".to_string(),
         Type::U64 => "u64".to_string(),
         Type::U32 => "u32".to_string(),
+        Type::U16 => "u16".to_string(),
+        Type::U8 => "u8".to_string(),
         Type::F64 => "f64".to_string(),
         Type::F32 => "f32".to_string(),
         Type::String => "string".to_string(),
@@ -177,8 +182,12 @@ fn format_value(v: &Value) -> String {
     match v {
         Value::I64(n) => n.to_string(),
         Value::I32(n) => n.to_string(),
+        Value::I16(n) => n.to_string(),
+        Value::I8(n) => n.to_string(),
         Value::U64(n) => n.to_string(),
         Value::U32(n) => n.to_string(),
+        Value::U16(n) => n.to_string(),
+        Value::U8(n) => n.to_string(),
         Value::F64(n) => n.to_string(),
         Value::F32(n) => n.to_string(),
         Value::String(s) => s.clone(),
@@ -213,8 +222,12 @@ fn format_value(v: &Value) -> String {
                         MapKey::String(s) => format!("\"{}\"", s),
                         MapKey::I64(n) => n.to_string(),
                         MapKey::I32(n) => n.to_string(),
+                        MapKey::I16(n) => n.to_string(),
+                        MapKey::I8(n) => n.to_string(),
                         MapKey::U64(n) => n.to_string(),
                         MapKey::U32(n) => n.to_string(),
+                        MapKey::U16(n) => n.to_string(),
+                        MapKey::U8(n) => n.to_string(),
                         MapKey::Bool(b) => b.to_string(),
                         MapKey::Enum(enum_name, variant) => format!("{}::{}", enum_name, variant),
                     };
@@ -231,8 +244,12 @@ fn format_value(v: &Value) -> String {
                         SetValue::String(s) => format!("\"{}\"", s),
                         SetValue::I64(n) => n.to_string(),
                         SetValue::I32(n) => n.to_string(),
+                        SetValue::I16(n) => n.to_string(),
+                        SetValue::I8(n) => n.to_string(),
                         SetValue::U64(n) => n.to_string(),
                         SetValue::U32(n) => n.to_string(),
+                        SetValue::U16(n) => n.to_string(),
+                        SetValue::U8(n) => n.to_string(),
                         SetValue::Bool(b) => b.to_string(),
                         SetValue::EnumValue(enum_name, variant) => format!("{}::{}", enum_name, variant),
                     }
@@ -340,8 +357,12 @@ fn is_truthy(v: &Value) -> bool {
         Value::Bool(b) => *b,
         Value::I64(n) => *n != 0,
         Value::I32(n) => *n != 0,
+        Value::I16(n) => *n != 0,
+        Value::I8(n) => *n != 0,
         Value::U64(n) => *n != 0,
         Value::U32(n) => *n != 0,
+        Value::U16(n) => *n != 0,
+        Value::U8(n) => *n != 0,
         Value::F64(n) => *n != 0.0,
         Value::F32(n) => *n != 0.0,
         Value::String(s) => !s.is_empty(),
@@ -364,8 +385,12 @@ fn is_literal(e: &Expr) -> bool {
     matches!(e, 
         Expr::I64(_) |
         Expr::I32(_) |
+        Expr::I16(_) |
+        Expr::I8(_) |
         Expr::U64(_) |
         Expr::U32(_) |
+        Expr::U16(_) |
+        Expr::U8(_) |
         Expr::F64(_) |
         Expr::F32(_) |
         Expr::String(_) |
@@ -379,8 +404,12 @@ fn to_usize(v: &Value) -> Result<usize, String> {
     match v {
         Value::I64(n) => Ok(*n as usize),
         Value::I32(n) => Ok(*n as usize),
+        Value::I16(n) => Ok(*n as usize),
+        Value::I8(n) => Ok(*n as usize),
         Value::U64(n) => Ok(*n as usize),
         Value::U32(n) => Ok(*n as usize),
+        Value::U16(n) => Ok(*n as usize),
+        Value::U8(n) => Ok(*n as usize),
         _ => Err("Index must be an integer".to_string()),
     }
 }
@@ -423,8 +452,12 @@ fn value_to_expr(v: &Value) -> Expr {
     match v {
         Value::I64(n) => Expr::I64(*n),
         Value::I32(n) => Expr::I32(*n),
+        Value::I16(n) => Expr::I16(*n),
+        Value::I8(n) => Expr::I8(*n),
         Value::U64(n) => Expr::U64(*n),
         Value::U32(n) => Expr::U32(*n),
+        Value::U16(n) => Expr::U16(*n),
+        Value::U8(n) => Expr::U8(*n),
         Value::F64(n) => Expr::F64(*n),
         Value::F32(n) => Expr::F32(*n),
         Value::String(s) => Expr::String(s.clone()),
@@ -442,8 +475,12 @@ fn value_to_expr(v: &Value) -> Expr {
                         MapKey::String(s) => Expr::String(s.clone()),
                         MapKey::I64(n) => Expr::I64(*n),
                         MapKey::I32(n) => Expr::I32(*n),
+                        MapKey::I16(n) => Expr::I16(*n),
+                        MapKey::I8(n) => Expr::I8(*n),
                         MapKey::U64(n) => Expr::U64(*n),
                         MapKey::U32(n) => Expr::U32(*n),
+                        MapKey::U16(n) => Expr::U16(*n),
+                        MapKey::U8(n) => Expr::U8(*n),
                         MapKey::Bool(b) => Expr::Bool(*b),
                         MapKey::Enum(enum_name, variant) => {
                             Expr::EnumVariant {
@@ -469,8 +506,12 @@ fn value_to_map_key(val: Value) -> MapKey {
         Value::String(s) => MapKey::String(s),
         Value::I64(n) => MapKey::I64(n),
         Value::I32(n) => MapKey::I32(n),
+        Value::I16(n) => MapKey::I16(n),
+        Value::I8(n) => MapKey::I8(n),
         Value::U64(n) => MapKey::U64(n),
         Value::U32(n) => MapKey::U32(n),
+        Value::U16(n) => MapKey::U16(n),
+        Value::U8(n) => MapKey::U8(n),
         Value::Bool(b) => MapKey::Bool(b),
         Value::EnumValue(enum_name, variant, _) => MapKey::Enum(enum_name, variant),
         _ => panic!("Invalid map key type: {:?}", val),
@@ -482,8 +523,12 @@ fn value_to_set_value(v: &Value) -> SetValue {
         Value::String(s) => SetValue::String(s.clone()),
         Value::I64(n) => SetValue::I64(*n),
         Value::I32(n) => SetValue::I32(*n),
+        Value::I16(n) => SetValue::I16(*n),
+        Value::I8(n) => SetValue::I8(*n),
         Value::U64(n) => SetValue::U64(*n),
         Value::U32(n) => SetValue::U32(*n),
+        Value::U16(n) => SetValue::U16(*n),
+        Value::U8(n) => SetValue::U8(*n),
         Value::Bool(b) => SetValue::Bool(*b),
         Value::EnumValue(enum_name, variant, _) => {
             SetValue::EnumValue(enum_name.clone(), variant.clone())
@@ -505,8 +550,12 @@ fn infer_value_type(v: &Value) -> Type {
     match v {
         Value::I64(_) => Type::I64,
         Value::I32(_) => Type::I32,
+        Value::I16(_) => Type::I16,
+        Value::I8(_) => Type::I8,
         Value::U64(_) => Type::U64,
         Value::U32(_) => Type::U32,
+        Value::U16(_) => Type::U16,
+        Value::U8(_) => Type::U8,
         Value::F64(_) => Type::F64,
         Value::F32(_) => Type::F32,
         Value::String(_) => Type::Str,
@@ -635,6 +684,20 @@ fn match_pattern(
                         }
                     }
                 }
+                Expr::I16(n) => {
+                    if let Value::I16(val_n) = val {
+                        if val_n == n {
+                            return Some(new_env);
+                        }
+                    }
+                }
+                Expr::I8(n) => {
+                    if let Value::I8(val_n) = val {
+                        if val_n == n {
+                            return Some(new_env);
+                        }
+                    }
+                }
                 Expr::U64(n) => {
                     if let Value::U64(val_n) = val {
                         if val_n == n {
@@ -644,6 +707,20 @@ fn match_pattern(
                 }
                 Expr::U32(n) => {
                     if let Value::U32(val_n) = val {
+                        if val_n == n {
+                            return Some(new_env);
+                        }
+                    }
+                }
+                Expr::U16(n) => {
+                    if let Value::U16(val_n) = val {
+                        if val_n == n {
+                            return Some(new_env);
+                        }
+                    }
+                }
+                Expr::U8(n) => {
+                    if let Value::U8(val_n) = val {
                         if val_n == n {
                             return Some(new_env);
                         }
@@ -1239,7 +1316,8 @@ fn analyze_expr(expr: &Expr, analysis: &mut ThreadVarAnalysis) {
             }
         }
         // Do not analyze
-        Expr::I64(_) | Expr::I32(_) | Expr::U64(_) | Expr::U32(_)
+        Expr::I64(_) | Expr::I32(_) | Expr::I16(_) | Expr::I8(_)
+        | Expr::U64(_) | Expr::U32(_) | Expr::U16(_) | Expr::U8(_)
         | Expr::F64(_) | Expr::F32(_) | Expr::String(_) | Expr::Bool(_)
         | Expr::Var(_) | Expr::Const(_) | Expr::Static(_) | Expr::Regex(_)
         | Expr::CreateChannel(_) | Expr::EnumVariant { data: None, .. } 
@@ -1255,8 +1333,12 @@ async fn eval_expr(
     match e {
         Expr::I64(n) => Value::I64(*n),
         Expr::I32(n) => Value::I32(*n),
+        Expr::I16(n) => Value::I16(*n),
+        Expr::I8(n) => Value::I8(*n),
         Expr::U64(n) => Value::U64(*n),
         Expr::U32(n) => Value::U32(*n),
+        Expr::U16(n) => Value::U16(*n),
+        Expr::U8(n) => Value::U8(*n),
         Expr::F64(n) => Value::F64(*n),
         Expr::F32(n) => Value::F32(*n),
         Expr::InterpolatedString(parts) => {
@@ -1298,8 +1380,12 @@ async fn eval_expr(
             match (eval_expr(a, ctx).await, eval_expr(b, ctx).await) {
                 (Value::I64(x), Value::I64(y)) => Value::I64(x + y),
                 (Value::I32(x), Value::I32(y)) => Value::I32(x + y),
+                (Value::I16(x), Value::I16(y)) => Value::I16(x + y),
+                (Value::I8(x), Value::I8(y)) => Value::I8(x + y),
                 (Value::U64(x), Value::U64(y)) => Value::U64(x + y),
                 (Value::U32(x), Value::U32(y)) => Value::U32(x + y),
+                (Value::U16(x), Value::U16(y)) => Value::U16(x + y),
+                (Value::U8(x), Value::U8(y)) => Value::U8(x + y),
                 (Value::F64(x), Value::F64(y)) => Value::F64(x + y),
                 (Value::F32(x), Value::F32(y)) => Value::F32(x + y),
                 (Value::String(x), Value::String(y)) => Value::String(format!("{}{}", x, y)),
@@ -1310,8 +1396,12 @@ async fn eval_expr(
             match (eval_expr(a, ctx).await, eval_expr(b, ctx).await) {
                 (Value::I64(x), Value::I64(y)) => Value::I64(x - y),
                 (Value::I32(x), Value::I32(y)) => Value::I32(x - y),
+                (Value::I16(x), Value::I16(y)) => Value::I16(x - y),
+                (Value::I8(x), Value::I8(y)) => Value::I8(x - y),
                 (Value::U64(x), Value::U64(y)) => Value::U64(x - y),
                 (Value::U32(x), Value::U32(y)) => Value::U32(x - y),
+                (Value::U16(x), Value::U16(y)) => Value::U16(x - y),
+                (Value::U8(x), Value::U8(y)) => Value::U8(x - y),
                 (Value::F64(x), Value::F64(y)) => Value::F64(x - y),
                 (Value::F32(x), Value::F32(y)) => Value::F32(x - y),
                 _ => panic!("Type error: cannot subtract non-numbers"),
@@ -1321,8 +1411,12 @@ async fn eval_expr(
             match (eval_expr(a, ctx).await, eval_expr(b, ctx).await) {
                 (Value::I64(x), Value::I64(y)) => Value::I64(x * y),
                 (Value::I32(x), Value::I32(y)) => Value::I32(x * y),
+                (Value::I16(x), Value::I16(y)) => Value::I16(x * y),
+                (Value::I8(x), Value::I8(y)) => Value::I8(x * y),
                 (Value::U64(x), Value::U64(y)) => Value::U64(x * y),
                 (Value::U32(x), Value::U32(y)) => Value::U32(x * y),
+                (Value::U16(x), Value::U16(y)) => Value::U16(x * y),
+                (Value::U8(x), Value::U8(y)) => Value::U8(x * y),
                 (Value::F64(x), Value::F64(y)) => Value::F64(x * y),
                 (Value::F32(x), Value::F32(y)) => Value::F32(x * y),
                 _ => panic!("Type error: cannot multiply non-numbers"),
@@ -1332,8 +1426,12 @@ async fn eval_expr(
             match (eval_expr(a, ctx).await, eval_expr(b, ctx).await) {
                 (Value::I64(x), Value::I64(y)) => Value::I64(x / y),
                 (Value::I32(x), Value::I32(y)) => Value::I32(x / y),
+                (Value::I16(x), Value::I16(y)) => Value::I16(x / y),
+                (Value::I8(x), Value::I8(y)) => Value::I8(x / y),
                 (Value::U64(x), Value::U64(y)) => Value::U64(x / y),
                 (Value::U32(x), Value::U32(y)) => Value::U32(x / y),
+                (Value::U16(x), Value::U16(y)) => Value::U16(x / y),
+                (Value::U8(x), Value::U8(y)) => Value::U8(x / y),
                 (Value::F64(x), Value::F64(y)) => Value::F64(x / y),
                 (Value::F32(x), Value::F32(y)) => Value::F32(x / y),
                 _ => panic!("Type error: cannot divide non-numbers"),
@@ -1343,9 +1441,11 @@ async fn eval_expr(
             match eval_expr(e, ctx).await {
                 Value::I64(x) => Value::I64(-x),
                 Value::I32(x) => Value::I32(-x),
+                Value::I16(x) => Value::I16(-x),
+                Value::I8(x) => Value::I8(-x),
                 Value::F64(x) => Value::F64(-x),
                 Value::F32(x) => Value::F32(-x),
-                Value::U64(_) | Value::U32(_) => {
+                Value::U64(_) | Value::U32(_) | Value::U16(_) | Value::U8(_) => {
                     panic!("Type error: cannot negate unsigned integer")
                 },
                 _ => panic!("Type error: cannot negate non-number"),
@@ -1365,6 +1465,18 @@ async fn eval_expr(
                     }
                     Value::I32(x.pow(y as u32))
                 }
+                (Value::I16(x), Value::I16(y)) => {
+                    if y < 0 {
+                        panic!("Exponent cannot be negative for i16: {}", y);
+                    }
+                    Value::I16(x.pow(y as u32))
+                }
+                (Value::I8(x), Value::I8(y)) => {
+                    if y < 0 {
+                        panic!("Exponent cannot be negative for i8: {}", y);
+                    }
+                    Value::I8(x.pow(y as u32))
+                }
                 (Value::U64(x), Value::U64(y)) => {
                     if y > u32::MAX as u64 {
                         panic!("Exponent out of range for u64: {}", y);
@@ -1372,6 +1484,8 @@ async fn eval_expr(
                     Value::U64(x.pow(y as u32))
                 }
                 (Value::U32(x), Value::U32(y)) => Value::U32(x.pow(y as u32)),
+                (Value::U16(x), Value::U16(y)) => Value::U16(x.pow(y as u32)),
+                (Value::U8(x), Value::U8(y)) => Value::U8(x.pow(y as u32)),
                 (Value::F64(x), Value::F64(y)) => Value::F64(x.powf(y)),
                 (Value::F32(x), Value::F32(y)) => Value::F32(x.powf(y)),
                 _ => panic!("Type error: cannot exponentiate non-numbers"),
@@ -1381,8 +1495,12 @@ async fn eval_expr(
             match (eval_expr(a, ctx).await, eval_expr(b, ctx).await) {
                 (Value::I64(x), Value::I64(y)) => Value::I64(x % y),
                 (Value::I32(x), Value::I32(y)) => Value::I32(x % y),
+                (Value::I16(x), Value::I16(y)) => Value::I16(x % y),
+                (Value::I8(x), Value::I8(y)) => Value::I8(x % y),
                 (Value::U64(x), Value::U64(y)) => Value::U64(x % y),
                 (Value::U32(x), Value::U32(y)) => Value::U32(x % y),
+                (Value::U16(x), Value::U16(y)) => Value::U16(x % y),
+                (Value::U8(x), Value::U8(y)) => Value::U8(x % y),
                 (Value::F64(x), Value::F64(y)) => Value::F64(x % y),
                 (Value::F32(x), Value::F32(y)) => Value::F32(x % y),
                 _ => panic!("Type error: cannot modulo non-numbers"),
@@ -1402,8 +1520,12 @@ async fn eval_expr(
             match (eval_expr(a, ctx).await, eval_expr(b, ctx).await) {
                 (Value::I64(x), Value::I64(y)) => Value::Bool(x < y),
                 (Value::I32(x), Value::I32(y)) => Value::Bool(x < y),
+                (Value::I16(x), Value::I16(y)) => Value::Bool(x < y),
+                (Value::I8(x), Value::I8(y)) => Value::Bool(x < y),
                 (Value::U64(x), Value::U64(y)) => Value::Bool(x < y),
                 (Value::U32(x), Value::U32(y)) => Value::Bool(x < y),
+                (Value::U16(x), Value::U16(y)) => Value::Bool(x < y),
+                (Value::U8(x), Value::U8(y)) => Value::Bool(x < y),
                 (Value::F64(x), Value::F64(y)) => Value::Bool(x < y),
                 (Value::F32(x), Value::F32(y)) => Value::Bool(x < y),
                 _ => panic!("Type error: cannot compare non-numbers"),
@@ -1413,8 +1535,12 @@ async fn eval_expr(
             match (eval_expr(a, ctx).await, eval_expr(b, ctx).await) {
                 (Value::I64(x), Value::I64(y)) => Value::Bool(x <= y),
                 (Value::I32(x), Value::I32(y)) => Value::Bool(x <= y),
+                (Value::I16(x), Value::I16(y)) => Value::Bool(x <= y),
+                (Value::I8(x), Value::I8(y)) => Value::Bool(x <= y),
                 (Value::U64(x), Value::U64(y)) => Value::Bool(x <= y),
                 (Value::U32(x), Value::U32(y)) => Value::Bool(x <= y),
+                (Value::U16(x), Value::U16(y)) => Value::Bool(x <= y),
+                (Value::U8(x), Value::U8(y)) => Value::Bool(x <= y),
                 (Value::F64(x), Value::F64(y)) => Value::Bool(x <= y),
                 (Value::F32(x), Value::F32(y)) => Value::Bool(x <= y),
                 _ => panic!("Type error: cannot compare non-numbers"),
@@ -1424,8 +1550,12 @@ async fn eval_expr(
             match (eval_expr(a, ctx).await, eval_expr(b, ctx).await) {
                 (Value::I64(x), Value::I64(y)) => Value::Bool(x > y),
                 (Value::I32(x), Value::I32(y)) => Value::Bool(x > y),
+                (Value::I16(x), Value::I16(y)) => Value::Bool(x > y),
+                (Value::I8(x), Value::I8(y)) => Value::Bool(x > y),
                 (Value::U64(x), Value::U64(y)) => Value::Bool(x > y),
                 (Value::U32(x), Value::U32(y)) => Value::Bool(x > y),
+                (Value::U16(x), Value::U16(y)) => Value::Bool(x > y),
+                (Value::U8(x), Value::U8(y)) => Value::Bool(x > y),
                 (Value::F64(x), Value::F64(y)) => Value::Bool(x > y),
                 (Value::F32(x), Value::F32(y)) => Value::Bool(x > y),
                 _ => panic!("Type error: cannot compare non-numbers"),
@@ -1435,8 +1565,12 @@ async fn eval_expr(
             match (eval_expr(a, ctx).await, eval_expr(b, ctx).await) {
                 (Value::I64(x), Value::I64(y)) => Value::Bool(x >= y),
                 (Value::I32(x), Value::I32(y)) => Value::Bool(x >= y),
+                (Value::I16(x), Value::I16(y)) => Value::Bool(x >= y),
+                (Value::I8(x), Value::I8(y)) => Value::Bool(x >= y),
                 (Value::U64(x), Value::U64(y)) => Value::Bool(x >= y),
                 (Value::U32(x), Value::U32(y)) => Value::Bool(x >= y),
+                (Value::U16(x), Value::U16(y)) => Value::Bool(x >= y),
+                (Value::U8(x), Value::U8(y)) => Value::Bool(x >= y),
                 (Value::F64(x), Value::F64(y)) => Value::Bool(x >= y),
                 (Value::F32(x), Value::F32(y)) => Value::Bool(x >= y),
                 _ => panic!("Type error: cannot compare non-numbers"),
@@ -1655,6 +1789,10 @@ async fn eval_expr(
                 Value::U64(n) => n as usize,
                 Value::I32(n) => n as usize,
                 Value::U32(n) => n as usize,
+                Value::I16(n) => n as usize,
+                Value::U16(n) => n as usize,
+                Value::I8(n) => n as usize,
+                Value::U8(n) => n as usize,
                 _ => panic!("Count must be an integer"),
             };
 
@@ -1778,8 +1916,12 @@ async fn eval_expr(
                 let ms = match duration {
                     Value::I64(n) => n as u64,
                     Value::I32(n) => n as u64,
+                    Value::I16(n) => n as u64,
+                    Value::I8(n) => n as u64,
                     Value::U64(n) => n,
                     Value::U32(n) => n as u64,
+                    Value::U16(n) => n as u64,
+                    Value::U8(n) => n as u64,
                     _ => panic!("sleep() requires an integer (milliseconds)"),
                 };
                 tokio::time::sleep(tokio::time::Duration::from_millis(ms)).await;
@@ -3253,8 +3395,12 @@ async fn execute_stmt(
                     let limit = match count_val {
                         Value::U64(n) => n as i64,
                         Value::U32(n) => n as i64,
+                        Value::U16(n) => n as i64,
+                        Value::U8(n) => n as i64,
                         Value::I64(n) if n > 0 => n,
                         Value::I32(n) if n > 0 => n as i64,
+                        Value::I16(n) if n > 0 => n as i64,
+                        Value::I8(n) if n > 0 => n as i64,
                         _ => panic!("For loop receive count must be a positive integer"),
                     };
                     
