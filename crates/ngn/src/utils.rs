@@ -1,5 +1,6 @@
 use crate::ast::{EnumDef};
 use crate::types::{Ownership, Type};
+use std::path::{Component, Path, PathBuf};
 use std::{collections::HashMap, iter::Peekable};
 use crate::lexer::Token;
 
@@ -148,54 +149,44 @@ where
     Ok((base_type, ownership))
 }
 
-pub fn resolve_module_path(import_path: &str, current_file: &str) -> String {
-    use std::path::{Path, PathBuf};
-    
-    let current_dir = Path::new(current_file)
+pub fn resolve_module_path(import_path: &Path, current_file: &Path) -> PathBuf {
+    let source_str = import_path.to_string_lossy();
+    if source_str.starts_with("tbx") {
+        return PathBuf::from(source_str.into_owned());
+    }
+
+    let current_dir = current_file
         .parent()
         .unwrap_or(Path::new("."));
     
-    let resolved: PathBuf = if import_path.starts_with("./") || import_path.starts_with("../") {
-        // Relative import
-        current_dir.join(import_path)
-    } else {
-        // Bare import - treat as relative to current directory
-        current_dir.join(import_path)
-    };
+    let mut resolved = current_dir.join(import_path);
     
     // Add .ngn extension if not present
-    let with_extension = if resolved.extension().is_some() {
-        resolved
-    } else {
-        resolved.with_extension("ngn")
-    };
+    if resolved.extension().is_none() {
+        resolved.set_extension("ngn");
+    }
     
     // Normalize the path (resolve .. and .)
-    normalize_path(&with_extension)
+    normalize_path(&resolved)
 }
 
-fn normalize_path(path: &std::path::Path) -> String {
+fn normalize_path(path: &Path) -> PathBuf {
     let mut components = Vec::new();
     
     for component in path.components() {
         match component {
-            std::path::Component::ParentDir => {
-                match components.last() {
-                    Some(std::path::Component::Normal(_)) => {
-                        // If we are inside a folder, go back up
-                        components.pop();
-                    }
-                    _ => {
-                        // If stack is empty, or we already have '..', keep the '..'
-                        components.push(component);
-                    }
+            Component::ParentDir => {
+                // Pop the last normal directory if possible
+                if let Some(Component::Normal(_)) = components.last() {
+                    components.pop();
+                } else {
+                    components.push(component);
                 }
             }
-            std::path::Component::CurDir => {}
+            Component::CurDir => {} // Ignore "."
             c => components.push(c),
         }
     }
     
-    let result: std::path::PathBuf = components.iter().collect();
-    result.to_string_lossy().to_string()
+    components.iter().collect()
 }

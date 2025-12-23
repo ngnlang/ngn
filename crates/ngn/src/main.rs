@@ -40,7 +40,7 @@ struct Cli {
 async fn main() {
     let cli = Cli::parse();
 
-    let file_path_buf = match cli.file_path {
+    let file_path = match cli.file_path {
         Some(path) => path,
         None => {
             eprintln!("Usage: ngn <file_path>");
@@ -49,7 +49,10 @@ async fn main() {
         }
     };
 
-    let file_path = file_path_buf.to_string_lossy().to_string();
+    if file_path.extension().and_then(|s| s.to_str()) != Some("ngn") {
+        eprintln!("Error: File {:?} does not have the .ngn extension", file_path);
+        std::process::exit(1);
+    }
 
     let source = fs::read_to_string(&file_path)
         .expect("Failed to read ngn file");
@@ -3619,7 +3622,7 @@ async fn execute_stmt(
         Stmt::Import(import_stmt) => {
             let module_exports = ctx.module_cache
                 .get(&import_stmt.source)
-                .unwrap_or_else(|| panic!("Module '{}' not found", import_stmt.source))
+                .unwrap_or_else(|| panic!("Module '{}' not found", import_stmt.source.display()))
                 .clone();
             
             match &import_stmt.kind {
@@ -3636,7 +3639,7 @@ async fn execute_stmt(
                         } else if let Some(model_def) = module_exports.models.get(original) {
                             ctx.models.insert(local.clone(), model_def.clone());
                         } else {
-                            panic!("'{}' is not exported from '{}'", original, import_stmt.source);
+                            panic!("'{}' is not exported from '{}'", original, import_stmt.source.display());
                         }
                     }
                 }
@@ -3645,7 +3648,7 @@ async fn execute_stmt(
                     let default_name = module_exports
                         .default
                         .as_ref()
-                        .unwrap_or_else(|| panic!("Module '{}' has no default export", import_stmt.source));
+                        .unwrap_or_else(|| panic!("Module '{}' has no default export", import_stmt.source.display()));
                     
                     // Check what type the default export is
                     if let Some(fn_def) = module_exports.functions.get(default_name) {
@@ -3661,7 +3664,7 @@ async fn execute_stmt(
                         renamed_model.name = name.clone();
                         ctx.models.insert(name.clone(), renamed_model);
                     } else {
-                        panic!("Default export '{}' not found in '{}'", default_name, import_stmt.source);
+                        panic!("Default export '{}' not found in '{}'", default_name, import_stmt.source.display());
                     }
                 }
                 
@@ -3732,9 +3735,9 @@ async fn execute_block(
 }
 
 async fn load_module(
-    path: &str,
-    current_file: &str,
-    module_cache: &mut HashMap<String, ModuleExports>,
+    path: &PathBuf,
+    current_file: &PathBuf,
+    module_cache: &mut HashMap<PathBuf, ModuleExports>,
     toolbox: &Toolbox,
 ) -> ModuleExports {
     let file_path = resolve_module_path(path, current_file);
@@ -3744,7 +3747,7 @@ async fn load_module(
     }
 
     let source = std::fs::read_to_string(&file_path)
-        .unwrap_or_else(|_| panic!("Could not read module '{}'", file_path.clone()));
+        .unwrap_or_else(|_| panic!("Could not read module '{}'", file_path.display()));
     
     let tokens = ngn::lexer::tokenize(&source);
     
@@ -3752,7 +3755,7 @@ async fn load_module(
     let mut parser = Parser::new(tokens, HashMap::new(), file_path.clone());
     let stmts = parser
         .parse_program()
-        .unwrap_or_else(|e| panic!("Parse error in '{}': {}", file_path, e));
+        .unwrap_or_else(|e| panic!("Parse error in '{}': {}", file_path.display(), e));
     
     module_cache.insert(file_path.clone(), ModuleExports::default());
     
@@ -3765,8 +3768,8 @@ async fn load_module(
 
 async fn run_module(
     stmts: &[Stmt],
-    current_file: &str,
-    module_cache: &mut HashMap<String, ModuleExports>,
+    current_file: &PathBuf,
+    module_cache: &mut HashMap<PathBuf, ModuleExports>,
     toolbox: &Toolbox,
     is_entry: bool, // true for main file, false for imported modules
 ) -> ModuleExports {
@@ -3865,7 +3868,7 @@ async fn run_module(
                                     } else if let Some(enum_def) = module_exports.enums.get(original) {
                                         ctx.enums.insert(local.clone(), enum_def.clone());
                                     } else {
-                                        panic!("'{}' is not exported from '{}'", original, import_stmt.source);
+                                        panic!("'{}' is not exported from '{}'", original, import_stmt.source.display());
                                     }
                                 }
                             }
@@ -3875,7 +3878,7 @@ async fn run_module(
                                     .default
                                     .as_ref()
                                     .unwrap_or_else(|| {
-                                        panic!("Module '{}' has no default export", import_stmt.source)
+                                        panic!("Module '{}' has no default export", import_stmt.source.display())
                                     });
                                 
                                 if let Some(fn_def) = module_exports.functions.get(default_name) {
@@ -3883,7 +3886,7 @@ async fn run_module(
                                     renamed.name = local_name.clone();
                                     ctx.fns.insert(local_name.clone(), Callable::UserDefined(renamed.clone()));
                                 } else {
-                                    panic!("Default export '{}' not found in '{}'", default_name, import_stmt.source);
+                                    panic!("Default export '{}' not found in '{}'", default_name, import_stmt.source.display());
                                 }
                             }
                             
@@ -4109,7 +4112,7 @@ async fn run_module(
     ctx.exports
 }
 
-pub async fn run(stmts: &[Stmt], entry_file: &str) {
+pub async fn run(stmts: &[Stmt], entry_file: &PathBuf) {
     let mut module_cache = HashMap::new();
     let toolbox = Toolbox::new();
     run_module(stmts, entry_file, &mut module_cache, &toolbox, true).await;

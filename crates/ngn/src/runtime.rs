@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 
 use crate::{ast::{EnumDef, FnDef, ModelDef, RoleDef, Stmt}, error::RuntimeError};
 use crate::{types::{AssignKind, Moved, Ownership}};
@@ -17,7 +17,7 @@ pub enum ImportKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImportStmt {
     pub kind: ImportKind,
-    pub source: String,
+    pub source: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -46,12 +46,12 @@ pub struct RuntimeContext {
     pub model_roles: HashMap<(String, String), bool>,
     pub enums: HashMap<String, EnumDef>,
     pub exports: ModuleExports,
-    pub module_cache: HashMap<String, ModuleExports>,
+    pub module_cache: HashMap<PathBuf, ModuleExports>,
     pub scope_depth: usize,
 }
 
 impl RuntimeContext {
-    pub fn with_cache(module_cache: HashMap<String, ModuleExports>) -> Self {
+    pub fn with_cache(module_cache: HashMap<PathBuf, ModuleExports>) -> Self {
         Self {
             module_cache,
             ..Default::default()

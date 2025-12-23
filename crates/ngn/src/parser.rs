@@ -4,6 +4,7 @@ use crate::runtime::{ExportKind, ImportKind, ImportStmt};
 use crate::types::{AssignKind, Ownership, Type};
 use std::collections::HashMap;
 use std::iter::Peekable;
+use std::path::{Path, PathBuf};
 use std::vec::IntoIter;
 use crate::utils::{infer_enum_name, resolve_module_path};
 use crate::utils::parse_type;
@@ -11,11 +12,11 @@ use crate::utils::parse_type;
 pub struct Parser {
     tokens: Peekable<IntoIter<(usize, Token, usize)>>,
     enums: HashMap<String, EnumDef>,
-    current_file: String,
+    current_file: PathBuf,
 }
 
 impl Parser {
-    pub fn new(tokens: Vec<(usize, Token, usize)>, enums: HashMap<String, EnumDef>, current_file: String) -> Self {
+    pub fn new(tokens: Vec<(usize, Token, usize)>, enums: HashMap<String, EnumDef>, current_file: PathBuf) -> Self {
         // remove comment tokens - only used for syntax highlighting
         let filtered_tokens: Vec<_> = tokens
             .into_iter()
@@ -101,22 +102,21 @@ impl Parser {
         }
     }
 
-    fn process_imported_enums(&mut self, source: &str) -> Result<(), String> {
+    fn process_imported_enums(&mut self, path: &Path) -> Result<(), String> {
         // Skip standard library imports - they don't have enums we need at parse time
-        if source.starts_with("tbx::") {
+        if path.to_string_lossy().starts_with("tbx::") {
             return Ok(());
         }
-
-        let path = resolve_module_path(source, &self.current_file);
         
         let file_source = std::fs::read_to_string(&path)
-            .map_err(|e| format!("Failed to read {}: {}", path, e))?;
+            .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
         
         let tokens = crate::lexer::tokenize(&file_source);
         
         // Single pass - enums collected during parse
-        let mut imported_parser = Parser::new(tokens, self.enums.clone(), path);
-        imported_parser.parse_program()?;
+        let mut imported_parser = Parser::new(tokens, self.enums.clone(), path.to_path_buf());
+        imported_parser.parse_program()
+            .map_err(|e| format!("Error parsing {}: {}", path.display(), e))?;
         
         // Take all enums
         for (name, enum_def) in imported_parser.enums {
@@ -1041,10 +1041,12 @@ impl Parser {
             _ => return Err("Expected string after 'from'".into()),
         };
 
+        let resolved_path = resolve_module_path(Path::new(&source), &self.current_file);
+
         // Eagerly parse imported file for enums ===
-        self.process_imported_enums(&source)?;
+        self.process_imported_enums(&resolved_path)?;
         
-        Ok(Stmt::Import(ImportStmt { kind, source }))
+        Ok(Stmt::Import(ImportStmt { kind, source: resolved_path }))
     }
 
     fn parse_export_stmt(&mut self) -> Result<Stmt, String> {

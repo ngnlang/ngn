@@ -4,6 +4,7 @@ use crate::lexer::{InterpolationToken, Token};
 use crate::utils::{infer_enum_name, parse_type};
 use std::collections::HashMap;
 use std::iter::Peekable;
+use std::path::PathBuf;
 use std::vec::IntoIter;
 
 pub struct ExprParser {
@@ -759,7 +760,7 @@ impl ExprParser {
         let mut parser = crate::parser::Parser::new(
             body_tokens,
             self.enums.clone(),
-            String::new(), // No file context needed for closure bodies
+            PathBuf::new(), // No file context needed for closure bodies
         );
         let body = parser.parse_program()?;
         

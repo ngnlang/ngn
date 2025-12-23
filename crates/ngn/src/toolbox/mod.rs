@@ -1,7 +1,7 @@
 pub mod math;
 pub mod signatures;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, path::Path};
 
 use crate::{value::Value, error::RuntimeError};
 
@@ -39,12 +39,14 @@ pub enum ImportSource {
     File { path: String },
 }
 
-pub fn parse_import_source(source: &str) -> ImportSource {
-    if source == "tbx" {
+pub fn parse_import_source(path: &Path) -> ImportSource {
+    let source_str = path.to_string_lossy();
+
+    if source_str == "tbx" {
         ImportSource::Toolbox { module: None }
-    } else if let Some(module) = source.strip_prefix("tbx::") {
+    } else if let Some(module) = source_str.strip_prefix("tbx::") {
         ImportSource::Toolbox { module: Some(module.to_string()) }
     } else {
-        ImportSource::File { path: source.to_string() }
+        ImportSource::File { path: source_str.to_string() }
     }
 }

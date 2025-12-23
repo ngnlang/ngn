@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use crate::lexer::tokenize;
 use crate::runtime::ExportKind;
 use crate::runtime::ImportKind;
@@ -8,7 +9,6 @@ use crate::toolbox::signatures::get_builtin_signature;
 use crate::types::*;
 use crate::ast::*;
 use crate::utils::parse_type;
-use crate::utils::resolve_module_path;
 
 #[derive(Debug)]
 pub struct Analyzer {
@@ -19,9 +19,9 @@ pub struct Analyzer {
     match_depth: usize,
     current_return_type: Option<Type>,
     enums: HashMap<String, EnumDef>,
-    module_exports: HashMap<String, AnalyzedModule>,
-    current_file: String,
-    module_cache: HashMap<String, AnalyzedModule>,
+    module_exports: HashMap<PathBuf, AnalyzedModule>,
+    current_file: PathBuf,
+    module_cache: HashMap<PathBuf, AnalyzedModule>,
     exports: AnalyzedModule,
     pub errors: Vec<String>,
 }
@@ -61,7 +61,7 @@ pub fn parse_builtin_type(s: &str) -> Type {
 }
 
 impl Analyzer {
-    pub fn new(current_file: String) -> Self {
+    pub fn new(current_file: PathBuf) -> Self {
         let mut enums = HashMap::new();
         let global_scope = HashMap::new();
     
@@ -101,7 +101,7 @@ impl Analyzer {
         }
     }
 
-    pub fn with_cache(current_file: String, cache: HashMap<String, AnalyzedModule>) -> Self {
+    pub fn with_cache(current_file: PathBuf, cache: HashMap<PathBuf, AnalyzedModule>) -> Self {
         let mut analyzer = Self::new(current_file);
         analyzer.module_cache = cache;
         analyzer
@@ -193,26 +193,27 @@ impl Analyzer {
         }
     }
 
-    fn analyze_module(&mut self, source: &str) -> AnalyzedModule {
-        let file_path = resolve_module_path(source, &self.current_file);
+    fn analyze_module(&mut self, source: &PathBuf) -> AnalyzedModule {
+        let file_path = source; 
 
-        // Check the persistent cache first (from previous compilations or other analyzers)
-        if let Some(cached) = self.module_cache.get(&file_path) {
+        // 2. Check the caches using the PathBuf directly
+        if let Some(cached) = self.module_cache.get(file_path) {
             return cached.clone();
         }
         
-        // Check if we've already analyzed it in this session (handles circular imports)
-        if let Some(cached) = self.module_exports.get(&file_path) {
+        if let Some(cached) = self.module_exports.get(file_path) {
             return cached.clone();
         }
         
-        // Insert placeholder to prevent infinite recursion on circular imports
+        // 3. Placeholder for circular imports
         self.module_exports.insert(file_path.clone(), AnalyzedModule::default());
         
-        let source_code = match std::fs::read_to_string(&file_path) {
+        // 4. Read the file (Passing &PathBuf works here)
+        let source_code = match std::fs::read_to_string(file_path) {
             Ok(s) => s,
             Err(_) => {
-                self.error(format!("Could not read module '{}'", file_path));
+                // Use .display() to format PathBuf for the error message
+                self.error(format!("Could not read module '{}'", file_path.display()));
                 return AnalyzedModule::default();
             }
         };
@@ -223,25 +224,23 @@ impl Analyzer {
         let stmts = match parser.parse_program() {
             Ok(s) => s,
             Err(e) => {
-                self.error(format!("Parse error in '{}': {}", file_path, e));
+                // Use .display() here too
+                self.error(format!("Parse error in '{}': {}", file_path.display(), e));
                 return AnalyzedModule::default();
             }
         };
         
-        // Create child analyzer with BOTH caches
         let mut module_analyzer = Analyzer::new(file_path.clone());
         module_analyzer.module_cache = self.module_cache.clone();
         module_analyzer.module_exports = std::mem::take(&mut self.module_exports);
 
         let _ = module_analyzer.analyze(&stmts);
         
-        // Merge caches back
         self.module_exports = module_analyzer.module_exports;
         let exports = module_analyzer.exports;
         
-        // Store in both caches
         self.module_exports.insert(file_path.clone(), exports.clone());
-        self.module_cache.insert(file_path, exports.clone());
+        self.module_cache.insert(file_path.clone(), exports.clone());
 
         exports
     }
@@ -303,7 +302,12 @@ impl Analyzer {
         self.scopes.iter().rev().find_map(|s| s.get(name))
     }
 
-    fn error(&mut self, msg: String) {
+    fn error(&mut self, message: String) {
+        let msg = format!(
+            "Error in {}: {}", 
+            self.current_file.display(), 
+            message
+        );
         self.errors.push(msg);
     }
 
@@ -752,7 +756,7 @@ impl Analyzer {
                                     } else {
                                         self.error(format!(
                                             "'{}' is not exported from '{}'", 
-                                            original, import_stmt.source
+                                            original, import_stmt.source.display()
                                         ));
                                     }
                                 }
@@ -764,7 +768,7 @@ impl Analyzer {
                                     None => {
                                         self.error(format!(
                                             "Module '{}' has no default export", 
-                                            import_stmt.source
+                                            import_stmt.source.display()
                                         ));
                                         return;
                                     }
@@ -792,7 +796,7 @@ impl Analyzer {
                                 } else {
                                     self.error(format!(
                                         "Default export '{}' not found in '{}'", 
-                                        default_name, import_stmt.source
+                                        default_name, import_stmt.source.display()
                                     ));
                                 }
                             }
