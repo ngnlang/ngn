@@ -908,19 +908,12 @@ async fn execute_callable(
                 } else {
                     panic!("Function {} expects {} arguments, got {}", name, fn_arg_count, args.len())
                 };
+
+                let param_owned = *param_ownership == Ownership::Owned;
                 
-                // Only error if param expects Owned but arg is Borrowed
-                if *param_ownership == Ownership::Owned && ownership == Ownership::Borrowed {
+                // Error if param expects Owned but arg is Borrowed
+                if param_owned && ownership == Ownership::Borrowed {
                     panic!("Function {} param '{}' expects owned, but got borrowed", name, param_name);
-                }
-                
-                // Mark as moved if param expects Owned
-                if *param_ownership == Ownership::Owned {
-                    if let Expr::Var(var_name) = arg_expr {
-                        if let Some((k, v, o, _, sd)) = ctx.env.get(var_name) {
-                            ctx.env.insert(var_name.clone(), (k.clone(), v.clone(), o.clone(), Moved::True, sd.clone()));
-                        }
-                    }
                 }
 
                 // Validate parameter type
@@ -930,8 +923,19 @@ async fn execute_callable(
                         panic!("Type error: param for function {}: expected {:?}, got {:?}", name, expected_type, actual_type);
                     }
                 }
+                
+                if param_owned {
+                    // Mark as moved if param expects Owned
+                    if let Expr::Var(var_name) = arg_expr {
+                        if let Some((k, v, o, _, sd)) = ctx.env.get(var_name) {
+                            ctx.env.insert(var_name.clone(), (k.clone(), v.clone(), o.clone(), Moved::True, sd.clone()));
+                        }
+                    }
 
-                fn_env.insert(param_name.clone(), (AssignKind::Var, arg_val, ownership, Moved::False, ctx.scope_depth + 1));
+                    fn_env.insert(param_name.clone(), (AssignKind::Var, arg_val, ownership, Moved::False, ctx.scope_depth + 1));
+                } else {
+                    fn_env.insert(param_name.clone(), (AssignKind::Var, arg_val, param_ownership.clone(), Moved::False, ctx.scope_depth + 1));
+                }
             }
             
             // Execute function body
@@ -3216,7 +3220,7 @@ async fn execute_stmt(
             }
 
             let (kind, existing_val, ownership, moved, scope_depth) = ctx.env.get(name).unwrap().clone();
-            
+
             // Disallow direct reassignment of StateActor
             if matches!(existing_val, Value::StateActor(_, _, _)) {
                 panic!("Cannot reassign state directly. Use .set() or .update()");
