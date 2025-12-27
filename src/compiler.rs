@@ -61,6 +61,10 @@ impl Compiler {
                     panic!("Compiler Error: Cannot assign to undefined variable '{}'", name);
                 }
             }
+            Expr::Bool(b) => {
+                let idx = self.add_constant(Value::Bool(*b));
+                self.instructions.push(OpCode::LoadConst(idx));
+            }
             Expr::Call { name, args } => {
                 for arg in args {
                     self.compile_expr(arg);
@@ -95,6 +99,7 @@ impl Compiler {
                 self.compile_expr(left);
                 self.compile_expr(right);
                 match op {
+                    Token::EqualEqual => self.instructions.push(OpCode::Equal),
                     Token::Plus => self.instructions.push(OpCode::Add),
                     Token::Minus => self.instructions.push(OpCode::Subtract),
                     Token::Star => self.instructions.push(OpCode::Multiply),
@@ -212,6 +217,32 @@ impl Compiler {
 
                 // Update parent index pointer to reflect our additions
                 //self.next_index = sub_compiler.next_index;
+            }
+            Statement::Import { names, source } => {
+                // Identify if it's a toolbox import: "tbx::test"
+                if source.starts_with("tbx::") {
+                    let module_name = source.strip_prefix("tbx::").unwrap();
+                    
+                    for name in names {
+                        // Map the name to our Native ID registry
+                        if let Some(native_id) = crate::toolbox::get_native_id(module_name, &name) {
+                            
+                            // Store a "NativeFunction" in the Constants Pool
+                            let const_idx = self.add_constant(Value::NativeFunction(native_id));
+                            
+                            // Reserve a slot in the Symbol Table (Global Index)
+                            let var_idx = self.next_index;
+                            self.symbol_table.insert(name.clone(), var_idx);
+                            self.next_index += 1;
+                            
+                            // Tell the VM to put the Native pointer into that slot
+                            self.instructions.push(OpCode::LoadConst(const_idx));
+                            self.instructions.push(OpCode::DefVar(var_idx, false));
+                        } else {
+                            panic!("Toolbox error: {} not found in tbx::{}", name, module_name);
+                        }
+                    }
+                }
             }
             Statement::Print(expression) => {
                 // Compile the expression to put result on stack

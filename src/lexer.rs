@@ -3,6 +3,7 @@ pub enum Token {
     // Keywords
     Var, Const, Static, Fn,
     If, Else, Match, While, Until,
+	Import, From, As,
 
 	// Built-ins
 	Print,
@@ -11,11 +12,12 @@ pub enum Token {
     Identifier(String),
     Number(i64),
     StringLiteral(String),
+	Bool(bool),
     
     // Symbols
-    Equal, Plus, Minus, Star, Slash,
+    Equal, EqualEqual, NotEqual, Plus, Minus, Star, Slash,
     LParen, RParen, LBrace, RBrace, LBracket, RBracket,
-    Colon, Comma, LArrow,
+    Colon, DoubleColon, Comma, LArrow,
 	LessThan,
     
     // Formatting
@@ -70,17 +72,54 @@ impl Lexer {
         }
 
         self.cursor += 1;
-        match ch {
+        let token = match ch {
             '+' => Token::Plus,
             '-' => Token::Minus,
 			'*' => Token::Star,
 			'/' => Token::Slash,
-            '=' => Token::Equal,
             '(' => Token::LParen,
             ')' => Token::RParen,
 			'{' => Token::LBrace,
             '}' => Token::RBrace,
+			':' => Token::Colon,
+			'=' => {
+				if self.peek_current() == '=' {
+					self.cursor += 1;
+					Token::EqualEqual
+				} else {
+					Token::Equal
+				}
+			}
+			'!' => {
+				if self.peek_current() == '=' {
+					self.cursor += 1;
+					Token::NotEqual
+				} else {
+					panic!("Unknown character '!'");
+				}
+			}
             _ => panic!("Unknown character: {}<", ch),
+        };
+
+		return token;
+    }
+
+	// Look at the next character without advancing the cursor
+    fn peek(&self) -> char {
+        if self.cursor + 1 >= self.source.len() {
+            '\0' // Return a "null" character at the end of the file
+        } else {
+            self.source[self.cursor + 1]
+        }
+    }
+    
+    // Sometimes you might need to peek at the current character 
+    // if your cursor has already been moved forward
+    fn peek_current(&self) -> char {
+        if self.cursor >= self.source.len() {
+            '\0'
+        } else {
+            self.source[self.cursor]
         }
     }
 
@@ -95,6 +134,11 @@ impl Lexer {
             "const" => Token::Const,
 			"fn" => Token::Fn,
 			"print" => Token::Print,
+			"import" => Token::Import,
+			"from" => Token::From,
+			"as" => Token::As,
+			"true" => Token::Bool(true),
+    		"false" => Token::Bool(false),
             _ => Token::Identifier(ident),
         }
     }

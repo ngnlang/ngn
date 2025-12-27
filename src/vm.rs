@@ -1,4 +1,4 @@
-use crate::{bytecode::OpCode, value::{Function, Value}};
+use crate::{bytecode::OpCode, toolbox::{NATIVE_ABS, NATIVE_ASSERT}, value::{Value}};
 
 #[derive(Clone, Debug)]
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -31,15 +31,16 @@ impl VM {
     fn current_env(&mut self) -> &mut Vec<Option<Variable>> {
         self.env_stack.last_mut().expect("No active environment!")
     }
-    fn get_function(&self, idx: usize) -> Function {
+    fn get_callable(&self, idx: usize) -> Value {
         // 1. Try Local Scope
         let local_val = self.env_stack.last()
             .and_then(|env| env.get(idx))
             .and_then(|slot| slot.as_ref());
 
         if let Some(var) = local_val {
-            if let Value::Function(f) = &var.value {
-                return (**f).clone();
+            // Return the value if it's any type of function
+            if matches!(var.value, Value::Function(_) | Value::NativeFunction(_)) {
+                return var.value.clone();
             }
         }
 
@@ -48,12 +49,12 @@ impl VM {
             .and_then(|slot| slot.as_ref());
 
         if let Some(var) = global_val {
-            if let Value::Function(f) = &var.value {
-                return (**f).clone();
+            if matches!(var.value, Value::Function(_) | Value::NativeFunction(_)) {
+                return var.value.clone();
             }
         }
 
-        panic!("Runtime Error: Function at index {} not found", idx);
+        panic!("Runtime Error: Callable at index {} not found", idx);
     }
     fn pop_stack(&mut self) -> Value {
         let val = self.stack.pop().expect("Runtime error: Stack underflow");
@@ -153,47 +154,90 @@ impl VM {
                         }
                     } 
                 }
+                OpCode::Equal => {
+                    let b = self.pop_stack();
+                    let a = self.pop_stack();
+                    let rx = self.resolve_value(a);
+                    let ry = self.resolve_value(b);
+                    
+                    self.stack.push(Value::Bool(rx.is_equal(ry)));
+                }
+                OpCode::NotEqual => {
+                    let y = self.pop_stack();
+                    let x = self.pop_stack();
+                    let rx = self.resolve_value(x);
+                    let ry = self.resolve_value(y);
+
+                    self.stack.push(Value::Bool(!rx.is_equal(ry)));
+                }
                 OpCode::Call(var_idx) => {
-                    // 1. We extract the function data and CLONE it.
-                    // This releases the borrow on self.env_stack immediately.
-                    let func = self.get_function(var_idx);
+                    let callable_value = self.get_callable(var_idx);
 
-                    let caller_env_idx = self.env_stack.len() - 1;
-                    let mut new_env = Vec::new();
+                    match callable_value {
+                        Value::Function(func) => {
+                            let caller_env_idx = self.env_stack.len() - 1;
+                            let mut new_env = Vec::new();
 
-                    // 2. Now self.pop_stack() will work because self is no longer borrowed!
-                    for i in (0..func.param_count).rev() {
-                        let arg = self.pop_stack();
-                        let is_owned = func.param_ownership[i];
+                            for i in (0..func.param_count).rev() {
+                                let arg = self.pop_stack();
+                                let is_owned = func.param_ownership[i];
 
-                        if is_owned {
-                            if let Value::Reference(idx) = arg {
-                                // Perform the MOVE
-                                let moved_var = self.env_stack[caller_env_idx][idx].take()
-                                    .expect("Cannot move an already moved or undefined variable");
-                                
-                                new_env.push(Some(Variable {
-                                    value: moved_var.value,
-                                    is_mutable: true,
-                                    reference_count: 0,
-                                }));
-                            } else {
-                                new_env.push(Some(Variable { value: arg, is_mutable: true, reference_count: 0 }));
+                                if is_owned {
+                                    if let Value::Reference(idx) = arg {
+                                        // Perform the MOVE
+                                        let moved_var = self.env_stack[caller_env_idx][idx].take()
+                                            .expect("Cannot move an already moved or undefined variable");
+                                        
+                                        new_env.push(Some(Variable {
+                                            value: moved_var.value,
+                                            is_mutable: true,
+                                            reference_count: 0,
+                                        }));
+                                    } else {
+                                        new_env.push(Some(Variable { value: arg, is_mutable: true, reference_count: 0 }));
+                                    }
+                                } else {
+                                    new_env.push(Some(Variable { value: arg, is_mutable: false, reference_count: 0 }));
+                                }
                             }
-                        } else {
-                            new_env.push(Some(Variable { value: arg, is_mutable: false, reference_count: 0 }));
+
+                            new_env.reverse();
+
+                            self.call_stack.push((self.instructions.clone(), self.constants.clone(), self.ip));
+                            self.instructions = func.instructions.clone();
+                            self.ip = 0;
+                            self.constants = func.constants.clone(); // Swap the constants pool
+                            self.env_stack.push(new_env);
+                            continue;
                         }
+                        Value::NativeFunction(id) => {
+                            // Native functions don't need a new environment or instructions.
+                            // We just pop the args and run the Rust code.
+                            
+                            // For now, let's assume all Native functions take 1 argument.
+                            // (Later, we can store the arity in the Value::NativeFunction)
+                            let arg = self.pop_stack();
+                            let resolved = self.resolve_value(arg);
+
+                            // Execute the Rust logic
+                            match id {
+                                crate::toolbox::NATIVE_ASSERT => {
+                                    match resolved {
+                                        Value::Bool(true) => println!("✅ Assertion passed"),
+                                        Value::Bool(false) => panic!("❌ Assertion failed! Expected true, got false."),
+                                        other => panic!("❌ Assertion failed! Expected Boolean, got {}", other),
+                                    }
+                                }
+                                crate::toolbox::NATIVE_ABS => {
+                                    // Call your math::abs logic here
+                                }
+                                _ => panic!("Unknown native function ID"),
+                            }
+                            // Native functions usually return something; for now, we just push Void
+                            // self.stack.push(Value::Numeric(Number::I64(0)));
+                        }
+                        _ => panic!("Value at index {} is not callable", var_idx),
                     }
-
-                    new_env.reverse();
-
-                    // 3. Complete the Call
-                    self.call_stack.push((self.instructions.clone(), self.constants.clone(), self.ip));
-                    self.instructions = func.instructions.clone();
-                    self.ip = 0;
-                    self.constants = func.constants.clone(); // Swap the constants pool
-                    self.env_stack.push(new_env);
-                    continue;
                 }
                 OpCode::DefVar(idx, is_mutable) => {
                     let val = self.pop_stack();
@@ -262,6 +306,37 @@ impl VM {
                     } else {
                         panic!("Runtime error: Cannot delete undefinded variable '{}'", idx);
                     }
+                }
+                OpCode::NativeCall(id, arg_count) => {
+                    let mut args = Vec::new();
+                    for _ in 0..arg_count {
+                        // Resolve references before passing to Rust
+                        let raw = self.pop_stack();
+                        args.push(self.resolve_value(raw));
+                    }
+                    // Args were popped in reverse order, so fix them
+                    args.reverse();
+
+                    let result = match id {
+                        NATIVE_ABS => {
+                            // Re-use your existing toolbox math logic here!
+                            // Just wrap it in a result
+                            crate::toolbox::math::abs(args).expect("Native Error")
+                        }
+                        NATIVE_ASSERT => {
+                            let condition = &args[0];
+                            match condition {
+                                Value::Bool(true) => println!("✅ Assertion passed!"),
+                                Value::Bool(false) => panic!("❌ Assertion failed!"),
+                                _ => panic!("❌ Assertion error: Expected boolean"),
+                            }
+                            // Return a 'Void' or dummy value so the arm matches types
+                            Value::Bool(true)
+                        }
+                        _ => panic!("Unknown Native ID"),
+                    };
+                    
+                    self.stack.push(result);
                 }
                 OpCode::Print => {
                     let val = self.pop_stack();

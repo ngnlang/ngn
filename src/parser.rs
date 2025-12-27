@@ -17,11 +17,13 @@ pub enum Statement {
         params: Vec<Parameter>,
         body: Vec<Statement>,
     },
+    Import { names: Vec<String>, source: String },
     Print(Expr),
 }
 
 pub enum Expr {
     Assign { name: String, value: Box<Expr> },
+    Bool(bool),
     Call { name: String, args: Vec<Expr> },
     Number(i64),
     String(String),
@@ -125,6 +127,29 @@ impl Parser {
         Statement::Function { name, params, body }
     }
 
+    fn parse_import_statement(&mut self) -> Statement {
+        self.advance(); // consume 'import'
+        self.expect(Token::LBrace);
+        
+        let mut names = Vec::new();
+        while self.current_token != Token::RBrace {
+            let name = self.expect_identifier();
+            names.push(name);
+            if self.current_token == Token::Comma { self.advance(); }
+        }
+        self.expect(Token::RBrace);
+        self.expect(Token::From);
+        
+        // This will be "tbx::test" or "math"
+        let source = match self.current_token.clone() {
+            Token::StringLiteral(s) => s,
+            _ => panic!("Expected string literal for import source"),
+        };
+        self.advance();
+
+        Statement::Import { names, source }
+    }
+
     pub fn parse_statement(&mut self) -> Statement {
         self.consume_newlines();
 
@@ -135,6 +160,7 @@ impl Parser {
                 let expr = self.parse_expression();
                 Statement::Expression(expr)
             }
+            Token::Import => self.parse_import_statement(),
             Token::Print => {
                 self.advance();
                 self.expect(Token::LParen);
@@ -181,7 +207,7 @@ impl Parser {
     }
 
     fn parse_assignment(&mut self) -> Expr {
-        let expr = self.parse_addition();
+        let expr = self.parse_equality();
 
         // If the next token is '=', this is an assignment
         if self.current_token == Token::Equal {
@@ -199,6 +225,18 @@ impl Parser {
             }
         }
         expr
+    }
+
+    fn parse_equality(&mut self) -> Expr {
+        let mut left = self.parse_addition();
+
+        while self.current_token == Token::EqualEqual || self.current_token == Token::NotEqual {
+            let op = self.current_token.clone();
+            self.advance();
+            let right = self.parse_addition();
+            left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };
+        }
+        left
     }
 
     fn parse_addition(&mut self) -> Expr {
@@ -233,6 +271,10 @@ impl Parser {
 
     fn parse_primary(&mut self) -> Expr {
         let mut expr = match self.current_token.clone() {
+            Token::Bool(b) => {
+                self.advance();
+                Expr::Bool(b)
+            }
             Token::LParen => {
                 self.advance();
                 let expression = self.parse_expression();

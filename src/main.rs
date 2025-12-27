@@ -1,7 +1,9 @@
 mod bytecode;
 mod compiler;
+mod error;
 mod lexer;
 mod parser;
+pub mod toolbox;
 mod utils;
 mod value;
 mod vm;

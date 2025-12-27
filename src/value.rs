@@ -276,7 +276,9 @@ pub struct Function {
 #[allow(dead_code)]
 #[derive(serde::Serialize, serde::Deserialize)]
 pub enum Value {
+    Bool(bool),
     Function(Box<Function>),
+    NativeFunction(u16),
     Numeric(Number),
     String(String),
     Reference(usize),
@@ -315,12 +317,58 @@ impl Value {
             (x, y) => Err(format!("Runtime Error: Cannot divide {:?} by {:?}", x, y)),
         }
     }
+    pub fn is_equal(self, other: Value) -> bool {
+        match (self, other) {
+            (Value::Numeric(a), Value::Numeric(b)) => {
+                let r1 = a.rank();
+                let r2 = b.rank();
+
+                if r1 == r2 {
+                    return match (a, b) {
+                        (Number::I8(x), Number::I8(y)) => x == y,
+                        (Number::I16(x), Number::I16(y)) => x == y,
+                        (Number::I32(x), Number::I32(y)) => x == y,
+                        (Number::I64(x), Number::I64(y)) => x == y,
+                        (Number::U8(x),  Number::U8(y))  => x == y,
+                        (Number::U16(x),  Number::U16(y))  => x == y,
+                        (Number::U32(x),  Number::U32(y))  => x == y,
+                        (Number::U64(x),  Number::U64(y))  => x == y,
+                        (Number::F32(x), Number::F32(y)) => x == y,
+                        (Number::F64(x), Number::F64(y)) => x == y,
+                        _ => false,
+                    };
+                }
+
+                // Different types: Promote the smaller one
+                if r1 < r2 {
+                    let promoted = a.promote_to(r2);
+                    // Safety Check: If rank didn't change, we missed a match arm in promote_to
+                    if promoted.rank() == r1 {
+                        panic!("Logic Error: Failed to promote rank {} to {} while comparing {} and {}", r1, r2, promoted, b);
+                    }
+                    Value::Numeric(promoted).is_equal(Value::Numeric(b))
+                } else {
+                    let promoted = b.promote_to(r1);
+                    // Safety Check: If rank didn't change, we missed a match arm in promote_to
+                    if promoted.rank() == r2 {
+                        panic!("Logic Error: Failed to promote rank {} to {} while comparing {} and {}", r2, r1, a, promoted);
+                    }
+                    Value::Numeric(a).is_equal(Value::Numeric(promoted))
+                }
+            }
+            (Value::Bool(a), Value::Bool(b)) => a == b,
+            (Value::String(a), Value::String(b)) => a == b,
+            _ => false,
+        }
+    }
 }
 
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            Value::Bool(b) => write!(f, "{}", b),
             Value::Function(func) => write!(f, "<fn {}>", func.name),
+            Value::NativeFunction(id) => write!(f, "<fn {}>", id),
             Value::Numeric(n) => write!(f, "{}", n),
             Value::String(s) => write!(f, "{}", s),
             Value::Reference(name) => write!(f, "&{}", name),

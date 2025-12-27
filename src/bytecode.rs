@@ -8,9 +8,12 @@ pub enum OpCode {
     Divide,
     Call(usize),
     DefVar(usize, bool),
+    Equal,
     GetVar(usize),
     AssignVar(usize),
     DeleteVar(usize),
+    NativeCall(u16, u8), // (FunctionID, ArgCount)
+    NotEqual,
     Print,
     Return,
     Halt,
