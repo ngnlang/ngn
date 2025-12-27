@@ -282,6 +282,8 @@ pub enum Value {
     Numeric(Number),
     String(String),
     Reference(usize),
+    Array(Vec<Value>),
+    Tuple(Vec<Value>),
 }
 
 impl Value {
@@ -372,6 +374,22 @@ impl fmt::Display for Value {
             Value::Numeric(n) => write!(f, "{}", n),
             Value::String(s) => write!(f, "{}", s),
             Value::Reference(name) => write!(f, "&{}", name),
+            Value::Array(arr) => {
+                write!(f, "[")?;
+                for (i, v) in arr.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", v)?;
+                }
+                write!(f, "]")
+            }
+            Value::Tuple(tup) => {
+                write!(f, "(")?;
+                for (i, v) in tup.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", v)?;
+                }
+                write!(f, ")")
+            }
         }
     }
 }

@@ -111,6 +111,18 @@ impl Compiler {
                     _ => todo!("Other operators"),
                 }
             }
+            Expr::Array(elements) => {
+                for element in elements {
+                    self.compile_expr(element);
+                }
+                self.instructions.push(OpCode::BuildArray(elements.len()));
+            }
+            Expr::Tuple(elements) => {
+                for element in elements {
+                    self.compile_expr(element);
+                }
+                self.instructions.push(OpCode::BuildTuple(elements.len()));
+            }
         }
     }
 

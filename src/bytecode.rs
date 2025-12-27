@@ -18,4 +18,6 @@ pub enum OpCode {
     Return,
     Halt,
     LoadConst(usize),
+    BuildArray(usize),
+    BuildTuple(usize),
 }

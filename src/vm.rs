@@ -361,6 +361,24 @@ impl VM {
                     }
                 }
                 OpCode::Halt => break,
+                OpCode::BuildArray(count) => {
+                    let mut elements = Vec::new();
+                    for _ in 0..count {
+                        let val = self.pop_stack();
+                        elements.push(self.resolve_value(val));
+                    }
+                    elements.reverse();
+                    self.stack.push(Value::Array(elements));
+                }
+                OpCode::BuildTuple(count) => {
+                    let mut elements = Vec::new();
+                    for _ in 0..count {
+                        let val = self.pop_stack();
+                        elements.push(self.resolve_value(val));
+                    }
+                    elements.reverse();
+                    self.stack.push(Value::Tuple(elements));
+                }
             }
             self.ip += 1;
         }

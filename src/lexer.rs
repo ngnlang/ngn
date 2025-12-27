@@ -19,7 +19,7 @@ pub enum Token {
     Equal, EqualEqual, NotEqual, Plus, Minus, Star, Slash,
     LParen, RParen, LBrace, RBrace, LBracket, RBracket,
     Colon, DoubleColon, Comma, LArrow,
-	LessThan,
+	LessThan, GreaterThan,
     
     // Formatting
     Newline,
@@ -99,7 +99,12 @@ impl Lexer {
 					panic!("Unknown character '!'");
 				}
 			}
-            _ => panic!("Unknown character: {}<", ch),
+            '<' => Token::LessThan,
+            '>' => Token::GreaterThan,
+            '[' => Token::LBracket,
+            ']' => Token::RBracket,
+            ',' => Token::Comma,
+            _ => panic!("Unknown character: {}", ch),
         };
 
 		return token;
@@ -126,7 +131,7 @@ impl Lexer {
 
 	fn read_identifier(&mut self) -> Token {
         let mut ident = String::new();
-        while self.cursor < self.source.len() && self.source[self.cursor].is_alphanumeric() {
+        while self.cursor < self.source.len() && (self.source[self.cursor].is_alphanumeric() || self.source[self.cursor] == '_') {
             ident.push(self.source[self.cursor]);
             self.cursor += 1;
         }

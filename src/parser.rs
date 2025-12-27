@@ -34,6 +34,8 @@ pub enum Expr {
         right: Box<Expr>,
     },
     Variable(String),
+    Array(Vec<Expr>),
+    Tuple(Vec<Expr>),
 }
 
 pub struct Parser {
@@ -189,7 +191,7 @@ impl Parser {
         // Handle optional type: var x: i32 = 10
         if self.current_token == Token::Colon {
             self.advance();
-            let _type_name = self.expect_identifier(); // We'll use this for type checking later
+            self.parse_type();
         }
 
         self.expect(Token::Equal);
@@ -200,6 +202,28 @@ impl Parser {
             is_mutable,
             value,
         }
+    }
+
+    fn parse_type(&mut self) -> String {
+        let type_name = self.expect_identifier();
+        
+        if self.current_token == Token::LessThan {
+            self.advance(); // consume <
+            
+            while self.current_token != Token::GreaterThan {
+                if let Token::Number(_) = self.current_token {
+                    self.advance(); // handle array size N
+                } else {
+                    self.parse_type();
+                }
+
+                if self.current_token == Token::Comma {
+                    self.advance();
+                }
+            }
+            self.expect(Token::GreaterThan);
+        }
+        type_name
     }
 
     pub fn parse_expression(&mut self) -> Expr {
@@ -278,10 +302,30 @@ impl Parser {
             }
             Token::LParen => {
                 self.advance();
-                let expression = self.parse_expression();
-                self.expect(Token::RParen);
                 
-                expression
+                if self.current_token == Token::RParen {
+                    self.advance();
+                    Expr::Tuple(Vec::new())
+                } else {
+                    let expression = self.parse_expression();
+                    
+                    if self.current_token == Token::Comma {
+                        self.advance();
+                        let mut elements = vec![expression];
+                        
+                        while self.current_token != Token::RParen {
+                            elements.push(self.parse_expression());
+                            if self.current_token == Token::Comma {
+                                self.advance();
+                            }
+                        }
+                        self.expect(Token::RParen);
+                        Expr::Tuple(elements)
+                    } else {
+                        self.expect(Token::RParen);
+                        expression
+                    }
+                }
             }
             Token::Number(n) => {
                 self.advance();
@@ -299,6 +343,7 @@ impl Parser {
                 self.advance();
                 Expr::Variable(name)
             }
+            Token::LBracket => self.parse_array_literal(),
             _ => panic!("Expected expression, found {:?}", self.current_token),
         };
 
@@ -317,5 +362,27 @@ impl Parser {
         }
 
         expr
+    }
+    fn parse_array_literal(&mut self) -> Expr {
+        self.advance(); // consume '['
+        let mut elements = Vec::new();
+
+        if self.current_token == Token::RBracket {
+            self.advance(); // empty array
+            return Expr::Array(elements);
+        }
+
+        while self.current_token != Token::RBracket {
+            elements.push(self.parse_expression());
+            
+            if self.current_token == Token::Comma {
+                self.advance();
+            } else if self.current_token != Token::RBracket {
+                panic!("Expected ',' or ']' in array literal");
+            }
+        }
+
+        self.expect(Token::RBracket);
+        Expr::Array(elements)
     }
 }
