@@ -77,7 +77,32 @@ impl Lexer {
             '+' => Token::Plus,
             '-' => Token::Minus,
 			'*' => Token::Star,
-			'/' => Token::Slash,
+			'/' => {
+                let next_char = self.peek_current();
+                if next_char == '/' {
+                    // Single line comment
+                    while self.cursor < self.source.len() && self.source[self.cursor] != '\n' {
+                        self.cursor += 1;
+                    }
+                    // Recursively get next token after comment
+                    // Note: This effectively skips the comment
+                    self.next_token()
+                } else if next_char == '*' {
+                    // Multi line comment
+                    self.cursor += 2; // skip /*
+                    while self.cursor < self.source.len() {
+                        if self.source[self.cursor] == '*' && self.peek() == '/' {
+                            self.cursor += 2; // skip */
+                            break;
+                        }
+                        self.cursor += 1;
+                    }
+                     // Recursively get next token after comment
+                    self.next_token()
+                } else {
+                    Token::Slash
+                }
+            }
             '(' => Token::LParen,
             ')' => Token::RParen,
 			'{' => Token::LBrace,

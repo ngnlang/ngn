@@ -360,6 +360,24 @@ impl Value {
             }
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::String(a), Value::String(b)) => a == b,
+            (Value::Array(a), Value::Array(b)) => {
+                if a.len() != b.len() { return false; }
+                for (v1, v2) in a.iter().zip(b.iter()) {
+                    if !v1.clone().is_equal(v2.clone()) {
+                        return false;
+                    }
+                }
+                true
+            }
+            (Value::Tuple(a), Value::Tuple(b)) => {
+                if a.len() != b.len() { return false; }
+                for (v1, v2) in a.iter().zip(b.iter()) {
+                    if !v1.clone().is_equal(v2.clone()) {
+                        return false;
+                    }
+                }
+                true
+            }
             _ => false,
         }
     }
