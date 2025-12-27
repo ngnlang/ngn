@@ -213,11 +213,11 @@ impl Number {
             (Number::I16(v), 10) => Number::F64(v as f64),
 
             (Number::I32(v), 8) => Number::I64(v as i64),
-            (Number::I32(_), 9) => panic!("Precision Error: Cannot safely promote I32 to F32"),
+            (Number::I32(v), 9) => Number::F32(v as f32), // Precision loss possible
             (Number::I32(v), 10) => Number::F64(v as f64),
 
-            (Number::I64(_), 9) => panic!("Precision Error: Cannot safely promote I64 to F32"),
-            (Number::I64(_), 10) => panic!("Precision Error: Cannot safely promote I64 to F64"),
+            (Number::I64(v), 9) => Number::F32(v as f32), // Precision loss possible
+            (Number::I64(v), 10) => Number::F64(v as f64), // Precision loss possible
 
             (Number::U8(v), 2) => Number::U16(v as u16),
             (Number::U8(v), 3) => Number::U32(v as u32),
@@ -231,11 +231,11 @@ impl Number {
             (Number::U16(v), 10) => Number::F64(v as f64),
 
             (Number::U32(v), 4) => Number::U64(v as u64),
-            (Number::U32(_), 9) => panic!("Precision Error: Cannot safely promote U32 to F32"),
+            (Number::U32(v), 9) => Number::F32(v as f32), // Precision loss possible
             (Number::U32(v), 10) => Number::F64(v as f64),
 
-            (Number::U64(_), 9) => panic!("Precision Error: Cannot safely promote U64 to F32"),
-            (Number::U64(_), 10) => panic!("Precision Error: Cannot safely promote U64 to F64"),
+            (Number::U64(v), 9) => Number::F32(v as f32), // Precision loss possible
+            (Number::U64(v), 10) => Number::F64(v as f64), // Precision loss possible
 
             (Number::F32(v), 10) => Number::F64(v as f64),
 

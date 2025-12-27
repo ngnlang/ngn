@@ -26,6 +26,7 @@ pub enum Expr {
     Bool(bool),
     Call { name: String, args: Vec<Expr> },
     Number(i64),
+    Float(f64),
     String(String),
     Binary {
         left: Box<Expr>,
@@ -285,6 +286,10 @@ impl Parser {
             Token::Number(n) => {
                 self.advance();
                 Expr::Number(n)
+            }
+            Token::Float(n) => {
+                self.advance();
+                Expr::Float(n)
             }
             Token::StringLiteral(s) => {
                 self.advance();

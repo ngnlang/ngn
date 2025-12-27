@@ -11,6 +11,7 @@ pub enum Token {
     // Identifiers and Literals
     Identifier(String),
     Number(i64),
+    Float(f64),
     StringLiteral(String),
 	Bool(bool),
     
@@ -145,11 +146,33 @@ impl Lexer {
 
     fn read_number(&mut self) -> Token {
         let mut num_str = String::new();
-        while self.cursor < self.source.len() && self.source[self.cursor].is_ascii_digit() {
-            num_str.push(self.source[self.cursor]);
-            self.cursor += 1;
+        let mut is_float = false;
+
+        while self.cursor < self.source.len() {
+            let ch = self.source[self.cursor];
+            
+            if ch.is_ascii_digit() {
+                num_str.push(ch);
+                self.cursor += 1;
+            } else if ch == '.' {
+                if is_float {
+                    // Already found a dot, so this second dot terminates the number
+                    // e.g. 1.2.3 -> 1.2 and .3 next
+                    break; 
+                }
+                is_float = true;
+                num_str.push(ch);
+                self.cursor += 1;
+            } else {
+                break;
+            }
         }
-        Token::Number(num_str.parse().unwrap())
+
+        if is_float {
+            Token::Float(num_str.parse().unwrap())
+        } else {
+            Token::Number(num_str.parse().unwrap())
+        }
     }
 
 	fn read_string(&mut self) -> Token {

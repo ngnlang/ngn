@@ -84,6 +84,10 @@ impl Compiler {
                 let idx = self.add_constant(Value::Numeric(Number::I64(*n)));
                 self.instructions.push(OpCode::LoadConst(idx));
             }
+            Expr::Float(n) => {
+                let idx = self.add_constant(Value::Numeric(Number::F64(*n)));
+                self.instructions.push(OpCode::LoadConst(idx));
+            }
             Expr::String(s) => {
                 let idx = self.add_constant(Value::String(s.clone()));
                 self.instructions.push(OpCode::LoadConst(idx));
