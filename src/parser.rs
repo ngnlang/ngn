@@ -28,6 +28,7 @@ pub enum Statement {
     While {
         condition: Expr,
         body: Box<Statement>,
+        is_once: bool,
     },
     Loop(Box<Statement>),
     Break,
@@ -589,6 +590,13 @@ impl Parser {
 
     fn parse_while_stmt(&mut self) -> Statement {
         self.advance(); // consume 'while'
+        
+        let mut is_once = false;
+        if self.current_token == Token::Once {
+            is_once = true;
+            self.advance();
+        }
+
         self.expect(Token::LParen);
         let condition = self.parse_expression();
         self.expect(Token::RParen);
@@ -602,6 +610,7 @@ impl Parser {
         Statement::While {
             condition,
             body: Box::new(body),
+            is_once,
         }
     }
 

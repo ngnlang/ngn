@@ -285,7 +285,8 @@ impl Compiler {
             Statement::While {
                 condition,
                 body,
-            } => self.compile_while(condition, body),
+                is_once,
+            } => self.compile_while(condition, body, is_once),
             Statement::Loop(body) => self.compile_loop(body),
             Statement::Break => self.compile_break(),
         }
@@ -336,21 +337,32 @@ impl Compiler {
         }
     }
 
-    fn compile_while(&mut self, condition: Expr, body: Box<Statement>) {
+    fn compile_while(&mut self, condition: Expr, body: Box<Statement>, is_once: bool) {
         let loop_start = self.instructions.len();
         self.break_patches.push(Vec::new());
 
-        self.compile_expr(&condition);
-        
-        let jump_end_idx = self.emit(OpCode::JumpIfFalse(0));
-        
-        self.compile_statement(*body);
-        
-        // Jump back to start
-        self.emit(OpCode::Jump(loop_start));
-        
-        // Patch exit jump
-        self.patch_jump(jump_end_idx);
+        if is_once {
+            // "While Once" behavior: Body -> Condition -> JumpBack
+            self.compile_statement(*body);
+            
+            self.compile_expr(&condition);
+            let exit_jump = self.emit(OpCode::JumpIfFalse(0));
+            
+            self.emit(OpCode::Jump(loop_start));
+            self.patch_jump(exit_jump);
+        } else {
+            // Standard While behavior: Condition -> JumpEnd -> Body -> JumpStart
+            self.compile_expr(&condition);
+            let jump_end_idx = self.emit(OpCode::JumpIfFalse(0));
+            
+            self.compile_statement(*body);
+            
+            // Jump back to start
+            self.emit(OpCode::Jump(loop_start));
+            
+            // Patch exit jump
+            self.patch_jump(jump_end_idx);
+        }
 
         let patches = self.break_patches.pop().unwrap();
         for idx in patches {
