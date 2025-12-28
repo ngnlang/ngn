@@ -80,6 +80,7 @@ pub struct Parser {
     pub lexer: Lexer,
     pub current_token: Token,
     pub in_function: bool,
+    pub paren_depth: usize,
 }
 
 impl Parser {
@@ -89,6 +90,7 @@ impl Parser {
             lexer,
             current_token: first_token,
             in_function: false,
+            paren_depth: 0,
         }
     }
 
@@ -166,7 +168,14 @@ impl Parser {
 
         let old_in_function = self.in_function;
         self.in_function = true;
-        let body = self.parse_block();
+        
+        let body = if self.current_token == Token::LBrace {
+            self.parse_block()
+        } else {
+            // Implicit return
+            vec![Statement::Return(Some(self.parse_expression()))]
+        };
+        
         self.in_function = old_in_function;
 
         Statement::Function { name, params, body, return_type }
@@ -431,11 +440,16 @@ impl Parser {
     fn parse_equality(&mut self) -> Expr {
         let mut left = self.parse_comparison();
 
-        while self.current_token == Token::EqualEqual || self.current_token == Token::NotEqual {
-            let op = self.current_token.clone();
-            self.advance();
-            let right = self.parse_comparison();
-            left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };
+        loop {
+            if self.paren_depth > 0 { self.consume_newlines(); }
+            if self.current_token == Token::EqualEqual || self.current_token == Token::NotEqual {
+                let op = self.current_token.clone();
+                self.advance();
+                let right = self.parse_comparison();
+                left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };
+            } else {
+                break;
+            }
         }
         left
     }
@@ -443,12 +457,17 @@ impl Parser {
     fn parse_comparison(&mut self) -> Expr {
         let mut left = self.parse_addition();
 
-        while self.current_token == Token::LessThan || self.current_token == Token::GreaterThan || 
-              self.current_token == Token::LessThanEqual || self.current_token == Token::GreaterThanEqual {
-            let op = self.current_token.clone();
-            self.advance();
-            let right = self.parse_addition();
-            left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };
+        loop {
+            if self.paren_depth > 0 { self.consume_newlines(); }
+            if self.current_token == Token::LessThan || self.current_token == Token::GreaterThan || 
+                self.current_token == Token::LessThanEqual || self.current_token == Token::GreaterThanEqual {
+                let op = self.current_token.clone();
+                self.advance();
+                let right = self.parse_addition();
+                left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };
+            } else {
+                break;
+            }
         }
         left
     }
@@ -456,17 +475,21 @@ impl Parser {
     fn parse_addition(&mut self) -> Expr {
         let mut left = self.parse_multiplication();
 
-        while self.current_token == Token::Plus || self.current_token == Token::Minus {
-            let op = self.current_token.clone();
-            self.advance();
-            let right = self.parse_multiplication();
-            
-            // Re-wrap the left side into a new binary expression
-            left = Expr::Binary {
-                left: Box::new(left),
-                op,
-                right: Box::new(right),
-            };
+        loop {
+            if self.paren_depth > 0 { self.consume_newlines(); }
+            if self.current_token == Token::Plus || self.current_token == Token::Minus {
+                let op = self.current_token.clone();
+                self.advance();
+                let right = self.parse_multiplication();
+                
+                left = Expr::Binary {
+                    left: Box::new(left),
+                    op,
+                    right: Box::new(right),
+                };
+            } else {
+                break;
+            }
         }
         left
     }
@@ -474,11 +497,16 @@ impl Parser {
     fn parse_multiplication(&mut self) -> Expr {
         let mut left = self.parse_power(); 
 
-        while self.current_token == Token::Star || self.current_token == Token::Slash || self.current_token == Token::Percent {
-            let op = self.current_token.clone();
-            self.advance();
-            let right = self.parse_power();
-            left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };
+        loop {
+            if self.paren_depth > 0 { self.consume_newlines(); }
+            if self.current_token == Token::Star || self.current_token == Token::Slash || self.current_token == Token::Percent {
+                let op = self.current_token.clone();
+                self.advance();
+                let right = self.parse_power();
+                left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };
+            } else {
+                break;
+            }
         }
         left
     }
@@ -499,6 +527,10 @@ impl Parser {
     }
 
     fn parse_primary(&mut self) -> Expr {
+        if self.paren_depth > 0 {
+            self.consume_newlines();
+        }
+        
         let mut expr = match self.current_token.clone() {
             Token::Bool(b) => {
                 self.advance();
@@ -506,26 +538,35 @@ impl Parser {
             }
             Token::LParen => {
                 self.advance();
+                self.paren_depth += 1;
+                self.consume_newlines();
                 
                 if self.current_token == Token::RParen {
+                    self.paren_depth -= 1;
                     self.advance();
                     Expr::Tuple(Vec::new())
                 } else {
                     let expression = self.parse_expression();
+                    self.consume_newlines();
                     
                     if self.current_token == Token::Comma {
                         self.advance();
+                        self.consume_newlines();
                         let mut elements = vec![expression];
                         
                         while self.current_token != Token::RParen {
                             elements.push(self.parse_expression());
+                            self.consume_newlines();
                             if self.current_token == Token::Comma {
                                 self.advance();
+                                self.consume_newlines();
                             }
                         }
+                        self.paren_depth -= 1;
                         self.expect(Token::RParen);
                         Expr::Tuple(elements)
                     } else {
+                        self.paren_depth -= 1;
                         self.expect(Token::RParen);
                         expression
                     }
