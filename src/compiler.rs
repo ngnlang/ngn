@@ -5,26 +5,25 @@ use crate::parser::{Expr, Statement};
 use crate::value::{Function, Number, Value};
 
 pub struct Compiler {
-    // Maps "name" -> Index in the VM's env
     pub symbol_table: HashMap<String, usize>,
-    // Tracks the next available index
+    pub global_table: HashMap<String, usize>,
     pub next_index: usize,
-    // The resulting bytecode we are building
     pub instructions: Vec<OpCode>,
-    // The constant pool we are building
     pub constants: Vec<Value>,
-    // Stack of loop contexts: each level contains a list of jump indices that need to be patched to the loop end
     pub break_patches: Vec<Vec<usize>>,
+    pub is_global: bool,
 }
 
 impl Compiler {
     pub fn new() -> Self {
         Self {
             symbol_table: HashMap::new(),
+            global_table: HashMap::new(),
             next_index: 0,
             instructions: Vec::new(),
             constants: Vec::new(),
             break_patches: Vec::new(),
+            is_global: true,
         }
     }
 
@@ -40,18 +39,6 @@ impl Compiler {
         self.constants.len() - 1
     }
 
-    // This simulates compiling "var name = value"
-    pub fn compile_declaration(&mut self, name: String, expr: Expr, is_mutable: bool) {
-        self.compile_expr(&expr);
-
-        // 2. Assign this name a unique index
-        let var_idx = self.next_index;
-        self.symbol_table.insert(name, var_idx);
-        self.next_index += 1;
-
-        // 3. Emit the Define instruction
-        self.instructions.push(OpCode::DefVar(var_idx, is_mutable));
-    }
 
     pub fn compile_expr(&mut self, expr: &Expr) {
         match expr {
@@ -60,6 +47,8 @@ impl Compiler {
 
                 if let Some(&idx) = self.symbol_table.get(name) {
                     self.instructions.push(OpCode::AssignVar(idx));
+                } else if let Some(&idx) = self.global_table.get(name) {
+                    self.instructions.push(OpCode::AssignGlobal(idx));
                 } else {
                     panic!("Compiler Error: Cannot assign to undefined variable '{}'", name);
                 }
@@ -73,12 +62,10 @@ impl Compiler {
                     self.compile_expr(arg);
                 }
 
-                // Find the index where the function lives in the env
                 if let Some(&idx) = self.symbol_table.get(name) {
-                    // 3. Just emit Call(idx). 
-                    // We DON'T need GetVar here because the Call instruction 
-                    // will do the lookup itself.
                     self.instructions.push(OpCode::Call(idx));
+                } else if let Some(&idx) = self.global_table.get(name) {
+                    self.instructions.push(OpCode::CallGlobal(idx));
                 } else {
                     panic!("Compiler Error: Undefined function '{}'", name);
                 }
@@ -98,6 +85,8 @@ impl Compiler {
             Expr::Variable(name) => {
                 if let Some(&idx) = self.symbol_table.get(name) {
                     self.instructions.push(OpCode::GetVar(idx));
+                } else if let Some(&idx) = self.global_table.get(name) {
+                    self.instructions.push(OpCode::GetGlobal(idx));
                 } else {
                     panic!("Compiler Error: Undefined variable '{}'", name);
                 }
@@ -134,85 +123,56 @@ impl Compiler {
         }
     }
 
-    // This simulates compiling "print name"
-    pub fn compile_print_var(&mut self, name: &str) {
-        if let Some(&idx) = self.symbol_table.get(name) {
-            self.instructions.push(OpCode::GetVar(idx));
-            self.instructions.push(OpCode::Print);
-        } else {
-            panic!("Compiler Error: Undefined variable '{}'", name);
-        }
-    }
-
-    // This simulates compiling "name = value"
-    pub fn compile_reassignment(&mut self, name: &str, value: Value) {
-        if let Some(&idx) = self.symbol_table.get(name) {
-            let const_idx = self.add_constant(value);
-            self.instructions.push(OpCode::LoadConst(const_idx));
-            self.instructions.push(OpCode::AssignVar(idx));
-        } else {
-            panic!("Compiler Error: Cannot reassign to undefined variable '{}'", name);
-        }
-    }
-
     pub fn compile_statement(&mut self, stmt: Statement) {
         match stmt {
-            Statement::Declaration { name, is_mutable, value } => {
-                // Compile the expression tree into bytecode
+            Statement::Declaration { name, is_mutable, is_static, value } => {
                 self.compile_expr(&value);
 
-                // Map name to index
                 let var_idx = self.next_index;
-                self.symbol_table.insert(name, var_idx);
+                if is_static || self.is_global {
+                    self.global_table.insert(name, var_idx);
+                    self.instructions.push(OpCode::DefGlobal(var_idx, is_mutable));
+                } else {
+                    self.symbol_table.insert(name, var_idx);
+                    self.instructions.push(OpCode::DefVar(var_idx, is_mutable));
+                }
                 self.next_index += 1;
-
-                // Emit the Define instruction
-                self.instructions.push(OpCode::DefVar(var_idx, is_mutable));
+                // Standardization: Pop the result of the declaration statement
+                self.instructions.push(OpCode::Pop);
             }
             Statement::Expression(expr) => {
                 self.compile_expr(&expr);
+                self.instructions.push(OpCode::Pop);
             }
             Statement::Function { name, params, body } => {
-                // Create a new compiler for the function's body
-                // This ensures the function gets its own fresh symbol table!
                 let mut sub_compiler = Compiler::new();
+                sub_compiler.is_global = false;
 
-                // 1. ONLY inherit Global Functions, NOT Global Variables
-                // We filter the parent's symbol table to only keep what was defined 
-                // in the "Global Pass" (Pass 1). 
-                for (name, &idx) in &self.symbol_table {
-                    // For now, in Iteration 2, assume everything in the top-level table 
-                    // at the start of a function compile is a sibling function.
-                    sub_compiler.symbol_table.insert(name.clone(), idx);
+                // Inherit all current symbols as GLOBALS for the function
+                for (n, &idx) in &self.symbol_table {
+                    sub_compiler.global_table.insert(n.clone(), idx);
+                }
+                for (n, &idx) in &self.global_table {
+                    sub_compiler.global_table.insert(n.clone(), idx);
                 }
 
-                // Inherit the global symbol table!
-                // This allows the function to "see" other functions
-                //sub_compiler.symbol_table = self.symbol_table.clone();
-
-                // 2. Local variables start at 0
                 sub_compiler.next_index = 0;
 
-                // Inherit index pointer of parent
-                //sub_compiler.next_index = self.next_index;
-
-                // Register parameters in the sub-compiler's symbol table
                 let mut param_ownership = Vec::new();
-                for param in params {
-                    sub_compiler.symbol_table.insert(param.name.clone(), sub_compiler.next_index);
+                for param in &params {
+                    let p_idx = sub_compiler.next_index;
+                    sub_compiler.symbol_table.insert(param.name.clone(), p_idx);
                     sub_compiler.next_index += 1;
                     param_ownership.push(param.is_owned);
                 }
 
-                // Compile the function's body statements
                 for stmt in body {
                     sub_compiler.compile_statement(stmt);
                 }
-
-                // Every function must end with a Return
+                let null_idx = sub_compiler.add_constant(Value::Void);
+                sub_compiler.instructions.push(OpCode::LoadConst(null_idx));
                 sub_compiler.instructions.push(OpCode::Return);
 
-                // Create the Function object
                 let func = Function {
                     name: name.clone(),
                     instructions: sub_compiler.instructions,
@@ -221,26 +181,28 @@ impl Compiler {
                     param_ownership,
                 };
 
-                // Store the function in the current compiler's constant pool
                 let const_idx = self.add_constant(Value::Function(Box::new(func)));
-
-                // Check if we already have an index for this name
-                let var_idx = if let Some(&existing_idx) = self.symbol_table.get(&name) {
+                let var_idx = if let Some(&existing_idx) = self.global_table.get(&name) {
+                    existing_idx
+                } else if let Some(&existing_idx) = self.symbol_table.get(&name) {
                     existing_idx
                 } else {
-                    // This part runs if you didn't do a pre-scan (like for nested functions)
                     let idx = self.next_index;
-                    self.symbol_table.insert(name.clone(), idx);
+                    if self.is_global {
+                        self.global_table.insert(name.clone(), idx);
+                    } else {
+                        self.symbol_table.insert(name.clone(), idx);
+                    }
                     self.next_index += 1;
                     idx
                 };
-                
-                // Functions are basically "Constants" (immutables)
-                self.instructions.push(OpCode::LoadConst(const_idx));
-                self.instructions.push(OpCode::DefVar(var_idx, false));
 
-                // Update parent index pointer to reflect our additions
-                //self.next_index = sub_compiler.next_index;
+                self.instructions.push(OpCode::LoadConst(const_idx));
+                if self.is_global {
+                    self.instructions.push(OpCode::DefGlobal(var_idx, false));
+                } else {
+                    self.instructions.push(OpCode::DefVar(var_idx, false));
+                }
             }
             Statement::Import { names, source } => {
                 // Identify if it's a toolbox import: "tbx::test"
@@ -256,12 +218,17 @@ impl Compiler {
                             
                             // Reserve a slot in the Symbol Table (Global Index)
                             let var_idx = self.next_index;
-                            self.symbol_table.insert(name.clone(), var_idx);
                             self.next_index += 1;
                             
                             // Tell the VM to put the Native pointer into that slot
                             self.instructions.push(OpCode::LoadConst(const_idx));
-                            self.instructions.push(OpCode::DefVar(var_idx, false));
+                            if self.is_global {
+                                self.global_table.insert(name.clone(), var_idx);
+                                self.instructions.push(OpCode::DefGlobal(var_idx, false));
+                            } else {
+                                self.symbol_table.insert(name.clone(), var_idx);
+                                self.instructions.push(OpCode::DefVar(var_idx, false));
+                            }
                         } else {
                             panic!("Toolbox error: {} not found in tbx::{}", name, module_name);
                         }

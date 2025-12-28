@@ -74,7 +74,7 @@ fn main() {
     for stmt in &statements {
         if let Statement::Function { name, .. } = stmt {
             let var_idx = compiler.next_index;
-            compiler.symbol_table.insert(name.clone(), var_idx);
+            compiler.global_table.insert(name.clone(), var_idx);
             compiler.next_index += 1;
         }
     }
@@ -89,8 +89,8 @@ fn main() {
     match command.as_str() {
         "run" => {
             let mut final_instructions = compiler.instructions.clone();
-            if let Some(&main_idx) = compiler.symbol_table.get("main") {
-                final_instructions.push(bytecode::OpCode::Call(main_idx));
+            if let Some(&main_idx) = compiler.global_table.get("main") {
+                final_instructions.push(bytecode::OpCode::CallGlobal(main_idx));
                 final_instructions.push(bytecode::OpCode::Halt);
             } else {
                 panic!("ngn Error: No main() function defined!");
@@ -104,8 +104,8 @@ fn main() {
             let mut final_instructions = compiler.instructions.clone();
             
             // Add the bootstrap call to main
-            if let Some(&main_idx) = compiler.symbol_table.get("main") {
-                final_instructions.push(bytecode::OpCode::Call(main_idx));
+            if let Some(&main_idx) = compiler.global_table.get("main") {
+                final_instructions.push(bytecode::OpCode::CallGlobal(main_idx));
                 final_instructions.push(bytecode::OpCode::Halt);
             }
 

@@ -31,37 +31,90 @@ impl VM {
     fn current_env(&mut self) -> &mut Vec<Option<Variable>> {
         self.env_stack.last_mut().expect("No active environment!")
     }
-    fn get_callable(&self, idx: usize) -> Value {
-        // 1. Try Local Scope
-        let local_val = self.env_stack.last()
-            .and_then(|env| env.get(idx))
-            .and_then(|slot| slot.as_ref());
 
-        if let Some(var) = local_val {
-            // Return the value if it's any type of function
+    fn perform_call(&mut self, callable_value: Value) -> bool {
+        match callable_value {
+            Value::Function(func) => {
+                let mut new_env = Vec::new();
+
+                for i in (0..func.param_count).rev() {
+                    let arg = self.pop_stack();
+                    let is_owned = func.param_ownership[i];
+
+                    if is_owned {
+                        if let Value::Reference(env_idx, idx) = arg {
+                            // Perform the MOVE from the correct environment
+                            let moved_var = self.env_stack[env_idx][idx].take()
+                                .expect("Cannot move an already moved or undefined variable");
+                            
+                            new_env.push(Some(Variable {
+                                value: moved_var.value,
+                                is_mutable: true,
+                                reference_count: 0,
+                            }));
+                        } else {
+                            new_env.push(Some(Variable { value: arg, is_mutable: true, reference_count: 0 }));
+                        }
+                    } else {
+                        new_env.push(Some(Variable { value: arg, is_mutable: false, reference_count: 0 }));
+                    }
+                }
+
+                new_env.reverse();
+
+                self.call_stack.push((self.instructions.clone(), self.constants.clone(), self.ip + 1));
+                self.instructions = func.instructions.clone();
+                self.ip = 0;
+                self.constants = func.constants.clone(); // Swap the constants pool
+                self.env_stack.push(new_env);
+                true // We switched IP
+            }
+            Value::NativeFunction(id) => {
+                let arg = self.pop_stack();
+                let resolved = self.resolve_value(arg);
+
+                match id {
+                    crate::toolbox::NATIVE_ASSERT => {
+                        match resolved {
+                            Value::Bool(true) => println!("✅ Assertion passed"),
+                            Value::Bool(false) => panic!("❌ Assertion failed! Expected true, got false."),
+                            other => panic!("❌ Assertion failed! Expected Boolean, got {}", other),
+                        }
+                    }
+                    _ => panic!("Runtime Error: Unknown Native ID {}", id),
+                }
+                self.stack.push(Value::Void);
+                false // We did NOT switch IP
+            }
+            _ => panic!("Runtime Error: Not a callable: {:?}", callable_value),
+        }
+    }
+    fn get_callable_local(&self, idx: usize) -> Value {
+        let env = self.env_stack.last().expect("No active environment!");
+        if let Some(Some(var)) = env.get(idx) {
             if matches!(var.value, Value::Function(_) | Value::NativeFunction(_)) {
                 return var.value.clone();
             }
         }
-
-        // 2. Try Global Scope
-        let global_val = self.env_stack[0].get(idx)
-            .and_then(|slot| slot.as_ref());
-
-        if let Some(var) = global_val {
+        panic!("Runtime Error: Local callable at index {} not found", idx);
+    }
+    fn get_callable_global(&self, idx: usize) -> Value {
+        let env = &self.env_stack[0];
+        if let Some(Some(var)) = env.get(idx) {
             if matches!(var.value, Value::Function(_) | Value::NativeFunction(_)) {
                 return var.value.clone();
             }
         }
-
-        panic!("Runtime Error: Callable at index {} not found", idx);
+        panic!("Runtime Error: Global callable at index {} not found", idx);
     }
     fn pop_stack(&mut self) -> Value {
         let val = self.stack.pop().expect("Runtime error: Stack underflow");
 
-        if let Value::Reference(idx) = val {
-            if let Some(Some(var)) = self.current_env().get_mut(idx) {
-                var.reference_count -= 1;
+        if let Value::Reference(env_idx, var_idx) = val {
+            if let Some(env) = self.env_stack.get_mut(env_idx) {
+                if let Some(Some(var)) = env.get_mut(var_idx) {
+                    var.reference_count -= 1;
+                }
             }
         }
 
@@ -69,11 +122,13 @@ impl VM {
     }
     fn resolve_value(&mut self, val: Value) -> Value {
         match val {
-            Value::Reference(idx) => {
-                let var = self.current_env().get(idx)
+            Value::Reference(env_idx, var_idx) => {
+                let env = self.env_stack.get(env_idx)
+                    .expect("Runtime error: Invalid environment index");
+                let var = env.get(var_idx)
                     .and_then(|slot| slot.as_ref())
-                    .expect(&format!("Runtime error: Dangling reference for {}", idx));
-                var.value.clone()
+                    .expect(&format!("Runtime error: Dangling reference for environment {} index {}", env_idx, var_idx));
+                self.resolve_value(var.value.clone())
             }
             _ => val
         }
@@ -205,117 +260,52 @@ impl VM {
                     self.stack.push(Value::Bool(!rx.is_equal(ry)));
                 }
                 OpCode::Call(var_idx) => {
-                    let callable_value = self.get_callable(var_idx);
-
-                    match callable_value {
-                        Value::Function(func) => {
-                            let caller_env_idx = self.env_stack.len() - 1;
-                            let mut new_env = Vec::new();
-
-                            for i in (0..func.param_count).rev() {
-                                let arg = self.pop_stack();
-                                let is_owned = func.param_ownership[i];
-
-                                if is_owned {
-                                    if let Value::Reference(idx) = arg {
-                                        // Perform the MOVE
-                                        let moved_var = self.env_stack[caller_env_idx][idx].take()
-                                            .expect("Cannot move an already moved or undefined variable");
-                                        
-                                        new_env.push(Some(Variable {
-                                            value: moved_var.value,
-                                            is_mutable: true,
-                                            reference_count: 0,
-                                        }));
-                                    } else {
-                                        new_env.push(Some(Variable { value: arg, is_mutable: true, reference_count: 0 }));
-                                    }
-                                } else {
-                                    new_env.push(Some(Variable { value: arg, is_mutable: false, reference_count: 0 }));
-                                }
-                            }
-
-                            new_env.reverse();
-
-                            self.call_stack.push((self.instructions.clone(), self.constants.clone(), self.ip));
-                            self.instructions = func.instructions.clone();
-                            self.ip = 0;
-                            self.constants = func.constants.clone(); // Swap the constants pool
-                            self.env_stack.push(new_env);
-                            continue;
-                        }
-                        Value::NativeFunction(id) => {
-                            // Native functions don't need a new environment or instructions.
-                            // We just pop the args and run the Rust code.
-                            
-                            // For now, let's assume all Native functions take 1 argument.
-                            // (Later, we can store the arity in the Value::NativeFunction)
-                            let arg = self.pop_stack();
-                            let resolved = self.resolve_value(arg);
-
-                            // Execute the Rust logic
-                            match id {
-                                crate::toolbox::NATIVE_ASSERT => {
-                                    match resolved {
-                                        Value::Bool(true) => println!("✅ Assertion passed"),
-                                        Value::Bool(false) => panic!("❌ Assertion failed! Expected true, got false."),
-                                        other => panic!("❌ Assertion failed! Expected Boolean, got {}", other),
-                                    }
-                                }
-                                crate::toolbox::NATIVE_ABS => {
-                                    // Call your math::abs logic here
-                                }
-                                _ => panic!("Unknown native function ID"),
-                            }
-                            // Native functions usually return something; for now, we just push Void
-                            // self.stack.push(Value::Numeric(Number::I64(0)));
-                        }
-                        _ => panic!("Value at index {} is not callable", var_idx),
+                    let callable_value = self.get_callable_local(var_idx);
+                    if self.perform_call(callable_value) {
+                        continue;
                     }
+                }
+                OpCode::CallGlobal(var_idx) => {
+                    let callable_value = self.get_callable_global(var_idx);
+                    if self.perform_call(callable_value) {
+                        continue;
+                    }
+                }
+                OpCode::DefGlobal(idx, is_mutable) => {
+                    let val = self.pop_stack();
+                    let new_var = Variable { value: val.clone(), is_mutable, reference_count: 0 };
+                    let env = &mut self.env_stack[0];
+                    if idx >= env.len() { env.resize(idx + 1, None); }
+                    env[idx] = Some(new_var);
+                    self.stack.push(val);
                 }
                 OpCode::DefVar(idx, is_mutable) => {
                     let val = self.pop_stack();
-                    let new_var = Variable {
-                        value: val,
-                        is_mutable,
-                        reference_count: 0
-                    };
-
-                    // Ensure the vector is large enough to hold this index
-                    // This is a safety check for the manual main.rs tests
-                    if idx >= self.current_env().len() {
-                        self.current_env().resize(idx + 1, None);
-                    }
-
-                    self.current_env()[idx] = Some(new_var);
+                    let new_var = Variable { value: val.clone(), is_mutable, reference_count: 0 };
+                    let env = self.current_env();
+                    if idx >= env.len() { env.resize(idx + 1, None); }
+                    env[idx] = Some(new_var);
+                    self.stack.push(val);
                 }
                 OpCode::GetVar(idx) => {
-                    let mut found = false;
-
-                    // Try local scope
+                    let current_env_idx = self.env_stack.len() - 1;
                     if let Some(Some(var)) = self.current_env().get_mut(idx) {
                         var.reference_count += 1;
-                        self.stack.push(Value::Reference(idx));
-                        found = true;
+                        self.stack.push(Value::Reference(current_env_idx, idx));
+                    } else {
+                        panic!("Runtime error: Undefined local variable '{}'", idx);
                     }
-
-                    // Try global scope 
-                    if !found && self.env_stack.len() > 1 {
-                        if let Some(Some(var)) = self.env_stack[0].get_mut(idx) {
-                            var.reference_count += 1;
-                            // We need a way to tell the difference between Global and Local refs
-                            // For now, let's assume they are all local or add a 'is_global' flag
-                            self.stack.push(Value::Reference(idx)); 
-                            found = true;
-                        }
+                }
+                OpCode::GetGlobal(idx) => {
+                    if let Some(Some(var)) = self.env_stack[0].get_mut(idx) {
+                        var.reference_count += 1;
+                        self.stack.push(Value::Reference(0, idx)); 
+                    } else {
+                        panic!("Runtime error: Undefined global variable '{}'", idx);
                     }
-
-
-                    if !found { panic!("Runtime error: Undefined variable '{}'", idx); }
                 }
                 OpCode::AssignVar(idx) => {
                     let new_val = self.pop_stack();
-
                     if let Some(Some(var)) = self.current_env().get_mut(idx) {
                         if var.reference_count > 0 {
                             panic!("Borrow error: Cannot mutate '{}' while it is borrowed!", idx);
@@ -323,10 +313,25 @@ impl VM {
                         if !var.is_mutable {
                             panic!("Runtime error: Cannot assign to constant '{}'", idx);
                         }
-
-                        var.value = new_val;
+                        var.value = new_val.clone();
+                        self.stack.push(new_val);
                     } else {
-                        panic!("Runtime error: Cannot assign to undefined variable '{}'", idx);
+                        panic!("Runtime error: Cannot assign to undefined local variable '{}'", idx);
+                    }
+                }
+                OpCode::AssignGlobal(idx) => {
+                    let new_val = self.pop_stack();
+                    if let Some(Some(var)) = self.env_stack[0].get_mut(idx) {
+                        if var.reference_count > 0 {
+                            panic!("Borrow error: Cannot mutate global '{}' while it is borrowed!", idx);
+                        }
+                        if !var.is_mutable {
+                            panic!("Runtime error: Cannot assign to constant global '{}'", idx);
+                        }
+                        var.value = new_val.clone();
+                        self.stack.push(new_val);
+                    } else {
+                        panic!("Runtime error: Cannot assign to undefined global variable '{}'", idx);
                     }
                 }
                 OpCode::DeleteVar(idx) => {
@@ -453,6 +458,9 @@ impl VM {
                         }
                         _ => panic!("Runtime Error: Invalid operands for >"),
                     }
+                }
+                OpCode::Pop => {
+                    self.pop_stack();
                 }
             }
             self.ip += 1;

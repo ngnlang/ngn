@@ -399,9 +399,10 @@ pub enum Value {
     NativeFunction(u16),
     Numeric(Number),
     String(String),
-    Reference(usize),
+    Reference(usize, usize), // (EnvironmentIndex, VariableIndex)
     Array(Vec<Value>),
     Tuple(Vec<Value>),
+    Void,
 }
 
 impl Value {
@@ -510,6 +511,7 @@ impl Value {
                 }
                 true
             }
+            (Value::Void, Value::Void) => true,
             _ => false,
         }
     }
@@ -523,7 +525,7 @@ impl fmt::Display for Value {
             Value::NativeFunction(id) => write!(f, "<fn {}>", id),
             Value::Numeric(n) => write!(f, "{}", n),
             Value::String(s) => write!(f, "{}", s),
-            Value::Reference(name) => write!(f, "&{}", name),
+            Value::Reference(env_idx, var_idx) => write!(f, "&({}:{})", env_idx, var_idx),
             Value::Array(arr) => {
                 write!(f, "[")?;
                 for (i, v) in arr.iter().enumerate() {
@@ -540,6 +542,7 @@ impl fmt::Display for Value {
                 }
                 write!(f, ")")
             }
+            Value::Void => write!(f, "void"),
         }
     }
 }

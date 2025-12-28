@@ -7,10 +7,14 @@ pub enum OpCode {
     Multiply,
     Divide,
     Call(usize),
+    CallGlobal(usize),
     DefVar(usize, bool),
+    DefGlobal(usize, bool),
     Equal,
     GetVar(usize),
+    GetGlobal(usize),
     AssignVar(usize),
+    AssignGlobal(usize),
     DeleteVar(usize),
     NativeCall(u16, u8), // (FunctionID, ArgCount)
     NotEqual,
@@ -26,4 +30,5 @@ pub enum OpCode {
     GreaterThan,
     Power,
     Modulo,
+    Pop,
 }

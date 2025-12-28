@@ -11,6 +11,7 @@ pub enum Statement {
     Declaration {
         name: String,
         is_mutable: bool,
+        is_static: bool,
         value: Expr,
     },
     Expression(Expr),
@@ -57,6 +58,7 @@ pub enum Expr {
 pub struct Parser {
     pub lexer: Lexer,
     pub current_token: Token,
+    pub in_function: bool,
 }
 
 impl Parser {
@@ -65,6 +67,7 @@ impl Parser {
         Self {
             lexer,
             current_token: first_token,
+            in_function: false,
         }
     }
 
@@ -135,7 +138,10 @@ impl Parser {
         }
         self.expect(Token::RParen);
 
+        let old_in_function = self.in_function;
+        self.in_function = true;
         let body = self.parse_block();
+        self.in_function = old_in_function;
 
         Statement::Function { name, params, body }
     }
@@ -167,7 +173,24 @@ impl Parser {
         self.consume_newlines();
 
         let stmt = match self.current_token.clone() {
-            Token::Const => self.parse_declaration(false),
+            Token::Static => {
+                if self.in_function {
+                    panic!("Syntax Error: 'static' declarator can only be used in global scope");
+                }
+                self.parse_declaration()
+            }
+            Token::Const => {
+                if !self.in_function {
+                    panic!("Syntax Error: 'const' declarator can only be used inside functions (global state must be 'static')");
+                }
+                self.parse_declaration()
+            }
+            Token::Var => {
+                if !self.in_function {
+                    panic!("Syntax Error: 'var' declarator can only be used inside functions (global state must be 'static')");
+                }
+                self.parse_declaration()
+            }
             Token::Fn => self.parse_function(),
             Token::Identifier(_) => {
                 let expr = self.parse_expression();
@@ -181,7 +204,6 @@ impl Parser {
                 self.expect(Token::RParen);
                 Statement::Print(expr)
             }
-            Token::Var => self.parse_declaration(true),
             Token::If => self.parse_if_stmt(),
             Token::While => self.parse_while_stmt(),
             Token::Loop => self.parse_loop_stmt(),
@@ -202,9 +224,17 @@ impl Parser {
         stmt
     }
 
-    fn parse_declaration(&mut self, is_mutable: bool) -> Statement {
-        self.advance(); // consume 'var' or 'const'
+    fn parse_declaration(&mut self) -> Statement {
+        let declarator = self.current_token.clone();
+        self.advance(); // consume 'var', 'const', or 'static'
         
+        let (is_mutable, is_static) = match declarator {
+            Token::Var => (true, false),
+            Token::Const => (false, false),
+            Token::Static => (false, true),
+            _ => panic!("Expected declarator"),
+        };
+
         let name = self.expect_identifier();
         
         // Handle optional type: var x: i32 = 10
@@ -219,6 +249,7 @@ impl Parser {
         Statement::Declaration {
             name,
             is_mutable,
+            is_static,
             value,
         }
     }

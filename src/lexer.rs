@@ -212,6 +212,7 @@ impl Lexer {
         match ident.as_str() {
             "var" => Token::Var,
             "const" => Token::Const,
+            "static" => Token::Static,
             "if" => Token::If,
             "while" => Token::While,
             "once" => Token::Once,
