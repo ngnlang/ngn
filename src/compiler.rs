@@ -112,7 +112,7 @@ impl Compiler {
                     Token::Star => self.instructions.push(OpCode::Multiply),
                     Token::Slash => self.instructions.push(OpCode::Divide),
                     Token::Power => self.instructions.push(OpCode::Power),
-                    Token::Modulo => self.instructions.push(OpCode::Modulo),
+                    Token::Percent => self.instructions.push(OpCode::Modulo),
                     Token::LessThan => self.instructions.push(OpCode::LessThan),
                     Token::GreaterThan => self.instructions.push(OpCode::GreaterThan),
                     Token::NotEqual => self.instructions.push(OpCode::NotEqual),

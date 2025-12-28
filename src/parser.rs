@@ -1,10 +1,12 @@
 use crate::lexer::{Lexer, Token};
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct Parameter {
     pub name: String,
     pub is_owned: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
     Declaration {
         name: String,
@@ -34,6 +36,7 @@ pub enum Statement {
     Break,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Assign { name: String, value: Box<Expr> },
     Bool(bool),
@@ -250,6 +253,34 @@ impl Parser {
     fn parse_assignment(&mut self) -> Expr {
         let expr = self.parse_equality();
 
+        let compound_op = match self.current_token {
+            Token::PlusEqual => Some(Token::Plus),
+            Token::MinusEqual => Some(Token::Minus),
+            Token::StarEqual => Some(Token::Star),
+            Token::SlashEqual => Some(Token::Slash),
+            Token::PercentEqual => Some(Token::Percent),
+            Token::StarStarEqual => Some(Token::Power),
+            Token::CaretEqual => Some(Token::Power),
+            _ => None,
+        };
+
+        if let Some(binary_op) = compound_op {
+            self.advance();
+            let value = self.parse_assignment();
+            if let Expr::Variable(ref name) = expr {
+                return Expr::Assign {
+                    name: name.clone(),
+                    value: Box::new(Expr::Binary {
+                        left: Box::new(expr),
+                        op: binary_op,
+                        right: Box::new(value),
+                    }),
+                };
+            } else {
+                panic!("Syntax Error: Invalid assignment target");
+            }
+        }
+
         // If the next token is '=', this is an assignment
         if self.current_token == Token::Equal {
             self.advance(); // consume '='
@@ -313,7 +344,7 @@ impl Parser {
     fn parse_multiplication(&mut self) -> Expr {
         let mut left = self.parse_power(); 
 
-        while self.current_token == Token::Star || self.current_token == Token::Slash || self.current_token == Token::Modulo {
+        while self.current_token == Token::Star || self.current_token == Token::Slash || self.current_token == Token::Percent {
             let op = self.current_token.clone();
             self.advance();
             let right = self.parse_power();

@@ -16,10 +16,11 @@ pub enum Token {
 	Bool(bool),
     
     // Symbols
-    Equal, EqualEqual, NotEqual, Plus, Minus, Star, Slash, Power, Modulo,
+    Equal, EqualEqual, NotEqual, Plus, Minus, Star, Slash, Power, Percent,
     LParen, RParen, LBrace, RBrace, LBracket, RBracket,
     Colon, DoubleColon, Comma, LArrow,
 	LessThan, GreaterThan,
+    PlusEqual, MinusEqual, StarEqual, SlashEqual, PercentEqual, StarStarEqual, CaretEqual,
     
     // Formatting
     Newline,
@@ -74,18 +75,54 @@ impl Lexer {
 
         self.cursor += 1;
         let token = match ch {
-            '+' => Token::Plus,
-            '-' => Token::Minus,
+            '+' => {
+                if self.peek_current() == '=' {
+                    self.cursor += 1;
+                    Token::PlusEqual
+                } else {
+                    Token::Plus
+                }
+            }
+            '-' => {
+                if self.peek_current() == '=' {
+                    self.cursor += 1;
+                    Token::MinusEqual
+                } else {
+                    Token::Minus
+                }
+            }
 			'*' => {
 				if self.peek_current() == '*' {
 					self.cursor += 1;
-					Token::Power
-				} else {
+                    if self.peek_current() == '=' {
+                        self.cursor += 1;
+                        Token::StarStarEqual
+                    } else {
+					    Token::Power
+                    }
+				} else if self.peek_current() == '=' {
+                    self.cursor += 1;
+                    Token::StarEqual
+                } else {
 					Token::Star
 				}
 			}
-            '^' => Token::Power,
-            '%' => Token::Modulo,
+            '^' => {
+                if self.peek_current() == '=' {
+                    self.cursor += 1;
+                    Token::CaretEqual
+                } else {
+                    Token::Power
+                }
+            }
+            '%' => {
+                if self.peek_current() == '=' {
+                    self.cursor += 1;
+                    Token::PercentEqual
+                } else {
+                    Token::Percent
+                }
+            }
 			'/' => {
                 let next_char = self.peek_current();
                 if next_char == '/' {
@@ -108,6 +145,9 @@ impl Lexer {
                     }
                      // Recursively get next token after comment
                     self.next_token()
+                } else if next_char == '=' {
+                    self.cursor += 1;
+                    Token::SlashEqual
                 } else {
                     Token::Slash
                 }
