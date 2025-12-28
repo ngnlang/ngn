@@ -1,3 +1,4 @@
+mod analyzer;
 mod bytecode;
 mod compiler;
 mod error;
@@ -12,6 +13,7 @@ use std::env;
 use std::fs;
 use compiler::Compiler;
 use vm::VM;
+use analyzer::Analyzer;
 use std::io::{Read, Seek, SeekFrom};
 
 use crate::bytecode::OpCode;
@@ -67,6 +69,15 @@ fn main() {
             continue;
         }
         statements.push(parser.parse_statement());
+    }
+    
+    // 2. Semantic Analysis (Static Type Checking)
+    let mut analyzer = Analyzer::new();
+    if let Err(errors) = analyzer.analyze(&statements) {
+        for err in errors {
+            eprintln!("{}", err);
+        }
+        std::process::exit(1);
     }
 
     // 2. PASS ONE: Register all function names in the symbol table

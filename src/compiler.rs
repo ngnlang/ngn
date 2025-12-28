@@ -124,7 +124,7 @@ impl Compiler {
 
     pub fn compile_statement(&mut self, stmt: Statement) {
         match stmt {
-            Statement::Declaration { name, is_mutable, is_static, value } => {
+            Statement::Declaration { name, is_mutable, is_static, value, declared_type: _ } => {
                 self.compile_expr(&value);
 
                 let var_idx = self.next_index;
@@ -139,11 +139,20 @@ impl Compiler {
                 // Standardization: Pop the result of the declaration statement
                 self.instructions.push(OpCode::Pop);
             }
+            Statement::Return(expr_opt) => {
+                if let Some(expr) = expr_opt {
+                    self.compile_expr(&expr);
+                } else {
+                    let null_idx = self.add_constant(Value::Void);
+                    self.instructions.push(OpCode::LoadConst(null_idx));
+                }
+                self.instructions.push(OpCode::Return);
+            }
             Statement::Expression(expr) => {
                 self.compile_expr(&expr);
                 self.instructions.push(OpCode::Pop);
             }
-            Statement::Function { name, params, body } => {
+            Statement::Function { name, params, body, return_type: _ } => {
                 let mut sub_compiler = Compiler::new();
                 sub_compiler.is_global = false;
 

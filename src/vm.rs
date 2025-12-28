@@ -391,7 +391,7 @@ impl VM {
                     if let Some((saved_instructions, saved_constants, saved_ip)) = self.call_stack.pop() {
                         self.instructions = saved_instructions;
                         self.constants = saved_constants; // Restore the constants pool
-                        self.ip = saved_ip + 1;
+                        self.ip = saved_ip;
 
                         continue;
                     } else {

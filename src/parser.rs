@@ -1,9 +1,27 @@
 use crate::lexer::{Lexer, Token};
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum Type {
+    I64, I32, I16, I8,
+    U64, U32, U16, U8,
+    F64, F32,
+    String,
+    Bool,
+    Void,
+    Array(Box<Type>),
+    Tuple(Vec<Type>),
+    Function {
+        params: Vec<Type>,
+        return_type: Box<Type>,
+    },
+    Any,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Parameter {
     pub name: String,
     pub is_owned: bool,
+    pub ty: Option<Type>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -13,12 +31,14 @@ pub enum Statement {
         is_mutable: bool,
         is_static: bool,
         value: Expr,
+        declared_type: Option<Type>,
     },
     Expression(Expr),
     Function {
         name: String,
         params: Vec<Parameter>,
         body: Vec<Statement>,
+        return_type: Option<Type>,
     },
     Import { names: Vec<String>, source: String },
     Print(Expr),
@@ -35,6 +55,7 @@ pub enum Statement {
     },
     Loop(Box<Statement>),
     Break,
+    Return(Option<Expr>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -116,7 +137,6 @@ impl Parser {
         while self.current_token != Token::RParen {
             let mut is_owned = false;
             
-            // Check for ngn ownership marker '<'
             if self.current_token == Token::LessThan {
                 is_owned = true;
                 self.advance();
@@ -124,13 +144,13 @@ impl Parser {
 
             let param_name = self.expect_identifier();
             
-            // Handle optional type: param: i32
+            let mut ty = None;
             if self.current_token == Token::Colon {
                 self.advance();
-                self.expect_identifier(); // TODO Skip type name for now
+                ty = Some(self.parse_type());
             }
 
-            params.push(Parameter { name: param_name, is_owned });
+            params.push(Parameter { name: param_name, is_owned, ty });
 
             if self.current_token == Token::Comma {
                 self.advance();
@@ -138,12 +158,18 @@ impl Parser {
         }
         self.expect(Token::RParen);
 
+        let mut return_type = None;
+        if self.current_token == Token::Colon {
+            self.advance();
+            return_type = Some(self.parse_type());
+        }
+
         let old_in_function = self.in_function;
         self.in_function = true;
         let body = self.parse_block();
         self.in_function = old_in_function;
 
-        Statement::Function { name, params, body }
+        Statement::Function { name, params, body, return_type }
     }
 
     fn parse_import_statement(&mut self) -> Statement {
@@ -211,6 +237,15 @@ impl Parser {
                 self.advance();
                 Statement::Break
             }
+            Token::Return => {
+                self.advance();
+                let expr = if self.current_token != Token::Newline && self.current_token != Token::RBrace && self.current_token != Token::EOF {
+                    Some(self.parse_expression())
+                } else {
+                    None
+                };
+                Statement::Return(expr)
+            }
              _ => {
                let expr = self.parse_expression();
                Statement::Expression(expr)
@@ -237,10 +272,10 @@ impl Parser {
 
         let name = self.expect_identifier();
         
-        // Handle optional type: var x: i32 = 10
+        let mut declared_type = None;
         if self.current_token == Token::Colon {
             self.advance();
-            self.parse_type();
+            declared_type = Some(self.parse_type());
         }
 
         self.expect(Token::Equal);
@@ -251,29 +286,92 @@ impl Parser {
             is_mutable,
             is_static,
             value,
+            declared_type,
         }
     }
 
-    fn parse_type(&mut self) -> String {
-        let type_name = self.expect_identifier();
-        
-        if self.current_token == Token::LessThan {
-            self.advance(); // consume <
-            
-            while self.current_token != Token::GreaterThan {
-                if let Token::Number(_) = self.current_token {
-                    self.advance(); // handle array size N
-                } else {
-                    self.parse_type();
-                }
+    fn parse_type(&mut self) -> Type {
+        match &self.current_token {
+            Token::Identifier(name) => {
+                match name.as_str() {
+                    "i64" => { self.advance(); Type::I64 }
+                    "i32" => { self.advance(); Type::I32 }
+                    "i16" => { self.advance(); Type::I16 }
+                    "i8" => { self.advance(); Type::I8 }
+                    "u64" => { self.advance(); Type::U64 }
+                    "u32" => { self.advance(); Type::U32 }
+                    "u16" => { self.advance(); Type::U16 }
+                    "u8" => { self.advance(); Type::U8 }
+                    "f64" => { self.advance(); Type::F64 }
+                    "f32" => { self.advance(); Type::F32 }
+                    "string" => { self.advance(); Type::String }
+                    "bool" => { self.advance(); Type::Bool }
+                    "void" => { self.advance(); Type::Void }
+                    "array" => {
+                        self.advance();
+                        if self.current_token == Token::LessThan {
+                            self.advance();
+                            let inner = self.parse_type();
+                            self.expect(Token::GreaterThan);
+                            Type::Array(Box::new(inner))
+                        } else {
+                            Type::Array(Box::new(Type::I64))
+                        }
+                    }
+                    "tuple" => {
+                        self.advance();
+                        if self.current_token == Token::LessThan {
+                            self.advance();
+                            let mut base_types = Vec::new();
+                            let mut last_type = None;
+                            let mut size: Option<i64> = None;
 
-                if self.current_token == Token::Comma {
-                    self.advance();
+                            while self.current_token != Token::GreaterThan {
+                                if let Token::Number(n) = self.current_token {
+                                    size = Some(n);
+                                    self.advance();
+                                } else {
+                                    let ty = self.parse_type();
+                                    last_type = Some(ty.clone());
+                                    base_types.push(ty);
+                                }
+                                if self.current_token == Token::Comma {
+                                    self.advance();
+                                }
+                            }
+                            self.expect(Token::GreaterThan);
+
+                            if let Some(n) = size {
+                                if let Some(t) = last_type {
+                                    let mut actual_types = Vec::new();
+                                    for _ in 0..n {
+                                        actual_types.push(t.clone());
+                                    }
+                                    return Type::Tuple(actual_types);
+                                }
+                            }
+                            Type::Tuple(base_types)
+                        } else {
+                            Type::Tuple(vec![])
+                        }
+                    }
+                    _ => panic!("Syntax Error: Unknown type '{}'", name),
                 }
             }
-            self.expect(Token::GreaterThan);
+            Token::LParen => {
+                self.advance();
+                let mut inner_types = Vec::new();
+                while self.current_token != Token::RParen {
+                    inner_types.push(self.parse_type());
+                    if self.current_token == Token::Comma {
+                        self.advance();
+                    }
+                }
+                self.expect(Token::RParen);
+                Type::Tuple(inner_types)
+            }
+            _ => panic!("Syntax Error: Expected a type, but found {:?}", self.current_token),
         }
-        type_name
     }
 
     pub fn parse_expression(&mut self) -> Expr {
@@ -345,7 +443,8 @@ impl Parser {
     fn parse_comparison(&mut self) -> Expr {
         let mut left = self.parse_addition();
 
-        while self.current_token == Token::LessThan || self.current_token == Token::GreaterThan {
+        while self.current_token == Token::LessThan || self.current_token == Token::GreaterThan || 
+              self.current_token == Token::LessThanEqual || self.current_token == Token::GreaterThanEqual {
             let op = self.current_token.clone();
             self.advance();
             let right = self.parse_addition();

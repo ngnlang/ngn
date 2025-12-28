@@ -1,7 +1,7 @@
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token {
     // Keywords
-    Var, Const, Static, Fn,
+    Var, Const, Static, Fn, Return,
     If, Match, While, Until, Loop, Break, Once,
     Import, From, As,
 
@@ -19,7 +19,7 @@ pub enum Token {
     Equal, EqualEqual, NotEqual, Plus, Minus, Star, Slash, Power, Percent,
     LParen, RParen, LBrace, RBrace, LBracket, RBracket,
     Colon, DoubleColon, Comma, LArrow,
-	LessThan, GreaterThan,
+	LessThan, GreaterThan, LessThanEqual, GreaterThanEqual,
     PlusEqual, MinusEqual, StarEqual, SlashEqual, PercentEqual, StarStarEqual, CaretEqual,
     
     // Formatting
@@ -173,8 +173,22 @@ impl Lexer {
 					panic!("Unknown character '!'");
 				}
 			}
-            '<' => Token::LessThan,
-            '>' => Token::GreaterThan,
+            '<' => {
+                if self.peek_current() == '=' {
+                    self.cursor += 1;
+                    Token::LessThanEqual
+                } else {
+                    Token::LessThan
+                }
+            }
+            '>' => {
+                if self.peek_current() == '=' {
+                    self.cursor += 1;
+                    Token::GreaterThanEqual
+                } else {
+                    Token::GreaterThan
+                }
+            }
             '[' => Token::LBracket,
             ']' => Token::RBracket,
             ',' => Token::Comma,
@@ -220,6 +234,7 @@ impl Lexer {
             "break" => Token::Break,
             "until" => Token::Until,
 			"fn" => Token::Fn,
+			"return" => Token::Return,
 			"print" => Token::Print,
 			"import" => Token::Import,
 			"from" => Token::From,
