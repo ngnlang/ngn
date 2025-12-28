@@ -39,7 +39,6 @@ impl Compiler {
         self.constants.len() - 1
     }
 
-
     pub fn compile_expr(&mut self, expr: &Expr) {
         match expr {
             Expr::Assign { name, value } => {
