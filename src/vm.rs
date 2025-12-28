@@ -138,7 +138,13 @@ impl VM {
                     let rx = self.resolve_value(x);
                     let ry = self.resolve_value(y);
 
-                    self.stack.push(rx.multiply(ry).expect("Math error")); 
+                    match rx.multiply(ry) {
+                        Ok(result) => self.stack.push(result),
+                        Err(e) => {
+                            eprintln!("Runtime Error: {}", e);
+                            break;
+                        }
+                    }
                 }
                 OpCode::Divide => {
                     let y = self.pop_stack();
