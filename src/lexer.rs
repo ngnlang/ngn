@@ -2,8 +2,8 @@
 pub enum Token {
     // Keywords
     Var, Const, Static, Fn,
-    If, Else, Match, While, Until,
-	Import, From, As,
+    If, Match, While, Until, Loop,
+    Import, From, As,
 
 	// Built-ins
 	Print,
@@ -163,6 +163,10 @@ impl Lexer {
         match ident.as_str() {
             "var" => Token::Var,
             "const" => Token::Const,
+            "if" => Token::If,
+            "while" => Token::While,
+            "loop" => Token::Loop,
+            "until" => Token::Until,
 			"fn" => Token::Fn,
 			"print" => Token::Print,
 			"import" => Token::Import,

@@ -19,6 +19,16 @@ pub enum Statement {
     },
     Import { names: Vec<String>, source: String },
     Print(Expr),
+    Block(Vec<Statement>),
+    If {
+        condition: Expr,
+        then_branch: Box<Statement>,
+        else_branch: Option<Box<Statement>>,
+    },
+    While {
+        condition: Expr,
+        body: Box<Statement>,
+    },
 }
 
 pub enum Expr {
@@ -119,13 +129,7 @@ impl Parser {
         }
         self.expect(Token::RParen);
 
-        self.expect(Token::LBrace);
-        let mut body = Vec::new();
-        
-        while self.current_token != Token::RBrace && self.current_token != Token::EOF {
-            body.push(self.parse_statement());
-        }
-        self.expect(Token::RBrace);
+        let body = self.parse_block();
 
         Statement::Function { name, params, body }
     }
@@ -156,7 +160,7 @@ impl Parser {
     pub fn parse_statement(&mut self) -> Statement {
         self.consume_newlines();
 
-        let stmt = match self.current_token {
+        let stmt = match self.current_token.clone() {
             Token::Const => self.parse_declaration(false),
             Token::Fn => self.parse_function(),
             Token::Identifier(_) => {
@@ -172,12 +176,16 @@ impl Parser {
                 Statement::Print(expr)
             }
             Token::Var => self.parse_declaration(true),
-            _ => panic!("Expected statement, found {:?}", self.current_token),
+            Token::If => self.parse_if_stmt(),
+            Token::While => self.parse_while_stmt(),
+             _ => {
+               let expr = self.parse_expression();
+               Statement::Expression(expr)
+            }
         };
 
-        // Expect either a Newline or EOF at the end of every statement
-        if self.current_token != Token::EOF {
-            self.expect(Token::Newline);
+        if self.current_token == Token::Newline {
+             self.advance();
         }
         
         stmt
@@ -253,9 +261,21 @@ impl Parser {
     }
 
     fn parse_equality(&mut self) -> Expr {
-        let mut left = self.parse_addition();
+        let mut left = self.parse_comparison();
 
         while self.current_token == Token::EqualEqual || self.current_token == Token::NotEqual {
+            let op = self.current_token.clone();
+            self.advance();
+            let right = self.parse_comparison();
+            left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };
+        }
+        left
+    }
+
+    fn parse_comparison(&mut self) -> Expr {
+        let mut left = self.parse_addition();
+
+        while self.current_token == Token::LessThan || self.current_token == Token::GreaterThan {
             let op = self.current_token.clone();
             self.advance();
             let right = self.parse_addition();
@@ -384,5 +404,197 @@ impl Parser {
 
         self.expect(Token::RBracket);
         Expr::Array(elements)
+    }
+
+    fn parse_block(&mut self) -> Vec<Statement> {
+        self.expect(Token::LBrace);
+        let mut statements = Vec::new();
+
+        loop {
+             // Skip incoming newlines
+             while self.current_token == Token::Newline { 
+                 self.advance(); 
+             }
+             
+             if self.current_token == Token::RBrace || self.current_token == Token::EOF {
+                 break;
+             }
+             
+             statements.push(self.parse_statement());
+        }
+
+        self.expect(Token::RBrace);
+        statements
+    }
+
+    fn parse_if_stmt(&mut self) -> Statement {
+        self.advance(); // consume 'if'
+
+        // Check for Block If: if { ... }
+        if self.current_token == Token::LBrace {
+             self.advance(); // consume '{'
+             
+             // First branch must have a condition
+             if self.current_token == Token::Newline { self.advance(); }
+             
+             self.expect(Token::LParen);
+             let condition = self.parse_expression();
+             self.expect(Token::RParen);
+             
+             // Parse statements until we hit ':' or '}'
+             let mut then_block = Vec::new();
+             loop {
+                 while self.current_token == Token::Newline { self.advance(); }
+                 if self.current_token == Token::Colon || self.current_token == Token::RBrace || self.current_token == Token::EOF {
+                     break;
+                 }
+                 then_block.push(self.parse_statement());
+             }
+             
+             let mut else_branch = None;
+             
+             if self.current_token == Token::Colon {
+                 self.advance(); // consume ':'
+                 while self.current_token == Token::Newline { self.advance(); }
+                 
+                 // Check if it's an 'else if' or 'else'
+                 if self.current_token == Token::LParen {
+                     else_branch = Some(Box::new(self.parse_if_inner()));
+                 } else {
+                     // Final 'else' block
+                     let mut else_stmts = Vec::new();
+                     loop {
+                         while self.current_token == Token::Newline { self.advance(); }
+                         if self.current_token == Token::RBrace || self.current_token == Token::EOF {
+                             break;
+                         }
+                         else_stmts.push(self.parse_statement());
+                     }
+                     else_branch = Some(Box::new(Statement::Block(else_stmts)));
+                 }
+             }
+             
+             if self.current_token == Token::RBrace {
+                 self.advance();
+             }
+             
+             Statement::If {
+                 condition,
+                 then_branch: Box::new(Statement::Block(then_block)),
+                 else_branch,
+             }
+
+        } else {
+            // Inline If: if (cond) stmt : ...
+            self.expect(Token::LParen);
+            let condition = self.parse_expression();
+            self.expect(Token::RParen);
+            
+            let then_stmt = self.parse_statement();
+            let mut else_branch = None;
+            
+            if self.current_token == Token::Colon {
+                self.advance(); // consume ':'
+                // Check for 'else if' vs 'else'
+                if self.current_token == Token::LParen {
+                     // Inline Else If (Implicit If)
+                     else_branch = Some(Box::new(self.parse_implicit_if()));
+                } else {
+                    else_branch = Some(Box::new(self.parse_statement()));
+                }
+            }
+            
+            Statement::If {
+                condition,
+                then_branch: Box::new(then_stmt),
+                else_branch,
+            }
+        }
+    }
+
+    // Helper for Block If recursion
+    fn parse_if_inner(&mut self) -> Statement {
+         // Expect condition
+         self.expect(Token::LParen);
+         let condition = self.parse_expression();
+         self.expect(Token::RParen);
+         
+         let mut then_block = Vec::new();
+         loop {
+             while self.current_token == Token::Newline { self.advance(); }
+             if self.current_token == Token::Colon || self.current_token == Token::RBrace || self.current_token == Token::EOF {
+                 break;
+             }
+             then_block.push(self.parse_statement());
+         }
+         
+         let mut else_branch = None;
+         if self.current_token == Token::Colon {
+             self.advance();
+             while self.current_token == Token::Newline { self.advance(); }
+             
+             if self.current_token == Token::LParen {
+                 else_branch = Some(Box::new(self.parse_if_inner()));
+             } else {
+                 let mut else_stmts = Vec::new();
+                 loop {
+                     while self.current_token == Token::Newline { self.advance(); }
+                     if self.current_token == Token::RBrace || self.current_token == Token::EOF {
+                         break;
+                     }
+                     else_stmts.push(self.parse_statement());
+                 }
+                 else_branch = Some(Box::new(Statement::Block(else_stmts)));
+             }
+         }
+         
+         Statement::If {
+             condition,
+             then_branch: Box::new(Statement::Block(then_block)),
+             else_branch,
+         }
+    }
+
+    // Helper for Inline If recursion (implicit if)
+    fn parse_implicit_if(&mut self) -> Statement {
+        self.expect(Token::LParen);
+        let condition = self.parse_expression();
+        self.expect(Token::RParen);
+        
+        let then_stmt = self.parse_statement();
+        let mut else_branch = None;
+        
+        if self.current_token == Token::Colon {
+            self.advance(); 
+            if self.current_token == Token::LParen {
+                 else_branch = Some(Box::new(self.parse_implicit_if()));
+            } else {
+                else_branch = Some(Box::new(self.parse_statement()));
+            }
+        }
+        
+        Statement::If {
+            condition,
+            then_branch: Box::new(then_stmt),
+            else_branch
+        }
+    }
+
+    fn parse_while_stmt(&mut self) -> Statement {
+        self.advance(); // consume 'while'
+        self.expect(Token::LParen);
+        let condition = self.parse_expression();
+        self.expect(Token::RParen);
+
+        let body = if self.current_token == Token::LBrace {
+             Statement::Block(self.parse_block())
+        } else {
+            self.parse_statement()
+        };
+
+        Statement::While {
+            condition,
+            body: Box::new(body),
+        }
     }
 }

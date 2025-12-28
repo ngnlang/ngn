@@ -199,6 +199,60 @@ impl Number {
         }
     }
 
+    pub fn less_than(self, other: Number) -> bool {
+        let r1 = self.rank();
+        let r2 = other.rank();
+
+        if r1 == r2 {
+             match (self, other) {
+                (Number::I8(x), Number::I8(y)) => x < y,
+                (Number::I16(x), Number::I16(y)) => x < y,
+                (Number::I32(x), Number::I32(y)) => x < y,
+                (Number::I64(x), Number::I64(y)) => x < y,
+                (Number::U8(x), Number::U8(y))   => x < y,
+                (Number::U16(x), Number::U16(y)) => x < y,
+                (Number::U32(x), Number::U32(y)) => x < y,
+                (Number::U64(x), Number::U64(y)) => x < y,
+                (Number::F32(x), Number::F32(y)) => x < y,
+                (Number::F64(x), Number::F64(y)) => x < y,
+                _ => false,
+            }
+        } else if r1 < r2 {
+            let promoted = self.promote_to(r2);
+            promoted.less_than(other)
+        } else {
+            let promoted = other.promote_to(r1);
+            self.less_than(promoted)
+        }
+    }
+
+    pub fn greater_than(self, other: Number) -> bool {
+        let r1 = self.rank();
+        let r2 = other.rank();
+
+        if r1 == r2 {
+             match (self, other) {
+                (Number::I8(x), Number::I8(y)) => x > y,
+                (Number::I16(x), Number::I16(y)) => x > y,
+                (Number::I32(x), Number::I32(y)) => x > y,
+                (Number::I64(x), Number::I64(y)) => x > y,
+                (Number::U8(x), Number::U8(y))   => x > y,
+                (Number::U16(x), Number::U16(y)) => x > y,
+                (Number::U32(x), Number::U32(y)) => x > y,
+                (Number::U64(x), Number::U64(y)) => x > y,
+                (Number::F32(x), Number::F32(y)) => x > y,
+                (Number::F64(x), Number::F64(y)) => x > y,
+                _ => false,
+            }
+        } else if r1 < r2 {
+            let promoted = self.promote_to(r2);
+            promoted.greater_than(other)
+        } else {
+            let promoted = other.promote_to(r1);
+            self.greater_than(promoted)
+        }
+    }
+
     fn promote_to(self, target_rank: u8) -> Number {
         match (self, target_rank) {
             (Number::I8(v), 6) => Number::I16(v as i16),

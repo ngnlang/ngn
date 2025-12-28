@@ -379,6 +379,47 @@ impl VM {
                     elements.reverse();
                     self.stack.push(Value::Tuple(elements));
                 }
+                OpCode::Jump(target) => {
+                    self.ip = target;
+                    continue;
+                }
+                OpCode::JumpIfFalse(target) => {
+                    let val = self.pop_stack();
+                    let resolved = self.resolve_value(val);
+                    match resolved {
+                        Value::Bool(false) => {
+                            self.ip = target;
+                            continue;
+                        }
+                        _ => {} // Fall through (treat as true)
+                    }
+                }
+                OpCode::LessThan => {
+                    let b = self.pop_stack();
+                    let a = self.pop_stack();
+                    let val_a = self.resolve_value(a);
+                    let val_b = self.resolve_value(b);
+                    
+                    match (val_a, val_b) {
+                        (Value::Numeric(n1), Value::Numeric(n2)) => {
+                             self.stack.push(Value::Bool(n1.less_than(n2)));
+                        }
+                        _ => panic!("Runtime Error: Invalid operands for <"),
+                    }
+                }
+                OpCode::GreaterThan => {
+                    let b = self.pop_stack();
+                    let a = self.pop_stack();
+                    let val_a = self.resolve_value(a);
+                    let val_b = self.resolve_value(b);
+                    
+                    match (val_a, val_b) {
+                        (Value::Numeric(n1), Value::Numeric(n2)) => {
+                            self.stack.push(Value::Bool(n1.greater_than(n2)));
+                        }
+                        _ => panic!("Runtime Error: Invalid operands for >"),
+                    }
+                }
             }
             self.ip += 1;
         }

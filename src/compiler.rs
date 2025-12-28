@@ -108,7 +108,9 @@ impl Compiler {
                     Token::Minus => self.instructions.push(OpCode::Subtract),
                     Token::Star => self.instructions.push(OpCode::Multiply),
                     Token::Slash => self.instructions.push(OpCode::Divide),
-                    _ => todo!("Other operators"),
+                    Token::LessThan => self.instructions.push(OpCode::LessThan),
+                    Token::GreaterThan => self.instructions.push(OpCode::GreaterThan),
+                    _ => todo!("Other operators: {:?}", op),
                 }
             }
             Expr::Array(elements) => {
@@ -267,6 +269,96 @@ impl Compiler {
                 // Emit the Print instruction
                 self.instructions.push(OpCode::Print);
             }
+            Statement::Block(stmts) => {
+                for stmt in stmts {
+                    self.compile_statement(stmt);
+                }
+            }
+            Statement::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => self.compile_if(condition, then_branch, else_branch),
+            Statement::While {
+                condition,
+                body,
+            } => self.compile_while(condition, body),
+        }
+    }
+
+    fn compile_if(&mut self, condition: Expr, then_branch: Box<Statement>, else_branch: Option<Box<Statement>>) {
+        // Compile the Condition
+        // Output: [Instructions for Condition, Push Result]
+        self.compile_expr(&condition);
+        
+        // The Decision Point (JumpIfFalse)
+        // If condition is false, we want to SKIP the 'then' block.
+        // We don't know how long the 'then' block is yet, so we emit
+        // Emit JumpIfFalse(0) as a placeholder.
+        let jump_false_idx = self.emit(OpCode::JumpIfFalse(0)); // 0 is placeholder
+
+        // Compile 'Then' Block
+        // These instructions follow immediately. If condition was true,
+        // the VM just keeps stepping into this code.
+        self.compile_statement(*then_branch);
+
+        if let Some(else_branch) = else_branch {
+            // --- CASE: IF / ELSE ---
+            // Escape the 'Then' Block (Jump)
+            // If we just executed the 'then' block, we MUST skip the 'else' block.
+            // Again, we don't know how long the 'else' block is, so placeholder 0.
+            let jump_end_idx = self.emit(OpCode::Jump(0));
+            
+            // Patch (Fix) the JumpIfFalse
+            // Now we are at the start of the 'else' block.
+            // We go back to 'jump_false_idx' and say: 
+            // "Hey, if false, jump HERE (current instruction count)."
+            self.patch_jump(jump_false_idx);
+            
+            // Compile 'Else' Block
+            self.compile_statement(*else_branch);
+            
+            // Patch (Fix) the Escape Jump
+            // Now we are at the very end.
+            // We go back to 'jump_end_idx' and say:
+            // "Hey, when 'then' finishes, jump HERE (the end)."
+            self.patch_jump(jump_end_idx);
+        } else {
+            // --- CASE: IF ONLY ---
+            // Patch (Fix) the JumpIfFalse
+            // There is no else. So if false, jump straight to the end.
+            self.patch_jump(jump_false_idx);
+        }
+    }
+
+    fn compile_while(&mut self, condition: Expr, body: Box<Statement>) {
+        let loop_start = self.instructions.len();
+        
+        self.compile_expr(&condition);
+        
+        let jump_end_idx = self.emit(OpCode::JumpIfFalse(0));
+        
+        self.compile_statement(*body);
+        
+        // Jump back to start
+        self.emit(OpCode::Jump(loop_start));
+        
+        // Patch exit jump
+        self.patch_jump(jump_end_idx);
+    }
+
+    fn emit(&mut self, opcode: OpCode) -> usize {
+        self.instructions.push(opcode);
+        self.instructions.len() - 1
+    }
+
+    fn patch_jump(&mut self, op_index: usize) {
+        let target = self.instructions.len();
+        match &mut self.instructions[op_index] {
+             OpCode::JumpIfFalse(val) | OpCode::Jump(val) => {
+                 *val = target;
+            }
+            _ => panic!("Attempted to patch non-jump opcode"),
         }
     }
 }

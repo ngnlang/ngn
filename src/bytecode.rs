@@ -20,4 +20,8 @@ pub enum OpCode {
     LoadConst(usize),
     BuildArray(usize),
     BuildTuple(usize),
+    Jump(usize),
+    JumpIfFalse(usize),
+    LessThan,
+    GreaterThan,
 }
