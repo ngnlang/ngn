@@ -16,7 +16,7 @@ pub enum Token {
 	Bool(bool),
     
     // Symbols
-    Equal, EqualEqual, NotEqual, Plus, Minus, Star, Slash,
+    Equal, EqualEqual, NotEqual, Plus, Minus, Star, Slash, Power, Modulo,
     LParen, RParen, LBrace, RBrace, LBracket, RBracket,
     Colon, DoubleColon, Comma, LArrow,
 	LessThan, GreaterThan,
@@ -76,7 +76,16 @@ impl Lexer {
         let token = match ch {
             '+' => Token::Plus,
             '-' => Token::Minus,
-			'*' => Token::Star,
+			'*' => {
+				if self.peek_current() == '*' {
+					self.cursor += 1;
+					Token::Power
+				} else {
+					Token::Star
+				}
+			}
+            '^' => Token::Power,
+            '%' => Token::Modulo,
 			'/' => {
                 let next_char = self.peek_current();
                 if next_char == '/' {

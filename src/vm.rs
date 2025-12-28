@@ -103,13 +103,13 @@ impl VM {
                     self.stack.push(self.constants[idx].clone());
                 }
                 OpCode::Add => {
-                    let y_raw = self.pop_stack();
-                    let x_raw = self.pop_stack();
+                    let y = self.pop_stack();
+                    let x = self.pop_stack();
 
-                    let x = self.resolve_value(x_raw);
-                    let y = self.resolve_value(y_raw);
+                    let rx = self.resolve_value(x);
+                    let ry = self.resolve_value(y);
 
-                    match x.add(y) {
+                    match rx.add(ry) {
                         Ok(result) => self.stack.push(result),
                         Err(e) => {
                             eprintln!("Runtime Error: {}", e);
@@ -118,13 +118,13 @@ impl VM {
                     }
                 }
                 OpCode::Subtract => {
-                    let y_raw = self.pop_stack();
-                    let x_raw = self.pop_stack();
+                    let y = self.pop_stack();
+                    let x = self.pop_stack();
 
-                    let x = self.resolve_value(x_raw);
-                    let y = self.resolve_value(y_raw);
+                    let rx = self.resolve_value(x);
+                    let ry = self.resolve_value(y);
 
-                    match x.subtract(y) {
+                    match rx.subtract(ry) {
                         Ok(result) => self.stack.push(result),
                         Err(e) => {
                             eprintln!("Runtime Error: {}", e);
@@ -153,6 +153,34 @@ impl VM {
                             break;
                         }
                     } 
+                }
+                OpCode::Power => {
+                    let y = self.pop_stack();
+                    let x = self.pop_stack();
+                    let rx = self.resolve_value(x);
+                    let ry = self.resolve_value(y);
+
+                    match rx.power(ry) {
+                        Ok(result) => self.stack.push(result),
+                        Err(e) => {
+                            eprintln!("Runtime Error: {}", e);
+                            break;
+                        }
+                    }
+                }
+                OpCode::Modulo => {
+                    let y = self.pop_stack();
+                    let x = self.pop_stack();
+                    let rx = self.resolve_value(x);
+                    let ry = self.resolve_value(y);
+
+                    match rx.remainder(ry) {
+                        Ok(result) => self.stack.push(result),
+                        Err(e) => {
+                            eprintln!("Runtime Error: {}", e);
+                            break;
+                        }
+                    }
                 }
                 OpCode::Equal => {
                     let b = self.pop_stack();

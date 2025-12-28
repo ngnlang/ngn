@@ -311,13 +311,28 @@ impl Parser {
     }
 
     fn parse_multiplication(&mut self) -> Expr {
-        let mut left = self.parse_primary(); // Top of the ladder (numbers/parens)
+        let mut left = self.parse_power(); 
 
-        while self.current_token == Token::Star || self.current_token == Token::Slash {
+        while self.current_token == Token::Star || self.current_token == Token::Slash || self.current_token == Token::Modulo {
             let op = self.current_token.clone();
             self.advance();
-            let right = self.parse_primary();
+            let right = self.parse_power();
             left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };
+        }
+        left
+    }
+
+    fn parse_power(&mut self) -> Expr {
+        let left = self.parse_primary();
+
+        if self.current_token == Token::Power {
+            self.advance();
+            let right = self.parse_power(); // Right-associative
+            return Expr::Binary {
+                left: Box::new(left),
+                op: Token::Power,
+                right: Box::new(right),
+            };
         }
         left
     }

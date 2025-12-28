@@ -199,6 +199,70 @@ impl Number {
         }
     }
 
+    pub fn remainder(self, other: Number) -> Result<Number, String> {
+        let r1 = self.rank();
+        let r2 = other.rank();
+
+        if r1 == r2 {
+            return match (self, other) {
+                (Number::I8(x), Number::I8(y)) => Ok(Number::I8(x % y)),
+                (Number::I16(x), Number::I16(y)) => Ok(Number::I16(x % y)),
+                (Number::I32(x), Number::I32(y)) => Ok(Number::I32(x % y)),
+                (Number::I64(x), Number::I64(y)) => {
+                    if y == 0 { return Err("Modulo by zero".to_string()); }
+                    Ok(Number::I64(x % y))
+                }
+                (Number::U8(x), Number::U8(y)) => Ok(Number::U8(x % y)),
+                (Number::U16(x), Number::U16(y)) => Ok(Number::U16(x % y)),
+                (Number::U32(x), Number::U32(y)) => Ok(Number::U32(x % y)),
+                (Number::U64(x), Number::U64(y)) => {
+                    if y == 0 { return Err("Modulo by zero".to_string()); }
+                    Ok(Number::U64(x % y))
+                }
+                (Number::F32(x), Number::F32(y)) => Ok(Number::F32(x % y)),
+                (Number::F64(x), Number::F64(y)) => Ok(Number::F64(x % y)),
+                _ => panic!("Modulo not implemented for these types"),
+            };
+        }
+
+        if r1 < r2 {
+            let promoted = self.promote_to(r2);
+            promoted.remainder(other)
+        } else {
+            let promoted = other.promote_to(r1);
+            self.remainder(promoted)
+        }
+    }
+
+    pub fn power(self, other: Number) -> Number {
+        let r1 = self.rank();
+        let r2 = other.rank();
+
+        if r1 == r2 {
+            return match (self, other) {
+                (Number::I8(x), Number::I8(y)) => Number::F64((x as f64).powf(y as f64)),
+                (Number::I16(x), Number::I16(y)) => Number::F64((x as f64).powf(y as f64)),
+                (Number::I32(x), Number::I32(y)) => Number::F64((x as f64).powf(y as f64)),
+                (Number::I64(x), Number::I64(y)) => Number::F64((x as f64).powf(y as f64)),
+                (Number::U8(x), Number::U8(y)) => Number::F64((x as f64).powf(y as f64)),
+                (Number::U16(x), Number::U16(y)) => Number::F64((x as f64).powf(y as f64)),
+                (Number::U32(x), Number::U32(y)) => Number::F64((x as f64).powf(y as f64)),
+                (Number::U64(x), Number::U64(y)) => Number::F64((x as f64).powf(y as f64)),
+                (Number::F32(x), Number::F32(y)) => Number::F32(x.powf(y)),
+                (Number::F64(x), Number::F64(y)) => Number::F64(x.powf(y)),
+                _ => panic!("Power not implemented for these types"),
+            };
+        }
+
+        if r1 < r2 {
+            let promoted = self.promote_to(r2);
+            promoted.power(other)
+        } else {
+            let promoted = other.promote_to(r1);
+            self.power(promoted)
+        }
+    }
+
     pub fn less_than(self, other: Number) -> bool {
         let r1 = self.rank();
         let r2 = other.rank();
@@ -371,6 +435,20 @@ impl Value {
             (Value::Numeric(x), Value::Numeric(y)) => x.divide(y).map(Value::Numeric),
             
             (x, y) => Err(format!("Runtime Error: Cannot divide {:?} by {:?}", x, y)),
+        }
+    }
+
+    pub fn power(self, other: Value) -> Result<Value, String> {
+        match (self, other) {
+            (Value::Numeric(x), Value::Numeric(y)) => Ok(Value::Numeric(x.power(y))),
+            (x, y) => Err(format!("Runtime Error: Cannot use power operator with {:?} and {:?}", x, y)),
+        }
+    }
+
+    pub fn remainder(self, other: Value) -> Result<Value, String> {
+        match (self, other) {
+            (Value::Numeric(x), Value::Numeric(y)) => x.remainder(y).map(Value::Numeric),
+            (x, y) => Err(format!("Runtime Error: Cannot use modulo operator with {:?} and {:?}", x, y)),
         }
     }
     pub fn is_equal(self, other: Value) -> bool {

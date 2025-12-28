@@ -24,4 +24,6 @@ pub enum OpCode {
     JumpIfFalse(usize),
     LessThan,
     GreaterThan,
+    Power,
+    Modulo,
 }
