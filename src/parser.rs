@@ -29,6 +29,8 @@ pub enum Statement {
         condition: Expr,
         body: Box<Statement>,
     },
+    Loop(Box<Statement>),
+    Break,
 }
 
 pub enum Expr {
@@ -178,6 +180,11 @@ impl Parser {
             Token::Var => self.parse_declaration(true),
             Token::If => self.parse_if_stmt(),
             Token::While => self.parse_while_stmt(),
+            Token::Loop => self.parse_loop_stmt(),
+            Token::Break => {
+                self.advance();
+                Statement::Break
+            }
              _ => {
                let expr = self.parse_expression();
                Statement::Expression(expr)
@@ -596,5 +603,17 @@ impl Parser {
             condition,
             body: Box::new(body),
         }
+    }
+
+    fn parse_loop_stmt(&mut self) -> Statement {
+        self.advance(); // consume 'loop'
+        
+        let body = if self.current_token == Token::LBrace {
+             Statement::Block(self.parse_block())
+        } else {
+            self.parse_statement()
+        };
+
+        Statement::Loop(Box::new(body))
     }
 }

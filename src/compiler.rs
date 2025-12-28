@@ -13,6 +13,8 @@ pub struct Compiler {
     pub instructions: Vec<OpCode>,
     // The constant pool we are building
     pub constants: Vec<Value>,
+    // Stack of loop contexts: each level contains a list of jump indices that need to be patched to the loop end
+    pub break_patches: Vec<Vec<usize>>,
 }
 
 impl Compiler {
@@ -22,6 +24,7 @@ impl Compiler {
             next_index: 0,
             instructions: Vec::new(),
             constants: Vec::new(),
+            break_patches: Vec::new(),
         }
     }
 
@@ -283,6 +286,8 @@ impl Compiler {
                 condition,
                 body,
             } => self.compile_while(condition, body),
+            Statement::Loop(body) => self.compile_loop(body),
+            Statement::Break => self.compile_break(),
         }
     }
 
@@ -333,7 +338,8 @@ impl Compiler {
 
     fn compile_while(&mut self, condition: Expr, body: Box<Statement>) {
         let loop_start = self.instructions.len();
-        
+        self.break_patches.push(Vec::new());
+
         self.compile_expr(&condition);
         
         let jump_end_idx = self.emit(OpCode::JumpIfFalse(0));
@@ -345,6 +351,34 @@ impl Compiler {
         
         // Patch exit jump
         self.patch_jump(jump_end_idx);
+
+        let patches = self.break_patches.pop().unwrap();
+        for idx in patches {
+            self.patch_jump(idx);
+        }
+    }
+
+    fn compile_loop(&mut self, body: Box<Statement>) {
+        let loop_start = self.instructions.len();
+        self.break_patches.push(Vec::new());
+
+        self.compile_statement(*body);
+
+        // Jump back to start
+        self.emit(OpCode::Jump(loop_start));
+
+        let patches = self.break_patches.pop().unwrap();
+        for idx in patches {
+            self.patch_jump(idx);
+        }
+    }
+
+    fn compile_break(&mut self) {
+        if self.break_patches.is_empty() {
+            panic!("Compiler Error: 'break' used outside of loop");
+        }
+        let idx = self.emit(OpCode::Jump(0));
+        self.break_patches.last_mut().unwrap().push(idx);
     }
 
     fn emit(&mut self, opcode: OpCode) -> usize {
