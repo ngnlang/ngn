@@ -1,4 +1,5 @@
 use crate::{bytecode::OpCode, toolbox::{NATIVE_ABS, NATIVE_ASSERT}, value::{Value}};
+use std::io::Write;
 
 #[derive(Clone, Debug)]
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -382,6 +383,13 @@ impl VM {
                     let resolved = self.resolve_value(val);
 
                     println!("{}", resolved);
+                }
+                OpCode::Echo => {
+                    let val = self.pop_stack();
+                    let resolved = self.resolve_value(val);
+
+                    print!("{}", resolved);
+                    let _ = std::io::stdout().flush();
                 }
                 OpCode::Return => {
                     // Pop the isolated environment

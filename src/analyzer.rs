@@ -27,6 +27,14 @@ impl Analyzer {
             is_mutable: false,
         });
 
+        global_scope.insert("echo".to_string(), Symbol {
+            ty: Type::Function {
+                params: vec![Type::Any],
+                return_type: Box::new(Type::Void),
+            },
+            is_mutable: false,
+        });
+
         global_scope.insert("assert".to_string(), Symbol {
             ty: Type::Function {
                 params: vec![Type::Any],

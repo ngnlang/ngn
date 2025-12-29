@@ -244,11 +244,12 @@ impl Compiler {
                 }
             }
             Statement::Print(expression) => {
-                // Compile the expression to put result on stack
                 self.compile_expr(&expression);
-
-                // Emit the Print instruction
                 self.instructions.push(OpCode::Print);
+            }
+            Statement::Echo(expression) => {
+                self.compile_expr(&expression);
+                self.instructions.push(OpCode::Echo);
             }
             Statement::Block(stmts) => {
                 for stmt in stmts {

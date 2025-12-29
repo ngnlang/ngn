@@ -31,4 +31,5 @@ pub enum OpCode {
     Power,
     Modulo,
     Pop,
+    Echo,
 }
