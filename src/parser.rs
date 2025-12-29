@@ -25,6 +25,12 @@ pub struct Parameter {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm {
+    pub patterns: Vec<Expr>,
+    pub body: Box<Statement>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
     Declaration {
         name: String,
@@ -62,6 +68,12 @@ pub enum Statement {
         iterable: Expr,
         body: Box<Statement>,
     },
+    Match {
+        condition: Expr,
+        arms: Vec<MatchArm>,
+        is_any: bool,
+    },
+    Next,
     Break,
     Return(Option<Expr>),
 }
@@ -262,10 +274,15 @@ impl Parser {
             Token::While => self.parse_while_stmt(),
             Token::Loop => self.parse_loop_stmt(),
             Token::For => self.parse_for_stmt(),
+            Token::Match => self.parse_match_stmt(),
             Token::LBrace => Statement::Block(self.parse_block()),
             Token::Break => {
                 self.advance();
                 Statement::Break
+            }
+            Token::Next => {
+                self.advance();
+                Statement::Next
             }
             Token::Return => {
                 self.advance();
@@ -930,6 +947,69 @@ impl Parser {
             index_binding,
             iterable,
             body: Box::new(body),
+        }
+    }
+
+    fn parse_match_stmt(&mut self) -> Statement {
+        self.advance(); // consume 'match'
+        
+        let is_any = if self.current_token == Token::Any {
+            self.advance();
+            true
+        } else {
+            false
+        };
+        
+        self.expect(Token::LParen);
+        let condition = self.parse_expression();
+        self.expect(Token::RParen);
+        
+        self.expect(Token::LBrace);
+        self.consume_newlines();
+        
+        let mut arms = Vec::new();
+        
+        while self.current_token != Token::RBrace && self.current_token != Token::EOF {
+            let mut patterns = Vec::new();
+            
+            // Check for default case =>
+            if self.current_token == Token::FatArrow {
+                self.advance();
+            } else {
+                loop {
+                    patterns.push(self.parse_expression());
+                    if self.current_token == Token::Pipe {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                self.expect(Token::FatArrow);
+            }
+            
+            let body = if self.current_token == Token::LBrace {
+                 Statement::Block(self.parse_block())
+            } else {
+                self.parse_statement()
+            };
+            
+            arms.push(MatchArm {
+                patterns,
+                body: Box::new(body),
+            });
+            
+            if self.current_token == Token::Comma {
+                self.advance();
+            }
+            self.consume_newlines();
+        }
+        
+        self.expect(Token::RBrace);
+        
+        Statement::Match {
+            condition,
+            arms,
+            is_any,
         }
     }
 }

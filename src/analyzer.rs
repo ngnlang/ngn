@@ -203,6 +203,17 @@ impl Analyzer {
                 self.exit_scope();
                 Type::Void
             }
+            Statement::Match { condition, arms, .. } => {
+                self.check_expression(condition);
+                for arm in arms {
+                    for pattern in &arm.patterns {
+                        self.check_expression(pattern);
+                    }
+                    self.check_statement(&arm.body);
+                }
+                Type::Void
+            }
+            Statement::Next => Type::Void,
             Statement::Block(stmts) => {
                 self.enter_scope();
                 for s in stmts { self.check_statement(s); }

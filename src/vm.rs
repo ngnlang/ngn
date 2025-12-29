@@ -481,6 +481,29 @@ impl VM {
                         _ => {} // Fall through (treat as true)
                     }
                 }
+                OpCode::JumpIfTrue(target) => {
+                    let val = self.pop_stack();
+                    let resolved = self.resolve_value(val);
+                    match resolved {
+                        Value::Bool(true) => {
+                            self.ip = target;
+                            continue;
+                        }
+                        _ => {} // Fall through (treat as false)
+                    }
+                }
+                OpCode::Dup => {
+                    let val = self.stack.last().expect("Runtime Error: Dup empty stack").clone();
+                    // If it's a reference, we MUST increment the reference count!
+                    if let Value::Reference(e, v) = &val {
+                        if let Some(env) = self.env_stack.get_mut(*e) {
+                            if let Some(Some(var)) = env.get_mut(*v) {
+                                var.reference_count += 1;
+                            }
+                        }
+                    }
+                    self.stack.push(val);
+                }
                 OpCode::IterStart => {
                     let val = self.stack.last().expect("Runtime Error: IterStart empty stack");
                     let resolved = self.resolve_value(val.clone());

@@ -2,7 +2,7 @@
 pub enum Token {
     // Keywords
     Var, Const, Static, Fn, Return,
-    If, While, Until, Loop, For, In, Break, Once,
+    If, While, Until, Loop, For, In, Match, Next, Any, Break, Once,
     Import, From, As,
 
 	// Built-ins
@@ -25,6 +25,7 @@ pub enum Token {
     Colon, Comma,
 	LessThan, GreaterThan, LessThanEqual, GreaterThanEqual,
     PlusEqual, MinusEqual, StarEqual, SlashEqual, PercentEqual, StarStarEqual, CaretEqual,
+    FatArrow, Pipe,
     
     // Formatting
     Newline,
@@ -201,10 +202,14 @@ impl Lexer {
 				if self.peek_current() == '=' {
 					self.cursor += 1;
 					Token::EqualEqual
+				} else if self.peek_current() == '>' {
+					self.cursor += 1;
+					Token::FatArrow
 				} else {
 					Token::Equal
 				}
 			}
+            '|' => Token::Pipe,
 			'!' => {
 				if self.peek_current() == '=' {
 					self.cursor += 1;
@@ -271,6 +276,9 @@ impl Lexer {
             "loop" => Token::Loop,
             "for" => Token::For,
             "in" => Token::In,
+            "match" => Token::Match,
+            "any" => Token::Any,
+            "next" => Token::Next,
             "break" => Token::Break,
             "until" => Token::Until,
 			"fn" => Token::Fn,

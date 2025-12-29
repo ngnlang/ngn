@@ -11,6 +11,8 @@ pub struct Compiler {
     pub instructions: Vec<OpCode>,
     pub constants: Vec<Value>,
     pub break_patches: Vec<Vec<usize>>,
+    pub match_state_vars: Vec<usize>,
+    pub next_body_patches: Vec<Vec<usize>>,
     pub is_global: bool,
 }
 
@@ -23,6 +25,8 @@ impl Compiler {
             instructions: Vec::new(),
             constants: Vec::new(),
             break_patches: Vec::new(),
+            match_state_vars: Vec::new(),
+            next_body_patches: Vec::new(),
             is_global: true,
         }
     }
@@ -278,6 +282,8 @@ impl Compiler {
             } => self.compile_while(condition, body, is_once),
             Statement::Loop(body) => self.compile_loop(body),
             Statement::For { binding, index_binding, iterable, body } => self.compile_for(binding, index_binding, iterable, body),
+            Statement::Match { condition, arms, is_any } => self.compile_match(condition, arms, is_any),
+            Statement::Next => self.compile_next(),
             Statement::Break => self.compile_break(),
         }
     }
@@ -421,10 +427,139 @@ impl Compiler {
         }
     }
 
+    fn compile_match(&mut self, condition: Expr, arms: Vec<crate::parser::MatchArm>, is_any: bool) {
+        // Condition value stays on stack, duplicated for each check.
+        self.compile_expr(&condition);
+        
+        // Match State Variable:
+        // 0: Done
+        // 1: Searching (Normal)
+        // 2: Searching (Any)
+        // 3: Next (Checking exactly one more)
+        let state_var = self.next_index;
+        self.next_index += 1;
+        self.match_state_vars.push(state_var);
+        
+        let initial_state = if is_any { 2 } else { 1 };
+        let const_idx = self.add_constant(Value::Numeric(Number::I64(initial_state)));
+        self.emit(OpCode::LoadConst(const_idx));
+        self.emit(OpCode::DefVar(state_var, true));
+        self.emit(OpCode::Pop); 
+
+        self.break_patches.push(Vec::new());
+        self.next_body_patches.push(Vec::new());
+
+        for arm in arms {
+            // Check State > 0
+            self.emit(OpCode::GetVar(state_var));
+            let zero_idx = self.add_constant(Value::Numeric(Number::I64(0)));
+            self.emit(OpCode::LoadConst(zero_idx));
+            self.emit(OpCode::GreaterThan);
+            let skip_arm_if_inactive = self.emit(OpCode::JumpIfFalse(0));
+            
+            let mut body_entry_patches = Vec::new();
+            let mut arm_failure_patches = Vec::new();
+
+            if arm.patterns.is_empty() {
+                // Default case: enters body unconditionally if arm is active
+                let jump_to_body = self.emit(OpCode::Jump(0));
+                body_entry_patches.push(jump_to_body);
+            } else {
+                for pattern in &arm.patterns {
+                    self.emit(OpCode::Dup);
+                    self.compile_expr(pattern);
+                    self.emit(OpCode::Equal);
+                    body_entry_patches.push(self.emit(OpCode::JumpIfTrue(0)));
+                }
+
+                // If we reach here, no pattern in this arm matched.
+                // If state was 3 (Next), set to 0.
+                self.emit(OpCode::GetVar(state_var));
+                let three_idx = self.add_constant(Value::Numeric(Number::I64(3)));
+                self.emit(OpCode::LoadConst(three_idx));
+                self.emit(OpCode::Equal);
+                let not_next = self.emit(OpCode::JumpIfFalse(0));
+                let zero_val_idx = self.add_constant(Value::Numeric(Number::I64(0)));
+                self.emit(OpCode::LoadConst(zero_val_idx));
+                self.emit(OpCode::AssignVar(state_var));
+                self.emit(OpCode::Pop);
+                self.patch_jump(not_next);
+
+                // Jump OVER the body to the end of this arm
+                arm_failure_patches.push(self.emit(OpCode::Jump(0)));
+            }
+
+            // Body Path
+            for patch in body_entry_patches {
+                self.patch_jump(patch);
+            }
+
+            // Transition state to 0 if not 2 (Any)
+            self.emit(OpCode::GetVar(state_var));
+            let two_idx_const = self.add_constant(Value::Numeric(Number::I64(2)));
+            self.emit(OpCode::LoadConst(two_idx_const));
+            self.emit(OpCode::Equal);
+            let is_any_jump = self.emit(OpCode::JumpIfTrue(0));
+            let zero_val_idx_2 = self.add_constant(Value::Numeric(Number::I64(0)));
+            self.emit(OpCode::LoadConst(zero_val_idx_2));
+            self.emit(OpCode::AssignVar(state_var));
+            self.emit(OpCode::Pop);
+            self.patch_jump(is_any_jump);
+
+            self.compile_statement(*arm.body.clone());
+
+            // Patch any 'next' jumps from within THIS arm's body
+            let current_arm_next_patches = self.next_body_patches.last_mut().unwrap().drain(..).collect::<Vec<_>>();
+            for patch in current_arm_next_patches {
+                self.patch_jump(patch);
+            }
+
+            // End of Arm Label
+            self.patch_jump(skip_arm_if_inactive);
+            for patch in arm_failure_patches {
+                self.patch_jump(patch);
+            }
+        }
+        
+        // Final Cleanup
+        self.next_body_patches.pop();
+        let breaks = self.break_patches.pop().unwrap();
+        for patch in breaks {
+            self.patch_jump(patch);
+        }
+        
+        self.match_state_vars.pop();
+        self.emit(OpCode::Pop); // Pop condition
+    }
+
+    fn compile_next(&mut self) {
+        if let Some(&state_var) = self.match_state_vars.last() {
+            let three_idx = self.add_constant(Value::Numeric(Number::I64(3)));
+            self.emit(OpCode::LoadConst(three_idx));
+            self.emit(OpCode::AssignVar(state_var));
+            self.emit(OpCode::Pop);
+            
+            // Jump to end of current body
+            let patch = self.emit(OpCode::Jump(0));
+            self.next_body_patches.last_mut().unwrap().push(patch);
+        } else {
+            panic!("Compiler Error: 'next' used outside of match");
+        }
+    }
+
     fn compile_break(&mut self) {
         if self.break_patches.is_empty() {
-            panic!("Compiler Error: 'break' used outside of loop");
+            panic!("Compiler Error: 'break' used outside of loop or match");
         }
+        
+        // If we are inside a match, we should also set the state to 0
+        if let Some(&state_var) = self.match_state_vars.last() {
+             let zero_idx = self.add_constant(Value::Numeric(Number::I64(0)));
+             self.emit(OpCode::LoadConst(zero_idx));
+             self.emit(OpCode::AssignVar(state_var));
+             self.emit(OpCode::Pop);
+        }
+
         let idx = self.emit(OpCode::Jump(0));
         self.break_patches.last_mut().unwrap().push(idx);
     }
@@ -437,7 +572,7 @@ impl Compiler {
     fn patch_jump(&mut self, op_index: usize) {
         let target = self.instructions.len();
         match &mut self.instructions[op_index] {
-             OpCode::JumpIfFalse(val) | OpCode::Jump(val) | OpCode::IterNext(val) => {
+             OpCode::JumpIfFalse(val) | OpCode::Jump(val) | OpCode::IterNext(val) | OpCode::JumpIfTrue(val) => {
                  *val = target;
             }
             _ => panic!("Attempted to patch non-jump opcode"),

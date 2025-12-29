@@ -28,6 +28,8 @@ pub enum OpCode {
     JumpIfFalse(usize),
     IterStart,
     IterNext(usize),
+    Dup,
+    JumpIfTrue(usize),
     LessThan,
     GreaterThan,
     Power,
