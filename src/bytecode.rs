@@ -32,4 +32,5 @@ pub enum OpCode {
     Modulo,
     Pop,
     Echo,
+    Sleep,
 }

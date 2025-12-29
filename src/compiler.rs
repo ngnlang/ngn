@@ -251,6 +251,10 @@ impl Compiler {
                 self.compile_expr(&expression);
                 self.instructions.push(OpCode::Echo);
             }
+            Statement::Sleep(expression) => {
+                self.compile_expr(&expression);
+                self.instructions.push(OpCode::Sleep);
+            }
             Statement::Block(stmts) => {
                 for stmt in stmts {
                     self.compile_statement(stmt);

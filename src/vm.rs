@@ -391,6 +391,15 @@ impl VM {
                     print!("{}", resolved);
                     let _ = std::io::stdout().flush();
                 }
+                OpCode::Sleep => {
+                    let val = self.pop_stack();
+                    let resolved = self.resolve_value(val);
+                    if let Value::Numeric(crate::value::Number::I64(ms)) = resolved {
+                        std::thread::sleep(std::time::Duration::from_millis(ms as u64));
+                    } else {
+                        panic!("Runtime Error: sleep() requires an i64 duration in milliseconds");
+                    }
+                }
                 OpCode::Return => {
                     // Pop the isolated environment
                     self.env_stack.pop();

@@ -6,7 +6,7 @@ pub enum Token {
     Import, From, As,
 
 	// Built-ins
-	Print, Echo,
+	Print, Echo, Sleep,
     
     // Identifiers and Literals
     Identifier(String),
@@ -237,6 +237,7 @@ impl Lexer {
 			"return" => Token::Return,
 			"print" => Token::Print,
             "echo" => Token::Echo,
+            "sleep" => Token::Sleep,
 			"import" => Token::Import,
 			"from" => Token::From,
 			"as" => Token::As,

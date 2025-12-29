@@ -35,6 +35,14 @@ impl Analyzer {
             is_mutable: false,
         });
 
+        global_scope.insert("sleep".to_string(), Symbol {
+            ty: Type::Function {
+                params: vec![Type::I64],
+                return_type: Box::new(Type::Void),
+            },
+            is_mutable: false,
+        });
+
         global_scope.insert("assert".to_string(), Symbol {
             ty: Type::Function {
                 params: vec![Type::Any],

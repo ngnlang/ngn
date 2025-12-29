@@ -43,6 +43,7 @@ pub enum Statement {
     Import { names: Vec<String>, source: String },
     Print(Expr),
     Echo(Expr),
+    Sleep(Expr),
     Block(Vec<Statement>),
     If {
         condition: Expr,
@@ -246,6 +247,13 @@ impl Parser {
                 let expr = self.parse_expression();
                 self.expect(Token::RParen);
                 Statement::Echo(expr)
+            }
+            Token::Sleep => {
+                self.advance();
+                self.expect(Token::LParen);
+                let expr = self.parse_expression();
+                self.expect(Token::RParen);
+                Statement::Sleep(expr)
             }
             Token::If => self.parse_if_stmt(),
             Token::While => self.parse_while_stmt(),
