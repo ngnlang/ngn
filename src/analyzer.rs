@@ -182,6 +182,27 @@ impl Analyzer {
                 self.check_statement(body);
                 Type::Void
             }
+            Statement::For { binding, index_binding, iterable, body } => {
+                let iter_ty = self.check_expression(iterable);
+                let element_ty = match iter_ty {
+                    Type::Array(inner) => *inner,
+                    Type::Tuple(_) => Type::Any,
+                    Type::Any => Type::Any,
+                    _ => {
+                        self.errors.push(format!("Type Error: Cannot iterate over type {:?}", iter_ty));
+                        Type::Any
+                    }
+                };
+
+                self.enter_scope();
+                self.define(binding, element_ty, false);
+                if let Some(idx_name) = index_binding {
+                    self.define(idx_name, Type::I64, false);
+                }
+                self.check_statement(body);
+                self.exit_scope();
+                Type::Void
+            }
             Statement::Block(stmts) => {
                 self.enter_scope();
                 for s in stmts { self.check_statement(s); }

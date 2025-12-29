@@ -278,6 +278,15 @@ impl VM {
                     let env = &mut self.env_stack[0];
                     if idx >= env.len() { env.resize(idx + 1, None); }
                     env[idx] = Some(new_var);
+                    
+                    // Restore reference count if we're pushing it back
+                    if let Value::Reference(e, v) = &val {
+                        if let Some(env) = self.env_stack.get_mut(*e) {
+                            if let Some(Some(var)) = env.get_mut(*v) {
+                                var.reference_count += 1;
+                            }
+                        }
+                    }
                     self.stack.push(val);
                 }
                 OpCode::DefVar(idx, is_mutable) => {
@@ -286,6 +295,15 @@ impl VM {
                     let env = self.current_env();
                     if idx >= env.len() { env.resize(idx + 1, None); }
                     env[idx] = Some(new_var);
+
+                    // Restore reference count if we're pushing it back
+                    if let Value::Reference(e, v) = &val {
+                        if let Some(env) = self.env_stack.get_mut(*e) {
+                            if let Some(Some(var)) = env.get_mut(*v) {
+                                var.reference_count += 1;
+                            }
+                        }
+                    }
                     self.stack.push(val);
                 }
                 OpCode::GetVar(idx) => {
@@ -461,6 +479,54 @@ impl VM {
                             continue;
                         }
                         _ => {} // Fall through (treat as true)
+                    }
+                }
+                OpCode::IterStart => {
+                    let val = self.stack.last().expect("Runtime Error: IterStart empty stack");
+                    let resolved = self.resolve_value(val.clone());
+                    match resolved {
+                        Value::Array(_) | Value::Tuple(_) => {
+                            self.stack.push(Value::Numeric(crate::value::Number::I64(0)));
+                        }
+                        _ => panic!("Runtime Error: IterStart expected Array or Tuple, got {}", resolved),
+                    }
+                }
+                OpCode::IterNext(target) => {
+                    let index_val = self.pop_stack();
+                    let array_val = self.pop_stack();
+                    
+                    let index = match self.resolve_value(index_val) {
+                        Value::Numeric(crate::value::Number::I64(i)) => i,
+                        _ => panic!("Runtime Error: IterNext expected i64 index"),
+                    };
+                    
+                    let resolved_array = self.resolve_value(array_val.clone());
+                    let collection = match &resolved_array {
+                        Value::Array(a) => a,
+                        Value::Tuple(t) => t,
+                        _ => panic!("Runtime Error: IterNext expected Array or Tuple, got {}", resolved_array),
+                    };
+                    
+                    if (index as usize) < collection.len() {
+                        // Push collection and next index for next IterNext
+                        
+                        // Restore reference count for array_val since we're pushing it back
+                        if let Value::Reference(e, v) = &array_val {
+                            if let Some(env) = self.env_stack.get_mut(*e) {
+                                if let Some(Some(var)) = env.get_mut(*v) {
+                                    var.reference_count += 1;
+                                }
+                            }
+                        }
+                        self.stack.push(array_val);
+                        self.stack.push(Value::Numeric(crate::value::Number::I64(index + 1)));
+                        
+                        // Push element and current index for the loop body bindings
+                        self.stack.push(collection[index as usize].clone());
+                        self.stack.push(Value::Numeric(crate::value::Number::I64(index)));
+                    } else {
+                        self.ip = target;
+                        continue;
                     }
                 }
                 OpCode::LessThan => {

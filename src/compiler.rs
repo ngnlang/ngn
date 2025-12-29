@@ -277,6 +277,7 @@ impl Compiler {
                 is_once,
             } => self.compile_while(condition, body, is_once),
             Statement::Loop(body) => self.compile_loop(body),
+            Statement::For { binding, index_binding, iterable, body } => self.compile_for(binding, index_binding, iterable, body),
             Statement::Break => self.compile_break(),
         }
     }
@@ -374,6 +375,52 @@ impl Compiler {
         }
     }
 
+    fn compile_for(&mut self, binding: String, index_binding: Option<String>, iterable: Expr, body: Box<Statement>) {
+        // 1. Compile iterable
+        self.compile_expr(&iterable);
+        
+        // 2. Emit IterStart (pushes array, then 0)
+        self.emit(OpCode::IterStart);
+        
+        let loop_start = self.instructions.len();
+        self.break_patches.push(Vec::new());
+        
+        // 3. Emit IterNext (pushes element, then current_index, or jumps end)
+        let exit_jump = self.emit(OpCode::IterNext(0));
+        
+        // 4. Handle bindings
+        if let Some(idx_name) = index_binding {
+            let idx_var = self.next_index;
+            self.next_index += 1;
+            self.symbol_table.insert(idx_name, idx_var);
+            self.emit(OpCode::DefVar(idx_var, false));
+            self.emit(OpCode::Pop); // Pop result of DefVar
+        } else {
+            self.emit(OpCode::Pop); // Pop current_index
+        }
+        
+        let binding_var = self.next_index;
+        self.next_index += 1;
+        self.symbol_table.insert(binding, binding_var);
+        self.emit(OpCode::DefVar(binding_var, false));
+        self.emit(OpCode::Pop); // Pop result of DefVar
+        
+        // 5. Compile body
+        self.compile_statement(*body);
+        
+        // 6. Jump back to start
+        self.emit(OpCode::Jump(loop_start));
+        
+        // 7. Patch exit jump
+        self.patch_jump(exit_jump);
+        
+        // 8. Patch breaks
+        let patches = self.break_patches.pop().unwrap();
+        for idx in patches {
+            self.patch_jump(idx);
+        }
+    }
+
     fn compile_break(&mut self) {
         if self.break_patches.is_empty() {
             panic!("Compiler Error: 'break' used outside of loop");
@@ -390,7 +437,7 @@ impl Compiler {
     fn patch_jump(&mut self, op_index: usize) {
         let target = self.instructions.len();
         match &mut self.instructions[op_index] {
-             OpCode::JumpIfFalse(val) | OpCode::Jump(val) => {
+             OpCode::JumpIfFalse(val) | OpCode::Jump(val) | OpCode::IterNext(val) => {
                  *val = target;
             }
             _ => panic!("Attempted to patch non-jump opcode"),

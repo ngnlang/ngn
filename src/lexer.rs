@@ -2,7 +2,7 @@
 pub enum Token {
     // Keywords
     Var, Const, Static, Fn, Return,
-    If, While, Until, Loop, Break, Once,
+    If, While, Until, Loop, For, In, Break, Once,
     Import, From, As,
 
 	// Built-ins
@@ -269,6 +269,8 @@ impl Lexer {
             "while" => Token::While,
             "once" => Token::Once,
             "loop" => Token::Loop,
+            "for" => Token::For,
+            "in" => Token::In,
             "break" => Token::Break,
             "until" => Token::Until,
 			"fn" => Token::Fn,

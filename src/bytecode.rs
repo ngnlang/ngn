@@ -26,6 +26,8 @@ pub enum OpCode {
     BuildTuple(usize),
     Jump(usize),
     JumpIfFalse(usize),
+    IterStart,
+    IterNext(usize),
     LessThan,
     GreaterThan,
     Power,

@@ -56,6 +56,12 @@ pub enum Statement {
         is_once: bool,
     },
     Loop(Box<Statement>),
+    For {
+        binding: String,
+        index_binding: Option<String>,
+        iterable: Expr,
+        body: Box<Statement>,
+    },
     Break,
     Return(Option<Expr>),
 }
@@ -255,6 +261,8 @@ impl Parser {
             Token::If => self.parse_if_stmt(),
             Token::While => self.parse_while_stmt(),
             Token::Loop => self.parse_loop_stmt(),
+            Token::For => self.parse_for_stmt(),
+            Token::LBrace => Statement::Block(self.parse_block()),
             Token::Break => {
                 self.advance();
                 Statement::Break
@@ -893,5 +901,35 @@ impl Parser {
         };
 
         Statement::Loop(Box::new(body))
+    }
+
+    fn parse_for_stmt(&mut self) -> Statement {
+        self.advance(); // consume 'for'
+        self.expect(Token::LParen);
+        
+        let binding = self.expect_identifier();
+        let mut index_binding = None;
+        
+        if self.current_token == Token::Comma {
+            self.advance(); // consume ','
+            index_binding = Some(self.expect_identifier());
+        }
+        
+        self.expect(Token::In);
+        let iterable = self.parse_expression();
+        self.expect(Token::RParen);
+        
+        let body = if self.current_token == Token::LBrace {
+             Statement::Block(self.parse_block())
+        } else {
+            self.parse_statement()
+        };
+        
+        Statement::For {
+            binding,
+            index_binding,
+            iterable,
+            body: Box::new(body),
+        }
     }
 }
