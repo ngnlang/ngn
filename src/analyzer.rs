@@ -216,6 +216,12 @@ impl Analyzer {
             Expr::Number(_) => Type::I64,
             Expr::Float(_) => Type::F64,
             Expr::String(_) => Type::String,
+            Expr::InterpolatedString(parts) => {
+                for part in parts {
+                    self.check_expression(part);
+                }
+                Type::String
+            }
             Expr::Bool(_) => Type::Bool,
             Expr::Variable(name) => {
                 if let Some(sym) = self.lookup(name) {

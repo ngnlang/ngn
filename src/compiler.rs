@@ -81,6 +81,12 @@ impl Compiler {
                 let idx = self.add_constant(Value::String(s.clone()));
                 self.instructions.push(OpCode::LoadConst(idx));
             }
+            Expr::InterpolatedString(parts) => {
+                for part in parts {
+                    self.compile_expr(part);
+                }
+                self.instructions.push(OpCode::Concat(parts.len()));
+            }
             Expr::Variable(name) => {
                 if let Some(&idx) = self.symbol_table.get(name) {
                     self.instructions.push(OpCode::GetVar(idx));

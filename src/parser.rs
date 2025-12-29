@@ -76,6 +76,7 @@ pub enum Expr {
     Variable(String),
     Array(Vec<Expr>),
     Tuple(Vec<Expr>),
+    InterpolatedString(Vec<Expr>),
 }
 
 pub struct Parser {
@@ -197,11 +198,7 @@ impl Parser {
         self.expect(Token::From);
         
         // This will be "tbx::test" or "math"
-        let source = match self.current_token.clone() {
-            Token::StringLiteral(s) => s,
-            _ => panic!("Expected string literal for import source"),
-        };
-        self.advance();
+        let source = self.parse_literal_string();
 
         Statement::Import { names, source }
     }
@@ -596,10 +593,7 @@ impl Parser {
                 self.advance();
                 Expr::Float(n)
             }
-            Token::StringLiteral(s) => {
-                self.advance();
-                Expr::String(s)
-            }
+            Token::StringStart => self.parse_interpolated_string(),
             Token::Identifier(name) => {
                 self.advance();
                 Expr::Variable(name)
@@ -624,6 +618,48 @@ impl Parser {
 
         expr
     }
+    fn parse_interpolated_string(&mut self) -> Expr {
+        self.expect(Token::StringStart);
+        let mut parts = Vec::new();
+
+        while self.current_token != Token::StringEnd && self.current_token != Token::EOF {
+            match self.current_token.clone() {
+                Token::StringPart(s) => {
+                    self.advance();
+                    parts.push(Expr::String(s));
+                }
+                Token::InterpolationStart => {
+                    self.advance();
+                    parts.push(self.parse_expression());
+                    self.expect(Token::InterpolationEnd);
+                }
+                _ => break,
+            }
+        }
+
+        self.expect(Token::StringEnd);
+        Expr::InterpolatedString(parts)
+    }
+
+    fn parse_literal_string(&mut self) -> String {
+        match self.current_token.clone() {
+            Token::StringStart => {
+                self.advance();
+                let mut result = String::new();
+                while let Token::StringPart(s) = &self.current_token {
+                    result.push_str(s);
+                    self.advance();
+                }
+                if let Token::InterpolationStart = self.current_token {
+                    panic!("Syntax Error: Interpolation not allowed in this context");
+                }
+                self.expect(Token::StringEnd);
+                result
+            }
+            _ => panic!("Expected string literal, found {:?}", self.current_token),
+        }
+    }
+
     fn parse_array_literal(&mut self) -> Expr {
         self.advance(); // consume '['
         let mut elements = Vec::new();

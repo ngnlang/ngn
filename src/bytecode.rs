@@ -30,6 +30,7 @@ pub enum OpCode {
     GreaterThan,
     Power,
     Modulo,
+    Concat(usize),
     Pop,
     Echo,
     Sleep,

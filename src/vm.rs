@@ -400,6 +400,19 @@ impl VM {
                         panic!("Runtime Error: sleep() requires an i64 duration in milliseconds");
                     }
                 }
+                OpCode::Concat(count) => {
+                    let mut result = String::new();
+                    let mut parts = Vec::new();
+                    for _ in 0..count {
+                        parts.push(self.pop_stack());
+                    }
+                    // Parts are in reverse order of how they were pushed
+                    for part in parts.into_iter().rev() {
+                        let resolved = self.resolve_value(part);
+                        result.push_str(&resolved.to_string());
+                    }
+                    self.stack.push(Value::String(result));
+                }
                 OpCode::Return => {
                     // Pop the isolated environment
                     self.env_stack.pop();

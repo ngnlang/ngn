@@ -2,7 +2,7 @@
 pub enum Token {
     // Keywords
     Var, Const, Static, Fn, Return,
-    If, Match, While, Until, Loop, Break, Once,
+    If, While, Until, Loop, Break, Once,
     Import, From, As,
 
 	// Built-ins
@@ -12,13 +12,17 @@ pub enum Token {
     Identifier(String),
     Number(i64),
     Float(f64),
-    StringLiteral(String),
+    StringStart,
+    StringEnd,
+    StringPart(String),
+    InterpolationStart,
+    InterpolationEnd,
 	Bool(bool),
     
     // Symbols
     Equal, EqualEqual, NotEqual, Plus, Minus, Star, Slash, Power, Percent,
     LParen, RParen, LBrace, RBrace, LBracket, RBracket,
-    Colon, DoubleColon, Comma, LArrow,
+    Colon, Comma,
 	LessThan, GreaterThan, LessThanEqual, GreaterThanEqual,
     PlusEqual, MinusEqual, StarEqual, SlashEqual, PercentEqual, StarStarEqual, CaretEqual,
     
@@ -27,9 +31,17 @@ pub enum Token {
     EOF,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LexMode {
+    Normal,
+    String,
+}
+
 pub struct Lexer {
     source: Vec<char>,
     cursor: usize,
+    mode_stack: Vec<LexMode>,
+    brace_stack: Vec<usize>,
 }
 
 impl Lexer {
@@ -37,10 +49,18 @@ impl Lexer {
         Self {
             source: source.chars().collect(),
             cursor: 0,
+            mode_stack: vec![LexMode::Normal],
+            brace_stack: vec![0],
         }
     }
 
     pub fn next_token(&mut self) -> Token {
+        let current_mode = *self.mode_stack.last().unwrap_or(&LexMode::Normal);
+
+        if current_mode == LexMode::String {
+            return self.read_string_part();
+        }
+
         while self.cursor < self.source.len() {
             let ch = self.source[self.cursor];
             if ch == ' ' || ch == '\t' || ch == '\r' {
@@ -70,7 +90,9 @@ impl Lexer {
         }
 
 		if ch == '"' {
-            return self.read_string();
+            self.cursor += 1;
+            self.mode_stack.push(LexMode::String);
+            return Token::StringStart;
         }
 
         self.cursor += 1;
@@ -131,7 +153,6 @@ impl Lexer {
                         self.cursor += 1;
                     }
                     // Recursively get next token after comment
-                    // Note: This effectively skips the comment
                     self.next_token()
                 } else if next_char == '*' {
                     // Multi line comment
@@ -154,8 +175,27 @@ impl Lexer {
             }
             '(' => Token::LParen,
             ')' => Token::RParen,
-			'{' => Token::LBrace,
-            '}' => Token::RBrace,
+			'{' => {
+                if self.mode_stack.len() > 1 {
+                    if let Some(depth) = self.brace_stack.last_mut() {
+                        *depth += 1;
+                    }
+                }
+                Token::LBrace
+            }
+            '}' => {
+                if self.mode_stack.len() > 1 {
+                    if let Some(depth) = self.brace_stack.last_mut() {
+                        if *depth == 0 {
+                            self.mode_stack.pop();
+                            self.brace_stack.pop();
+                            return Token::InterpolationEnd;
+                        }
+                        *depth -= 1;
+                    }
+                }
+                Token::RBrace
+            }
 			':' => Token::Colon,
 			'=' => {
 				if self.peek_current() == '=' {
@@ -201,14 +241,12 @@ impl Lexer {
 	// Look at the next character without advancing the cursor
     fn peek(&self) -> char {
         if self.cursor + 1 >= self.source.len() {
-            '\0' // Return a "null" character at the end of the file
+            '\0' 
         } else {
             self.source[self.cursor + 1]
         }
     }
     
-    // Sometimes you might need to peek at the current character 
-    // if your cursor has already been moved forward
     fn peek_current(&self) -> char {
         if self.cursor >= self.source.len() {
             '\0'
@@ -259,8 +297,6 @@ impl Lexer {
                 self.cursor += 1;
             } else if ch == '.' {
                 if is_float {
-                    // Already found a dot, so this second dot terminates the number
-                    // e.g. 1.2.3 -> 1.2 and .3 next
                     break; 
                 }
                 is_float = true;
@@ -278,20 +314,54 @@ impl Lexer {
         }
     }
 
-	fn read_string(&mut self) -> Token {
-        self.cursor += 1; // skip opening "
+    fn read_string_part(&mut self) -> Token {
         let mut string = String::new();
-        while self.cursor < self.source.len() && self.source[self.cursor] != '"' {
-            string.push(self.source[self.cursor]);
-            self.cursor += 1;
+        while self.cursor < self.source.len() {
+            let ch = self.source[self.cursor];
+            match ch {
+                '"' => {
+                    if !string.is_empty() {
+                        return Token::StringPart(string);
+                    }
+                    self.cursor += 1;
+                    self.mode_stack.pop();
+                    return Token::StringEnd;
+                }
+                '{' => {
+                    if !string.is_empty() {
+                        return Token::StringPart(string);
+                    }
+                    self.cursor += 1;
+                    self.mode_stack.push(LexMode::Normal);
+                    self.brace_stack.push(0);
+                    return Token::InterpolationStart;
+                }
+                '\\' => {
+                    self.cursor += 1;
+                    if self.cursor < self.source.len() {
+                        let next = self.source[self.cursor];
+                        match next {
+                            'n' => string.push('\n'),
+                            't' => string.push('\t'),
+                            'r' => string.push('\r'),
+                            '\\' => string.push('\\'),
+                            '"' => string.push('"'),
+                            '{' => string.push('{'),
+                            _ => string.push(next),
+                        }
+                        self.cursor += 1;
+                    }
+                }
+                _ => {
+                    string.push(ch);
+                    self.cursor += 1;
+                }
+            }
         }
-        self.cursor += 1; // skip closing "
-        Token::StringLiteral(string)
-    }
-
-	fn skip_whitespace(&mut self) {
-        while self.cursor < self.source.len() && self.source[self.cursor].is_whitespace() {
-            self.cursor += 1;
+        if !string.is_empty() {
+             Token::StringPart(string)
+        } else {
+             Token::EOF
         }
     }
 }
