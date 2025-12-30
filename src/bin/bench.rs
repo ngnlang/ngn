@@ -74,7 +74,7 @@ fn run_benchmark(path: &Path) {
     // 4. Execute
     let mut final_instructions = compiler.instructions.clone();
     if let Some(&main_idx) = compiler.global_table.get("main") {
-        final_instructions.push(OpCode::CallGlobal(main_idx));
+        final_instructions.push(OpCode::CallGlobal(0, main_idx, 0, 0));
         final_instructions.push(OpCode::Halt);
     }
 

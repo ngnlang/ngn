@@ -9,6 +9,8 @@ pub struct Compiler {
     pub symbol_table: HashMap<String, usize>,
     pub global_table: HashMap<String, usize>,
     pub next_index: usize,
+    pub reg_top: u16,      // Current top of register "stack"
+    pub temp_start: u16,   // Where temporaries start (after locals)
     pub instructions: Vec<OpCode>,
     pub constants: Vec<Value>,
     pub break_patches: Vec<Vec<usize>>,
@@ -24,6 +26,8 @@ impl Compiler {
             symbol_table: HashMap::new(),
             global_table: HashMap::new(),
             next_index: 0,
+            reg_top: 0,
+            temp_start: 0,
             instructions: Vec::new(),
             constants: Vec::new(),
             break_patches: Vec::new(),
@@ -33,6 +37,15 @@ impl Compiler {
             enums: HashMap::new(),
         }
     }
+
+    fn alloc_reg(&mut self) -> u16 {
+        let reg = self.reg_top;
+        self.reg_top += 1;
+        reg
+    }
+
+    // Registers are allocated using a simple bump allocator
+    // and freed by resetting reg_top to a previous state (temp_start or saved value)
 
     pub fn inject_builtins(&mut self) {
         // Built-in Result
@@ -69,70 +82,127 @@ impl Compiler {
         self.constants.len() - 1
     }
 
-    pub fn compile_expr(&mut self, expr: &Expr) {
+    pub fn compile_expr(&mut self, expr: &Expr) -> u16 {
         match expr {
             Expr::Assign { name, value } => {
-                self.compile_expr(value);
+                let src_reg = self.compile_expr(value);
 
                 if let Some(&idx) = self.symbol_table.get(name) {
-                    self.instructions.push(OpCode::AssignVar(idx));
+                    self.instructions.push(OpCode::AssignVar(idx as u16, src_reg));
+                    src_reg
                 } else if let Some(&idx) = self.global_table.get(name) {
-                    self.instructions.push(OpCode::AssignGlobal(idx));
+                    self.instructions.push(OpCode::AssignGlobal(idx, src_reg));
+                    src_reg
                 } else {
                     panic!("Compiler Error: Cannot assign to undefined variable '{}'", name);
                 }
             }
             Expr::Bool(b) => {
+                let dest = self.alloc_reg();
                 let idx = self.add_constant(Value::Bool(*b));
-                self.instructions.push(OpCode::LoadConst(idx));
+                self.instructions.push(OpCode::LoadConst(dest, idx));
+                dest
             }
             Expr::Call { name, args } => {
-                for arg in args {
-                    self.compile_expr(arg);
+                let start_reg = self.reg_top; // Arguments start here
+                
+                // Compile each argument and ensure it's placed in consecutive slots
+                for (i, arg) in args.iter().enumerate() {
+                    let expected_reg = start_reg + i as u16;
+                    let result_reg = self.compile_expr(arg);
+                    
+                    if result_reg != expected_reg {
+                        // Move result to the expected slot
+                        self.instructions.push(OpCode::Move(expected_reg, result_reg));
+                    }
+                    // Ensure reg_top is past this argument
+                    if self.reg_top <= expected_reg {
+                        self.reg_top = expected_reg + 1;
+                    }
                 }
 
+                let dest = self.alloc_reg();
                 if let Some(&idx) = self.symbol_table.get(name) {
-                    self.instructions.push(OpCode::Call(idx));
+                    // Local function: load from local register into a temp, then call
+                    let func_reg = self.alloc_reg();
+                    self.instructions.push(OpCode::Move(func_reg, idx as u16));
+                    self.instructions.push(OpCode::Call(dest, func_reg, start_reg, args.len() as u8));
+                    self.reg_top = dest + 1; // Free the temp func_reg
                 } else if let Some(&idx) = self.global_table.get(name) {
-                    self.instructions.push(OpCode::CallGlobal(idx));
+                    // Global function: use CallGlobal which fetches from env_stack[0]
+                    self.instructions.push(OpCode::CallGlobal(dest, idx, start_reg, args.len() as u8));
+                    self.reg_top = dest + 1;
                 } else if let Some(e) = self.enums.values().find(|e| e.variants.iter().any(|v| &v.name == name)) {
                     let names_idx = self.add_constant(Value::Tuple(vec![Value::String(e.name.clone()), Value::String(name.clone())]));
-                    self.instructions.push(OpCode::CreateEnum(names_idx, args.len() as u8));
+                    self.instructions.push(OpCode::CreateEnum(dest, names_idx, start_reg, args.len() as u8));
+                    self.reg_top = dest + 1;
                 } else {
                     panic!("Compiler Error: Undefined function '{}'", name);
                 }
+                
+                dest
             }
             Expr::Number(n) => {
+                let dest = self.alloc_reg();
                 let idx = self.add_constant(Value::Numeric(Number::I64(*n)));
-                self.instructions.push(OpCode::LoadConst(idx));
+                self.instructions.push(OpCode::LoadConst(dest, idx));
+                dest
             }
             Expr::Float(n) => {
+                let dest = self.alloc_reg();
                 let idx = self.add_constant(Value::Numeric(Number::F64(*n)));
-                self.instructions.push(OpCode::LoadConst(idx));
+                self.instructions.push(OpCode::LoadConst(dest, idx));
+                dest
             }
             Expr::String(s) => {
+                let dest = self.alloc_reg();
                 let idx = self.add_constant(Value::String(s.clone()));
-                self.instructions.push(OpCode::LoadConst(idx));
+                self.instructions.push(OpCode::LoadConst(dest, idx));
+                dest
             }
             Expr::InterpolatedString(parts) => {
-                for part in parts {
-                    self.compile_expr(part);
+                let start_reg = self.reg_top;
+                
+                // Compile each part and ensure it's placed in consecutive slots
+                for (i, part) in parts.iter().enumerate() {
+                    let expected_reg = start_reg + i as u16;
+                    let result_reg = self.compile_expr(part);
+                    
+                    if result_reg != expected_reg {
+                        // Move result to the expected slot
+                        self.instructions.push(OpCode::Move(expected_reg, result_reg));
+                    }
+                    // Ensure reg_top is past this part
+                    if self.reg_top <= expected_reg {
+                        self.reg_top = expected_reg + 1;
+                    }
                 }
-                self.instructions.push(OpCode::Concat(parts.len()));
+                
+                let dest = self.alloc_reg();
+                self.instructions.push(OpCode::Concat(dest, start_reg, parts.len()));
+                self.reg_top = dest + 1;
+                dest
             }
             Expr::Variable(name) => {
                 if let Some(&idx) = self.symbol_table.get(name) {
-                    self.instructions.push(OpCode::GetVar(idx));
-                } else if let Some(e) = self.enums.values().find(|e| e.variants.iter().any(|v| &v.name == name)) {
-                    let names_idx = self.add_constant(Value::Tuple(vec![Value::String(e.name.clone()), Value::String(name.clone())]));
-                    self.instructions.push(OpCode::CreateEnum(names_idx, 0));
+                    idx as u16
+                } else if let Some(enum_name) = self.enums.values()
+                    .find(|e| e.variants.iter().any(|v| &v.name == name))
+                    .map(|e| e.name.clone()) {
+                    let dest = self.alloc_reg();
+                    let names_idx = self.add_constant(Value::Tuple(vec![Value::String(enum_name), Value::String(name.clone())]));
+                    self.instructions.push(OpCode::CreateEnum(dest, names_idx, 0, 0));
+                    dest
                 } else if let Some(&idx) = self.global_table.get(name) {
-                    self.instructions.push(OpCode::GetGlobal(idx));
+                    let dest = self.alloc_reg();
+                    self.instructions.push(OpCode::GetGlobal(dest, idx));
+                    dest
                 } else {
                     panic!("Compiler Error: Undefined variable '{}'", name);
                 }
             }
             Expr::EnumVariant { enum_name, variant_name, args } => {
+                let start_reg = self.reg_top;
                 for arg in args {
                     self.compile_expr(arg);
                 }
@@ -143,42 +213,56 @@ impl Compiler {
                     if let Some(e) = self.enums.values().find(|e| e.variants.iter().any(|v| &v.name == variant_name)) {
                         e.name.clone()
                     } else {
-                        // Special case for built-ins if they were not in enums yet (should be)
                         panic!("Compiler Error: Unknown enum variant '{}'", variant_name);
                     }
                 };
 
+                let dest = self.alloc_reg();
                 let names_idx = self.add_constant(Value::Tuple(vec![Value::String(actual_enum_name), Value::String(variant_name.clone())]));
-                self.instructions.push(OpCode::CreateEnum(names_idx, args.len() as u8));
+                self.instructions.push(OpCode::CreateEnum(dest, names_idx, start_reg, args.len() as u8));
+                self.reg_top = dest + 1;
+                dest
             }
             Expr::Binary { left, op, right } => {
-                self.compile_expr(left);
-                self.compile_expr(right);
+                let left_reg = self.compile_expr(left);
+                let right_reg = self.compile_expr(right);
+                let dest = self.alloc_reg();
                 match op {
-                    Token::EqualEqual => self.instructions.push(OpCode::Equal),
-                    Token::Plus => self.instructions.push(OpCode::Add),
-                    Token::Minus => self.instructions.push(OpCode::Subtract),
-                    Token::Star => self.instructions.push(OpCode::Multiply),
-                    Token::Slash => self.instructions.push(OpCode::Divide),
-                    Token::Power => self.instructions.push(OpCode::Power),
-                    Token::Percent => self.instructions.push(OpCode::Modulo),
-                    Token::LessThan => self.instructions.push(OpCode::LessThan),
-                    Token::GreaterThan => self.instructions.push(OpCode::GreaterThan),
-                    Token::NotEqual => self.instructions.push(OpCode::NotEqual),
+                    Token::EqualEqual => self.instructions.push(OpCode::Equal(dest, left_reg, right_reg)),
+                    Token::Plus => self.instructions.push(OpCode::Add(dest, left_reg, right_reg)),
+                    Token::Minus => self.instructions.push(OpCode::Subtract(dest, left_reg, right_reg)),
+                    Token::Star => self.instructions.push(OpCode::Multiply(dest, left_reg, right_reg)),
+                    Token::Slash => self.instructions.push(OpCode::Divide(dest, left_reg, right_reg)),
+                    Token::Power => self.instructions.push(OpCode::Power(dest, left_reg, right_reg)),
+                    Token::Percent => self.instructions.push(OpCode::Modulo(dest, left_reg, right_reg)),
+                    Token::LessThan => self.instructions.push(OpCode::LessThan(dest, left_reg, right_reg)),
+                    Token::GreaterThan => self.instructions.push(OpCode::GreaterThan(dest, left_reg, right_reg)),
+                    Token::NotEqual => self.instructions.push(OpCode::NotEqual(dest, left_reg, right_reg)),
                     _ => todo!("Other operators: {:?}", op),
                 }
+                // Free temporaries but keep result
+                self.reg_top = dest + 1;
+                dest
             }
             Expr::Array(elements) => {
+                let start_reg = self.reg_top;
                 for element in elements {
                     self.compile_expr(element);
                 }
-                self.instructions.push(OpCode::BuildArray(elements.len()));
+                let dest = self.alloc_reg();
+                self.instructions.push(OpCode::BuildArray(dest, start_reg, elements.len()));
+                self.reg_top = dest + 1;
+                dest
             }
             Expr::Tuple(elements) => {
+                let start_reg = self.reg_top;
                 for element in elements {
                     self.compile_expr(element);
                 }
-                self.instructions.push(OpCode::BuildTuple(elements.len()));
+                let dest = self.alloc_reg();
+                self.instructions.push(OpCode::BuildTuple(dest, start_reg, elements.len()));
+                self.reg_top = dest + 1;
+                dest
             }
         }
     }
@@ -189,32 +273,37 @@ impl Compiler {
                 self.enums.insert(enum_def.name.clone(), enum_def);
             }
             Statement::Declaration { name, is_mutable, is_static, value, declared_type: _ } => {
-                self.compile_expr(&value);
-
                 let var_idx = self.next_index;
+                
                 if is_static || self.is_global {
+                    // For global/static, compile expression and move result to global slot
+                    let res_reg = self.compile_expr(&value);
                     self.global_table.insert(name, var_idx);
+                    // Immediately move to global slot to avoid temp register conflicts
+                    self.instructions.push(OpCode::Move(var_idx as u16, res_reg));
                     self.instructions.push(OpCode::DefGlobal(var_idx, is_mutable));
                 } else {
+                    // For locals, compile into the variable slot directly if possible
+                    let res_reg = self.compile_expr(&value);
                     self.symbol_table.insert(name, var_idx);
+                    self.instructions.push(OpCode::Move(var_idx as u16, res_reg));
                     self.instructions.push(OpCode::DefVar(var_idx, is_mutable));
                 }
                 self.next_index += 1;
-                // Standardization: Pop the result of the declaration statement
-                self.instructions.push(OpCode::Pop);
+                self.temp_start = self.next_index as u16;
+                self.reg_top = self.temp_start;
             }
             Statement::Return(expr_opt) => {
                 if let Some(expr) = expr_opt {
-                    self.compile_expr(&expr);
+                    let reg = self.compile_expr(&expr);
+                    self.instructions.push(OpCode::Return(reg));
                 } else {
-                    let null_idx = self.add_constant(Value::Void);
-                    self.instructions.push(OpCode::LoadConst(null_idx));
+                    self.instructions.push(OpCode::ReturnVoid);
                 }
-                self.instructions.push(OpCode::Return);
             }
             Statement::Expression(expr) => {
                 self.compile_expr(&expr);
-                self.instructions.push(OpCode::Pop);
+                self.reg_top = self.temp_start;
             }
             Statement::Function { name, params, body, return_type: _ } => {
                 let mut sub_compiler = Compiler::new();
@@ -239,12 +328,14 @@ impl Compiler {
                     param_ownership.push(param.is_owned);
                 }
 
+                // Fix: Ensure reg_top starts AFTER parameters
+                sub_compiler.temp_start = sub_compiler.next_index as u16;
+                sub_compiler.reg_top = sub_compiler.temp_start;
+
                 for stmt in body {
                     sub_compiler.compile_statement(stmt);
                 }
-                let null_idx = sub_compiler.add_constant(Value::Void);
-                sub_compiler.instructions.push(OpCode::LoadConst(null_idx));
-                sub_compiler.instructions.push(OpCode::Return);
+                sub_compiler.instructions.push(OpCode::ReturnVoid);
 
                 let func = Function {
                     name: name.clone(),
@@ -270,11 +361,19 @@ impl Compiler {
                     idx
                 };
 
-                self.instructions.push(OpCode::LoadConst(const_idx));
                 if self.is_global {
+                    // For globals, load directly into the global slot
+                    self.instructions.push(OpCode::LoadConst(var_idx as u16, const_idx));
                     self.instructions.push(OpCode::DefGlobal(var_idx, false));
+                    // Keep temp registers in sync with next_index for globals
+                    self.temp_start = self.next_index as u16;
+                    self.reg_top = self.temp_start;
                 } else {
+                    let reg = self.alloc_reg();
+                    self.instructions.push(OpCode::LoadConst(reg, const_idx));
                     self.instructions.push(OpCode::DefVar(var_idx, false));
+                    self.instructions.push(OpCode::Move(var_idx as u16, reg));
+                    self.reg_top = self.temp_start;
                 }
             }
             Statement::Import { names, source } => {
@@ -294,14 +393,18 @@ impl Compiler {
                             self.next_index += 1;
                             
                             // Tell the VM to put the Native pointer into that slot
-                            self.instructions.push(OpCode::LoadConst(const_idx));
+                            let reg = self.alloc_reg();
+                            self.instructions.push(OpCode::LoadConst(reg, const_idx));
                             if self.is_global {
                                 self.global_table.insert(name.clone(), var_idx);
                                 self.instructions.push(OpCode::DefGlobal(var_idx, false));
+                                self.instructions.push(OpCode::AssignGlobal(var_idx, reg));
                             } else {
                                 self.symbol_table.insert(name.clone(), var_idx);
                                 self.instructions.push(OpCode::DefVar(var_idx, false));
+                                self.instructions.push(OpCode::Move(var_idx as u16, reg));
                             }
+                            self.reg_top = self.temp_start;
                         } else {
                             panic!("Toolbox error: {} not found in tbx::{}", name, module_name);
                         }
@@ -309,16 +412,19 @@ impl Compiler {
                 }
             }
             Statement::Print(expression) => {
-                self.compile_expr(&expression);
-                self.instructions.push(OpCode::Print);
+                let reg = self.compile_expr(&expression);
+                self.instructions.push(OpCode::Print(reg));
+                self.reg_top = self.temp_start;
             }
             Statement::Echo(expression) => {
-                self.compile_expr(&expression);
-                self.instructions.push(OpCode::Echo);
+                let reg = self.compile_expr(&expression);
+                self.instructions.push(OpCode::Echo(reg));
+                self.reg_top = self.temp_start;
             }
             Statement::Sleep(expression) => {
-                self.compile_expr(&expression);
-                self.instructions.push(OpCode::Sleep);
+                let reg = self.compile_expr(&expression);
+                self.instructions.push(OpCode::Sleep(reg));
+                self.reg_top = self.temp_start;
             }
             Statement::Block(stmts) => {
                 for stmt in stmts {
@@ -346,13 +452,12 @@ impl Compiler {
     fn compile_if(&mut self, condition: Expr, then_branch: Box<Statement>, else_branch: Option<Box<Statement>>) {
         // Compile the Condition
         // Output: [Instructions for Condition, Push Result]
-        self.compile_expr(&condition);
+        let cond_reg = self.compile_expr(&condition);
         
         // The Decision Point (JumpIfFalse)
         // If condition is false, we want to SKIP the 'then' block.
-        // We don't know how long the 'then' block is yet, so we emit
-        // Emit JumpIfFalse(0) as a placeholder.
-        let jump_false_idx = self.emit(OpCode::JumpIfFalse(0)); // 0 is placeholder
+        let jump_false_idx = self.emit(OpCode::JumpIfFalse(cond_reg, 0)); // 0 is placeholder
+        self.reg_top = self.temp_start;
 
         // Compile 'Then' Block
         // These instructions follow immediately. If condition was true,
@@ -396,15 +501,17 @@ impl Compiler {
             // "While Once" behavior: Body -> Condition -> JumpBack
             self.compile_statement(*body);
             
-            self.compile_expr(&condition);
-            let exit_jump = self.emit(OpCode::JumpIfFalse(0));
+            let cond_reg = self.compile_expr(&condition);
+            let exit_jump = self.emit(OpCode::JumpIfFalse(cond_reg, 0));
+            self.reg_top = self.temp_start;
             
             self.emit(OpCode::Jump(loop_start));
             self.patch_jump(exit_jump);
         } else {
             // Standard While behavior: Condition -> JumpEnd -> Body -> JumpStart
-            self.compile_expr(&condition);
-            let jump_end_idx = self.emit(OpCode::JumpIfFalse(0));
+            let cond_reg = self.compile_expr(&condition);
+            let jump_end_idx = self.emit(OpCode::JumpIfFalse(cond_reg, 0));
+            self.reg_top = self.temp_start;
             
             self.compile_statement(*body);
             
@@ -438,79 +545,112 @@ impl Compiler {
 
     fn compile_for(&mut self, binding: String, index_binding: Option<String>, iterable: Expr, body: Box<Statement>) {
         // 1. Compile iterable
-        self.compile_expr(&iterable);
+        let src_reg = self.compile_expr(&iterable);
         
-        // 2. Emit IterStart (pushes array, then 0)
-        self.emit(OpCode::IterStart);
+        // 2. Allocate two registers for iterator: [array, current_index]
+        let iter_reg = self.alloc_reg();
+        let _idx_temp = self.alloc_reg(); // Reserved for internal index
+        
+        // Keep next_index in sync to avoid collision with binding variables
+        if (self.reg_top as usize) > self.next_index {
+            self.next_index = self.reg_top as usize;
+            self.temp_start = self.reg_top;
+        }
+        
+        // 3. Emit IterStart
+        self.instructions.push(OpCode::IterStart(iter_reg, src_reg));
         
         let loop_start = self.instructions.len();
         self.break_patches.push(Vec::new());
         
-        // 3. Emit IterNext (pushes element, then current_index, or jumps end)
-        let exit_jump = self.emit(OpCode::IterNext(0));
+        // 4. Emit IterNext
+        let val_reg = self.alloc_reg();
+        let exit_jump = self.emit(OpCode::IterNext(val_reg, iter_reg, 0));
         
-        // 4. Handle bindings
+        // 5. Handle bindings
         if let Some(idx_name) = index_binding {
-            let idx_var = self.next_index;
-            self.next_index += 1;
-            self.symbol_table.insert(idx_name, idx_var);
-            self.emit(OpCode::DefVar(idx_var, false));
-            self.emit(OpCode::Pop); // Pop result of DefVar
-        } else {
-            self.emit(OpCode::Pop); // Pop current_index
+            // Register for user-facing index
+            let idx_reg = self.alloc_reg();
+            
+            // Calculate 0-based index: internal_index - 1
+            let one_reg = self.alloc_reg(); 
+            let one_const = self.add_constant(Value::Numeric(Number::I64(1)));
+            self.instructions.push(OpCode::LoadConst(one_reg, one_const));
+            self.instructions.push(OpCode::Subtract(idx_reg, iter_reg + 1, one_reg));
+            
+            self.symbol_table.insert(idx_name, idx_reg as usize);
+            self.instructions.push(OpCode::DefVar(idx_reg as usize, false));
         }
+
+        // Reuse val_reg for the loop variable binding
+        self.symbol_table.insert(binding, val_reg as usize);
+        self.instructions.push(OpCode::DefVar(val_reg as usize, false));
         
-        let binding_var = self.next_index;
-        self.next_index += 1;
-        self.symbol_table.insert(binding, binding_var);
-        self.emit(OpCode::DefVar(binding_var, false));
-        self.emit(OpCode::Pop); // Pop result of DefVar
-        
-        // 5. Compile body
+        // Sync next_index to ensure subsequent allocations don't overwrite our loop variables
+        if (self.reg_top as usize) > self.next_index {
+            self.next_index = self.reg_top as usize;
+        }
+        self.temp_start = self.next_index as u16;
+
+        // 6. Compile body
         self.compile_statement(*body);
         
-        // 6. Jump back to start
+        // 7. Jump back to start
         self.emit(OpCode::Jump(loop_start));
         
-        // 7. Patch exit jump
+        // 8. Patch exit jump
         self.patch_jump(exit_jump);
         
-        // 8. Patch breaks
+        // 9. Patch breaks
         let patches = self.break_patches.pop().unwrap();
         for idx in patches {
             self.patch_jump(idx);
         }
+
+        // Cleanup: free temporary registers used by iterator and val
+        self.reg_top = iter_reg; // Frees iter_reg, idx_temp, and val_reg
     }
 
     fn compile_match(&mut self, condition: Expr, arms: Vec<crate::parser::MatchArm>, is_any: bool) {
-        // Condition value stays on stack, duplicated for each check.
-        self.compile_expr(&condition);
+        let match_reg = self.compile_expr(&condition);
         
-        // Match State Variable:
-        // 0: Done
-        // 1: Searching (Normal)
-        // 2: Searching (Any)
-        // 3: Next (Checking exactly one more)
+        // Sync next_index to preserve match_reg if it used temp regs
+        if (self.reg_top as usize) > self.next_index {
+             self.next_index = self.reg_top as usize;
+        }
+
         let state_var = self.next_index;
         self.next_index += 1;
         self.match_state_vars.push(state_var);
         
+        // Update temp_start to PROTECT state_var from being overwritten by temps
+        self.temp_start = self.next_index as u16;
+        
+        // Define state var and initialize it
+        self.instructions.push(OpCode::DefVar(state_var, true));
         let initial_state = if is_any { 2 } else { 1 };
-        let const_idx = self.add_constant(Value::Numeric(Number::I64(initial_state)));
-        self.emit(OpCode::LoadConst(const_idx));
-        self.emit(OpCode::DefVar(state_var, true));
-        self.emit(OpCode::Pop); 
+        let const_state_idx = self.add_constant(Value::Numeric(Number::I64(initial_state)));
+        let temp_reg = self.alloc_reg();
+        self.instructions.push(OpCode::LoadConst(temp_reg, const_state_idx));
+        self.instructions.push(OpCode::AssignVar(state_var as u16, temp_reg));
+        self.reg_top = self.temp_start;
 
         self.break_patches.push(Vec::new());
         self.next_body_patches.push(Vec::new());
 
         for arm in arms {
             // Check State > 0
-            self.emit(OpCode::GetVar(state_var));
+            let state_reg = self.alloc_reg();
+            self.instructions.push(OpCode::GetVar(state_reg, state_var)); 
+            
             let zero_idx = self.add_constant(Value::Numeric(Number::I64(0)));
-            self.emit(OpCode::LoadConst(zero_idx));
-            self.emit(OpCode::GreaterThan);
-            let skip_arm_if_inactive = self.emit(OpCode::JumpIfFalse(0));
+            let zero_reg = self.alloc_reg();
+            self.instructions.push(OpCode::LoadConst(zero_reg, zero_idx));
+            
+            let cond_reg = self.alloc_reg();
+            self.instructions.push(OpCode::GreaterThan(cond_reg, state_reg, zero_reg));
+            let skip_arm_if_inactive = self.emit(OpCode::JumpIfFalse(cond_reg, 0));
+            self.reg_top = self.temp_start;
             
             let mut body_entry_patches = Vec::new();
             let mut arm_failure_patches = Vec::new();
@@ -521,21 +661,27 @@ impl Compiler {
                 body_entry_patches.push(jump_to_body);
             } else {
                 for pattern in &arm.patterns {
-                    let patches = self.compile_pattern(pattern);
+                    let patches = self.compile_pattern(pattern, match_reg);
                     body_entry_patches.extend(patches);
                 }
 
                 // If we reach here, no pattern in this arm matched.
                 // If state was 3 (Next), set to 0.
-                self.emit(OpCode::GetVar(state_var));
+                let state_reg = self.alloc_reg();
+                self.instructions.push(OpCode::GetVar(state_reg, state_var));
                 let three_idx = self.add_constant(Value::Numeric(Number::I64(3)));
-                self.emit(OpCode::LoadConst(three_idx));
-                self.emit(OpCode::Equal);
-                let not_next = self.emit(OpCode::JumpIfFalse(0));
-                let zero_val_idx = self.add_constant(Value::Numeric(Number::I64(0)));
-                self.emit(OpCode::LoadConst(zero_val_idx));
-                self.emit(OpCode::AssignVar(state_var));
-                self.emit(OpCode::Pop);
+                let three_reg = self.alloc_reg();
+                self.instructions.push(OpCode::LoadConst(three_reg, three_idx));
+                
+                let is_next_reg = self.alloc_reg();
+                self.instructions.push(OpCode::Equal(is_next_reg, state_reg, three_reg));
+                let not_next = self.emit(OpCode::JumpIfFalse(is_next_reg, 0));
+                
+                let zero_idx = self.add_constant(Value::Numeric(Number::I64(0)));
+                let zero_reg = self.alloc_reg();
+                self.instructions.push(OpCode::LoadConst(zero_reg, zero_idx));
+                self.instructions.push(OpCode::AssignVar(state_var as u16, zero_reg));
+                self.reg_top = self.temp_start;
                 self.patch_jump(not_next);
 
                 // Jump OVER the body to the end of this arm
@@ -548,15 +694,21 @@ impl Compiler {
             }
 
             // Transition state to 0 if not 2 (Any)
-            self.emit(OpCode::GetVar(state_var));
+            let state_reg = self.alloc_reg();
+            self.instructions.push(OpCode::GetVar(state_reg, state_var));
             let two_idx_const = self.add_constant(Value::Numeric(Number::I64(2)));
-            self.emit(OpCode::LoadConst(two_idx_const));
-            self.emit(OpCode::Equal);
-            let is_any_jump = self.emit(OpCode::JumpIfTrue(0));
+            let two_reg = self.alloc_reg();
+            self.instructions.push(OpCode::LoadConst(two_reg, two_idx_const));
+            
+            let is_any_reg = self.alloc_reg();
+            self.instructions.push(OpCode::Equal(is_any_reg, state_reg, two_reg));
+            let is_any_jump = self.emit(OpCode::JumpIfTrue(is_any_reg, 0));
+            
+            let zero_reg = self.alloc_reg();
             let zero_val_idx_2 = self.add_constant(Value::Numeric(Number::I64(0)));
-            self.emit(OpCode::LoadConst(zero_val_idx_2));
-            self.emit(OpCode::AssignVar(state_var));
-            self.emit(OpCode::Pop);
+            self.instructions.push(OpCode::LoadConst(zero_reg, zero_val_idx_2));
+            self.instructions.push(OpCode::AssignVar(state_var as u16, zero_reg));
+            self.reg_top = self.temp_start;
             self.patch_jump(is_any_jump);
 
             self.compile_statement(*arm.body.clone());
@@ -582,15 +734,17 @@ impl Compiler {
         }
         
         self.match_state_vars.pop();
-        self.emit(OpCode::Pop); // Pop condition
+        // Condition was in match_reg, which will be freed when compile_match finishes
+        self.reg_top = match_reg;
     }
 
     fn compile_next(&mut self) {
         if let Some(&state_var) = self.match_state_vars.last() {
             let three_idx = self.add_constant(Value::Numeric(Number::I64(3)));
-            self.emit(OpCode::LoadConst(three_idx));
-            self.emit(OpCode::AssignVar(state_var));
-            self.emit(OpCode::Pop);
+            let reg = self.alloc_reg();
+            self.instructions.push(OpCode::LoadConst(reg, three_idx));
+            self.instructions.push(OpCode::AssignVar(state_var as u16, reg));
+            self.reg_top = self.temp_start;
             
             // Jump to end of current body
             let patch = self.emit(OpCode::Jump(0));
@@ -608,9 +762,10 @@ impl Compiler {
         // If we are inside a match, we should also set the state to 0
         if let Some(&state_var) = self.match_state_vars.last() {
              let zero_idx = self.add_constant(Value::Numeric(Number::I64(0)));
-             self.emit(OpCode::LoadConst(zero_idx));
-             self.emit(OpCode::AssignVar(state_var));
-             self.emit(OpCode::Pop);
+             let reg = self.alloc_reg();
+             self.instructions.push(OpCode::LoadConst(reg, zero_idx));
+             self.instructions.push(OpCode::AssignVar(state_var as u16, reg));
+             self.reg_top = self.temp_start;
         }
 
         let idx = self.emit(OpCode::Jump(0));
@@ -625,44 +780,52 @@ impl Compiler {
     fn patch_jump(&mut self, op_index: usize) {
         let target = self.instructions.len();
         match &mut self.instructions[op_index] {
-             OpCode::JumpIfFalse(val) | OpCode::Jump(val) | OpCode::IterNext(val) | OpCode::JumpIfTrue(val) => {
+             OpCode::JumpIfFalse(_, val) | 
+             OpCode::JumpIfTrue(_, val) | 
+             OpCode::IterNext(_, _, val) |
+             OpCode::Jump(val) => {
                  *val = target;
             }
-            _ => panic!("Attempted to patch non-jump opcode"),
+            _ => panic!("Attempted to patch non-jump opcode at {}: {:?}", op_index, self.instructions[op_index]),
         }
     }
 
-    fn compile_pattern(&mut self, pattern: &Pattern) -> Vec<usize> {
+    fn compile_pattern(&mut self, pattern: &Pattern, match_reg: u16) -> Vec<usize> {
         let mut patch_indices = Vec::new();
         match pattern {
             Pattern::Literal(expr) => {
-                self.emit(OpCode::Dup); // Duplicate condition for comparison
-                self.compile_expr(expr);
-                self.emit(OpCode::Equal);
-                patch_indices.push(self.emit(OpCode::JumpIfTrue(0)));
+                let lit_reg = self.compile_expr(expr);
+                let cond_reg = self.alloc_reg();
+                self.instructions.push(OpCode::Equal(cond_reg, match_reg, lit_reg));
+                patch_indices.push(self.emit(OpCode::JumpIfTrue(cond_reg, 0)));
+                self.reg_top = self.temp_start;
             }
             Pattern::EnumVariant { enum_name, variant_name, binding } => {
-                self.emit(OpCode::Dup); // Duplicate condition for IsVariant
                 let e_name = enum_name.clone().unwrap_or_else(|| "".to_string());
                 let e_const = self.add_constant(Value::String(e_name));
                 let v_const = self.add_constant(Value::String(variant_name.clone()));
-                self.emit(OpCode::IsVariant(e_const, v_const));
+                let cond_reg = self.alloc_reg();
+                self.instructions.push(OpCode::IsVariant(cond_reg, match_reg, e_const, v_const));
                 
-                let is_match_jump = self.emit(OpCode::JumpIfTrue(0));
+                let is_match_jump = self.emit(OpCode::JumpIfTrue(cond_reg, 0));
                 let skip_arm = self.emit(OpCode::Jump(0));
                 
                 self.patch_jump(is_match_jump);
                 if let Some(bind_name) = binding {
-                    self.emit(OpCode::Dup); // Duplicate variant for GetVariantData
-                    self.instructions.push(OpCode::GetVariantData);
-                    let var_idx = self.next_index;
+                    let bind_idx = self.next_index;
                     self.next_index += 1;
-                    self.symbol_table.insert(bind_name.clone(), var_idx); // Note: this binding doesn't leave arm scope clean, but match handles scopes
-                    self.instructions.push(OpCode::DefVar(var_idx, false));
-                    self.instructions.push(OpCode::Pop);
+                    self.symbol_table.insert(bind_name.clone(), bind_idx);
+                    self.instructions.push(OpCode::DefVar(bind_idx, false));
+                    
+                    let data_reg = self.alloc_reg();
+                    self.instructions.push(OpCode::GetVariantData(data_reg, match_reg));
+                    self.instructions.push(OpCode::Move(bind_idx as u16, data_reg));
+                    
+                    self.temp_start = self.next_index as u16;
                 }
-                patch_indices.push(self.emit(OpCode::Jump(0))); // Switch to success
+                self.reg_top = self.temp_start;
                 
+                patch_indices.push(self.emit(OpCode::Jump(0))); // Success path
                 self.patch_jump(skip_arm);
             }
             Pattern::Wildcard => {

@@ -91,7 +91,7 @@ fn main() {
         "run" => {
             let mut final_instructions = compiler.instructions.clone();
             if let Some(&main_idx) = compiler.global_table.get("main") {
-                final_instructions.push(OpCode::CallGlobal(main_idx));
+                final_instructions.push(OpCode::CallGlobal(0, main_idx, 0, 0));
                 final_instructions.push(OpCode::Halt);
             } else {
                 panic!("ngn Error: No main() function defined!");
@@ -106,7 +106,7 @@ fn main() {
             
             // Add the bootstrap call to main
             if let Some(&main_idx) = compiler.global_table.get("main") {
-                final_instructions.push(OpCode::CallGlobal(main_idx));
+                final_instructions.push(OpCode::CallGlobal(0, main_idx, 0, 0));
                 final_instructions.push(OpCode::Halt);
             }
 

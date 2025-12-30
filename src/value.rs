@@ -2,7 +2,7 @@ use std::fmt;
 
 use crate::bytecode::OpCode;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 #[allow(dead_code)]
 #[derive(serde::Serialize, serde::Deserialize)]
 pub enum Number {
@@ -413,10 +413,10 @@ pub enum Value {
 }
 
 impl Value {
-    pub fn add(self, other: Value) -> Result<Value, String>  {
+    pub fn add(&self, other: &Value) -> Result<Value, String>  {
         match (self, other) {
             // If both are numbers, delegate to the Number enum
-            (Value::Numeric(x), Value::Numeric(y)) => Ok(Value::Numeric(x.add(y))),
+            (Value::Numeric(x), Value::Numeric(y)) => Ok(Value::Numeric(x.add(*y))),
             
             // If both are strings, handle concatenation
             (Value::String(x), Value::String(y)) => Ok(Value::String(format!("{}{}", x, y))),
@@ -424,23 +424,23 @@ impl Value {
             (x, y) => Err(format!("Runtime Error: Cannot add {:?} and {:?}", x, y)),
         }
     }
-    pub fn subtract(self, other: Value) -> Result<Value, String> {
+    pub fn subtract(&self, other: &Value) -> Result<Value, String> {
         match (self, other) {
-            (Value::Numeric(x), Value::Numeric(y)) => Ok(Value::Numeric(x.subtract(y))),
+            (Value::Numeric(x), Value::Numeric(y)) => Ok(Value::Numeric(x.subtract(*y))),
             
             (x, y) => Err(format!("Runtime Error: Cannot subtract {:?} and {:?}", x, y)),
         }
     }
-    pub fn multiply(self, other: Value) -> Result<Value, String>  {
+    pub fn multiply(&self, other: &Value) -> Result<Value, String>  {
         match (self, other) {
-            (Value::Numeric(x), Value::Numeric(y)) => Ok(Value::Numeric(x.multiply(y))),
+            (Value::Numeric(x), Value::Numeric(y)) => Ok(Value::Numeric(x.multiply(*y))),
             
             (x, y) => Err(format!("Runtime Error: Cannot multiply {:?} by {:?}", x, y)),
         }
     }
-    pub fn divide(self, other: Value) -> Result<Value, String> {
+    pub fn divide(&self, other: &Value) -> Result<Value, String> {
         match (self, other) {
-            (Value::Numeric(x), Value::Numeric(y)) => x.divide(y).map(Value::Numeric),
+            (Value::Numeric(x), Value::Numeric(y)) => x.divide(*y).map(Value::Numeric),
             
             (x, y) => Err(format!("Runtime Error: Cannot divide {:?} by {:?}", x, y)),
         }
@@ -459,7 +459,7 @@ impl Value {
             (x, y) => Err(format!("Runtime Error: Cannot use modulo operator with {:?} and {:?}", x, y)),
         }
     }
-    pub fn is_equal(self, other: Value) -> bool {
+    pub fn is_equal(&self, other: &Value) -> bool {
         match (self, other) {
             (Value::Numeric(a), Value::Numeric(b)) => {
                 let r1 = a.rank();
@@ -488,14 +488,14 @@ impl Value {
                     if promoted.rank() == r1 {
                         panic!("Logic Error: Failed to promote rank {} to {} while comparing {} and {}", r1, r2, promoted, b);
                     }
-                    Value::Numeric(promoted).is_equal(Value::Numeric(b))
+                    Value::Numeric(promoted).is_equal(&Value::Numeric(*b))
                 } else {
                     let promoted = b.promote_to(r1);
                     // Safety Check: If rank didn't change, we missed a match arm in promote_to
                     if promoted.rank() == r2 {
                         panic!("Logic Error: Failed to promote rank {} to {} while comparing {} and {}", r2, r1, a, promoted);
                     }
-                    Value::Numeric(a).is_equal(Value::Numeric(promoted))
+                    Value::Numeric(*a).is_equal(&Value::Numeric(promoted))
                 }
             }
             (Value::Bool(a), Value::Bool(b)) => a == b,
@@ -503,7 +503,7 @@ impl Value {
             (Value::Array(a), Value::Array(b)) => {
                 if a.len() != b.len() { return false; }
                 for (v1, v2) in a.iter().zip(b.iter()) {
-                    if !v1.clone().is_equal(v2.clone()) {
+                    if !v1.is_equal(v2) {
                         return false;
                     }
                 }
@@ -512,7 +512,7 @@ impl Value {
             (Value::Tuple(a), Value::Tuple(b)) => {
                 if a.len() != b.len() { return false; }
                 for (v1, v2) in a.iter().zip(b.iter()) {
-                    if !v1.clone().is_equal(v2.clone()) {
+                    if !v1.is_equal(v2) {
                         return false;
                     }
                 }
@@ -526,7 +526,7 @@ impl Value {
                 }
 
                 match (d1, d2) {
-                    (Some(a), Some(b)) => a.clone().is_equal(*b.clone()),
+                    (Some(a), Some(b)) => a.is_equal(b),
                     (None, None) => true,
                     _ => false,
                 }
