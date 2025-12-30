@@ -38,4 +38,7 @@ pub enum OpCode {
     Pop,
     Echo,
     Sleep,
+    CreateEnum(usize, u8),
+    IsVariant(usize, usize), // enum_name_const, variant_name_const
+    GetVariantData,
 }

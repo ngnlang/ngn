@@ -60,6 +60,7 @@ fn main() {
     let lexer = Lexer::new(&source);
     let mut parser = Parser::new(lexer);
     let mut compiler = Compiler::new();
+    compiler.inject_builtins();
 
     // 1. COLLECT all statements into a list first
     let mut statements = Vec::new();

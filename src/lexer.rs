@@ -3,7 +3,7 @@ pub enum Token {
     // Keywords
     Var, Const, Static, Fn, Return,
     If, While, Until, Loop, For, In, Match, Next, Any, Break, Once,
-    Import, From, As,
+    Import, From, As, Enum,
 
 	// Built-ins
 	Print, Echo, Sleep,
@@ -22,13 +22,14 @@ pub enum Token {
     // Symbols
     Equal, EqualEqual, NotEqual, Plus, Minus, Star, Slash, Power, Percent,
     LParen, RParen, LBrace, RBrace, LBracket, RBracket,
-    Colon, Comma,
+    Colon, Comma, DoubleColon,
 	LessThan, GreaterThan, LessThanEqual, GreaterThanEqual,
     PlusEqual, MinusEqual, StarEqual, SlashEqual, PercentEqual, StarStarEqual, CaretEqual,
     FatArrow, Pipe,
     
     // Formatting
     Newline,
+    Underscore,
     EOF,
 }
 
@@ -197,7 +198,14 @@ impl Lexer {
                 }
                 Token::RBrace
             }
-			':' => Token::Colon,
+			':' => {
+                if self.peek_current() == ':' {
+                    self.cursor += 1;
+                    Token::DoubleColon
+                } else {
+                    Token::Colon
+                }
+            }
 			'=' => {
 				if self.peek_current() == '=' {
 					self.cursor += 1;
@@ -237,6 +245,7 @@ impl Lexer {
             '[' => Token::LBracket,
             ']' => Token::RBracket,
             ',' => Token::Comma,
+            '_' => Token::Underscore,
             _ => panic!("Unknown character: {}", ch),
         };
 
@@ -289,6 +298,7 @@ impl Lexer {
 			"import" => Token::Import,
 			"from" => Token::From,
 			"as" => Token::As,
+			"enum" => Token::Enum,
 			"true" => Token::Bool(true),
     		"false" => Token::Bool(false),
             _ => Token::Identifier(ident),

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use crate::bytecode::OpCode;
 use crate::lexer::Token;
-use crate::parser::{Expr, Statement};
+use crate::parser::{Expr, Statement, Pattern, EnumDef};
 use crate::value::{Function, Number, Value};
 
 pub struct Compiler {
@@ -14,6 +14,7 @@ pub struct Compiler {
     pub match_state_vars: Vec<usize>,
     pub next_body_patches: Vec<Vec<usize>>,
     pub is_global: bool,
+    pub enums: HashMap<String, EnumDef>,
 }
 
 impl Compiler {
@@ -28,7 +29,31 @@ impl Compiler {
             match_state_vars: Vec::new(),
             next_body_patches: Vec::new(),
             is_global: true,
+            enums: HashMap::new(),
         }
+    }
+
+    pub fn inject_builtins(&mut self) {
+        // Built-in Result
+        let result_enum = EnumDef {
+            name: "Result".to_string(),
+            variants: vec![
+                crate::parser::EnumVariantDef { name: "Ok".to_string(), data_type: Some(crate::parser::Type::Any) },
+                crate::parser::EnumVariantDef { name: "Error".to_string(), data_type: Some(crate::parser::Type::Any) },
+            ],
+        };
+        
+        // Built-in Maybe
+        let maybe_enum = EnumDef {
+            name: "Maybe".to_string(),
+            variants: vec![
+                crate::parser::EnumVariantDef { name: "Value".to_string(), data_type: Some(crate::parser::Type::Any) },
+                crate::parser::EnumVariantDef { name: "Null".to_string(), data_type: None },
+            ],
+        };
+
+        self.enums.insert("Result".to_string(), result_enum);
+        self.enums.insert("Maybe".to_string(), maybe_enum);
     }
 
     // Helper to add a constant and return its index
@@ -69,6 +94,9 @@ impl Compiler {
                     self.instructions.push(OpCode::Call(idx));
                 } else if let Some(&idx) = self.global_table.get(name) {
                     self.instructions.push(OpCode::CallGlobal(idx));
+                } else if let Some(e) = self.enums.values().find(|e| e.variants.iter().any(|v| &v.name == name)) {
+                    let names_idx = self.add_constant(Value::Tuple(vec![Value::String(e.name.clone()), Value::String(name.clone())]));
+                    self.instructions.push(OpCode::CreateEnum(names_idx, args.len() as u8));
                 } else {
                     panic!("Compiler Error: Undefined function '{}'", name);
                 }
@@ -94,11 +122,33 @@ impl Compiler {
             Expr::Variable(name) => {
                 if let Some(&idx) = self.symbol_table.get(name) {
                     self.instructions.push(OpCode::GetVar(idx));
+                } else if let Some(e) = self.enums.values().find(|e| e.variants.iter().any(|v| &v.name == name)) {
+                    let names_idx = self.add_constant(Value::Tuple(vec![Value::String(e.name.clone()), Value::String(name.clone())]));
+                    self.instructions.push(OpCode::CreateEnum(names_idx, 0));
                 } else if let Some(&idx) = self.global_table.get(name) {
                     self.instructions.push(OpCode::GetGlobal(idx));
                 } else {
                     panic!("Compiler Error: Undefined variable '{}'", name);
                 }
+            }
+            Expr::EnumVariant { enum_name, variant_name, args } => {
+                for arg in args {
+                    self.compile_expr(arg);
+                }
+                
+                let actual_enum_name = if let Some(e) = enum_name {
+                    e.clone()
+                } else {
+                    if let Some(e) = self.enums.values().find(|e| e.variants.iter().any(|v| &v.name == variant_name)) {
+                        e.name.clone()
+                    } else {
+                        // Special case for built-ins if they were not in enums yet (should be)
+                        panic!("Compiler Error: Unknown enum variant '{}'", variant_name);
+                    }
+                };
+
+                let names_idx = self.add_constant(Value::Tuple(vec![Value::String(actual_enum_name), Value::String(variant_name.clone())]));
+                self.instructions.push(OpCode::CreateEnum(names_idx, args.len() as u8));
             }
             Expr::Binary { left, op, right } => {
                 self.compile_expr(left);
@@ -134,6 +184,9 @@ impl Compiler {
 
     pub fn compile_statement(&mut self, stmt: Statement) {
         match stmt {
+            Statement::Enum(enum_def) => {
+                self.enums.insert(enum_def.name.clone(), enum_def);
+            }
             Statement::Declaration { name, is_mutable, is_static, value, declared_type: _ } => {
                 self.compile_expr(&value);
 
@@ -173,6 +226,7 @@ impl Compiler {
                 for (n, &idx) in &self.global_table {
                     sub_compiler.global_table.insert(n.clone(), idx);
                 }
+                sub_compiler.enums = self.enums.clone();
 
                 sub_compiler.next_index = 0;
 
@@ -466,10 +520,8 @@ impl Compiler {
                 body_entry_patches.push(jump_to_body);
             } else {
                 for pattern in &arm.patterns {
-                    self.emit(OpCode::Dup);
-                    self.compile_expr(pattern);
-                    self.emit(OpCode::Equal);
-                    body_entry_patches.push(self.emit(OpCode::JumpIfTrue(0)));
+                    let patches = self.compile_pattern(pattern);
+                    body_entry_patches.extend(patches);
                 }
 
                 // If we reach here, no pattern in this arm matched.
@@ -577,5 +629,45 @@ impl Compiler {
             }
             _ => panic!("Attempted to patch non-jump opcode"),
         }
+    }
+
+    fn compile_pattern(&mut self, pattern: &Pattern) -> Vec<usize> {
+        let mut patch_indices = Vec::new();
+        match pattern {
+            Pattern::Literal(expr) => {
+                self.emit(OpCode::Dup); // Duplicate condition for comparison
+                self.compile_expr(expr);
+                self.emit(OpCode::Equal);
+                patch_indices.push(self.emit(OpCode::JumpIfTrue(0)));
+            }
+            Pattern::EnumVariant { enum_name, variant_name, binding } => {
+                self.emit(OpCode::Dup); // Duplicate condition for IsVariant
+                let e_name = enum_name.clone().unwrap_or_else(|| "".to_string());
+                let e_const = self.add_constant(Value::String(e_name));
+                let v_const = self.add_constant(Value::String(variant_name.clone()));
+                self.emit(OpCode::IsVariant(e_const, v_const));
+                
+                let is_match_jump = self.emit(OpCode::JumpIfTrue(0));
+                let skip_arm = self.emit(OpCode::Jump(0));
+                
+                self.patch_jump(is_match_jump);
+                if let Some(bind_name) = binding {
+                    self.emit(OpCode::Dup); // Duplicate variant for GetVariantData
+                    self.instructions.push(OpCode::GetVariantData);
+                    let var_idx = self.next_index;
+                    self.next_index += 1;
+                    self.symbol_table.insert(bind_name.clone(), var_idx); // Note: this binding doesn't leave arm scope clean, but match handles scopes
+                    self.instructions.push(OpCode::DefVar(var_idx, false));
+                    self.instructions.push(OpCode::Pop);
+                }
+                patch_indices.push(self.emit(OpCode::Jump(0))); // Switch to success
+                
+                self.patch_jump(skip_arm);
+            }
+            Pattern::Wildcard => {
+                patch_indices.push(self.emit(OpCode::Jump(0)));
+            }
+        }
+        patch_indices
     }
 }

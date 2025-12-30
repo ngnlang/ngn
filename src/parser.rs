@@ -15,6 +15,7 @@ pub enum Type {
         return_type: Box<Type>,
     },
     Any,
+    Enum(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -26,8 +27,31 @@ pub struct Parameter {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchArm {
-    pub patterns: Vec<Expr>,
+    pub patterns: Vec<Pattern>,
     pub body: Box<Statement>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Pattern {
+    Literal(Expr),
+    EnumVariant {
+        enum_name: Option<String>,
+        variant_name: String,
+        binding: Option<String>,
+    },
+    Wildcard,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumVariantDef {
+    pub name: String,
+    pub data_type: Option<Type>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumDef {
+    pub name: String,
+    pub variants: Vec<EnumVariantDef>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -76,6 +100,7 @@ pub enum Statement {
     Next,
     Break,
     Return(Option<Expr>),
+    Enum(EnumDef),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -95,6 +120,11 @@ pub enum Expr {
     Array(Vec<Expr>),
     Tuple(Vec<Expr>),
     InterpolatedString(Vec<Expr>),
+    EnumVariant {
+        enum_name: Option<String>,
+        variant_name: String,
+        args: Vec<Expr>,
+    },
 }
 
 pub struct Parser {
@@ -249,6 +279,7 @@ impl Parser {
                 Statement::Expression(expr)
             }
             Token::Import => self.parse_import_statement(),
+            Token::Enum => self.parse_enum_stmt(),
             Token::Print => {
                 self.advance();
                 self.expect(Token::LParen);
@@ -402,7 +433,11 @@ impl Parser {
                             Type::Tuple(vec![])
                         }
                     }
-                    _ => panic!("Syntax Error: Unknown type '{}'", name),
+                    _ => { // assume enum
+                        let n = name.clone();
+                        self.advance();
+                        Type::Enum(n)
+                    }
                 }
             }
             Token::LParen => {
@@ -621,7 +656,17 @@ impl Parser {
             Token::StringStart => self.parse_interpolated_string(),
             Token::Identifier(name) => {
                 self.advance();
-                Expr::Variable(name)
+                if self.current_token == Token::DoubleColon {
+                    self.advance();
+                    let variant_name = self.expect_identifier();
+                    Expr::EnumVariant {
+                        enum_name: Some(name),
+                        variant_name,
+                        args: Vec::new(),
+                    }
+                } else {
+                    Expr::Variable(name)
+                }
             }
             Token::LBracket => self.parse_array_literal(),
             _ => panic!("Expected expression, found {:?}", self.current_token),
@@ -638,6 +683,8 @@ impl Parser {
             
             if let Expr::Variable(name) = expr {
                 expr = Expr::Call { name, args };
+            } else if let Expr::EnumVariant { enum_name, variant_name, .. } = expr {
+                expr = Expr::EnumVariant { enum_name, variant_name, args };
             }
         }
 
@@ -972,12 +1019,14 @@ impl Parser {
         while self.current_token != Token::RBrace && self.current_token != Token::EOF {
             let mut patterns = Vec::new();
             
-            // Check for default case =>
-            if self.current_token == Token::FatArrow {
+            // Check for default case _ =>
+            if self.current_token == Token::Underscore {
                 self.advance();
+                self.expect(Token::FatArrow);
+                patterns.push(Pattern::Wildcard);
             } else {
                 loop {
-                    patterns.push(self.parse_expression());
+                    patterns.push(self.parse_pattern());
                     if self.current_token == Token::Pipe {
                         self.advance();
                     } else {
@@ -1011,5 +1060,85 @@ impl Parser {
             arms,
             is_any,
         }
+    }
+
+    fn parse_pattern(&mut self) -> Pattern {
+        match &self.current_token {
+            Token::Underscore => {
+                self.advance();
+                Pattern::Wildcard
+            }
+            Token::Identifier(id) => {
+                let name = id.clone();
+                self.advance();
+                
+                if self.current_token == Token::DoubleColon {
+                    self.advance();
+                    let variant_name = self.expect_identifier();
+                    let mut binding = None;
+                    if self.current_token == Token::LParen {
+                        self.advance();
+                        binding = Some(self.expect_identifier());
+                        self.expect(Token::RParen);
+                    }
+                    return Pattern::EnumVariant {
+                        enum_name: Some(name),
+                        variant_name,
+                        binding,
+                    };
+                }
+
+                // Binding search: Variant(bind)
+                if self.current_token == Token::LParen {
+                    self.advance();
+                    let binding = Some(self.expect_identifier());
+                    self.expect(Token::RParen);
+                    return Pattern::EnumVariant {
+                        enum_name: None,
+                        variant_name: name,
+                        binding,
+                    };
+                }
+                
+                Pattern::EnumVariant {
+                    enum_name: None,
+                    variant_name: name,
+                    binding: None,
+                }
+            }
+            _ => Pattern::Literal(self.parse_expression()),
+        }
+    }
+
+    fn parse_enum_stmt(&mut self) -> Statement {
+        if self.in_function {
+            panic!("Syntax Error: 'enum' can only be declared in global scope");
+        }
+        self.advance(); // consume 'enum'
+        let name = self.expect_identifier();
+        self.expect(Token::LBrace);
+        self.consume_newlines();
+        
+        let mut variants = Vec::new();
+        while self.current_token != Token::RBrace && self.current_token != Token::EOF {
+            let variant_name = self.expect_identifier();
+            let mut data_type = None;
+            
+            if self.current_token == Token::LParen {
+                self.advance();
+                data_type = Some(self.parse_type());
+                self.expect(Token::RParen);
+            }
+            
+            variants.push(EnumVariantDef { name: variant_name, data_type });
+            
+            if self.current_token == Token::Comma {
+                self.advance();
+            }
+            self.consume_newlines();
+        }
+        self.expect(Token::RBrace);
+        
+        Statement::Enum(EnumDef { name, variants })
     }
 }

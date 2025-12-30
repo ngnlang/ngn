@@ -402,6 +402,11 @@ pub enum Value {
     Reference(usize, usize), // (EnvironmentIndex, VariableIndex)
     Array(Vec<Value>),
     Tuple(Vec<Value>),
+    Enum {
+        enum_name: String,
+        variant_name: String,
+        data: Option<Box<Value>>,
+    },
     Void,
 }
 
@@ -511,6 +516,19 @@ impl Value {
                 }
                 true
             }
+            (Value::Enum { enum_name: e1, variant_name: v1, data: d1 }, Value::Enum { enum_name: e2, variant_name: v2, data: d2 }) => {
+                // Two enums are equal if they belong to the same Enum type,
+                // have the same variant name, and their associated data matches.
+                if v1 != v2 || e1 != e2 { 
+                    return false; 
+                }
+
+                match (d1, d2) {
+                    (Some(a), Some(b)) => a.clone().is_equal(*b.clone()),
+                    (None, None) => true,
+                    _ => false,
+                }
+            }
             (Value::Void, Value::Void) => true,
             _ => false,
         }
@@ -541,6 +559,13 @@ impl fmt::Display for Value {
                     write!(f, "{}", v)?;
                 }
                 write!(f, ")")
+            }
+            Value::Enum { enum_name, variant_name, data } => {
+                if let Some(d) = data {
+                    write!(f, "{}::{} ({})", enum_name, variant_name, d)
+                } else {
+                    write!(f, "{}::{}", enum_name, variant_name)
+                }
             }
             Value::Void => write!(f, "void"),
         }

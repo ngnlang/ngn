@@ -581,6 +581,60 @@ impl VM {
                 OpCode::Pop => {
                     self.pop_stack();
                 }
+                OpCode::CreateEnum(const_idx, arg_count) => {
+                    let names_val = self.constants[const_idx].clone();
+                    let (enum_name, variant_name) = match names_val {
+                        Value::Tuple(t) if t.len() == 2 => {
+                            if let (Value::String(e), Value::String(v)) = (&t[0], &t[1]) {
+                                (e.clone(), v.clone())
+                            } else {
+                                panic!("Runtime Error: CreateEnum expected strings in names tuple");
+                            }
+                        }
+                        _ => panic!("Runtime Error: CreateEnum expected 2-element tuple for names"),
+                    };
+
+                    let data = if arg_count > 0 {
+                        Some(Box::new(self.pop_stack()))
+                    } else {
+                        None
+                    };
+
+                    self.stack.push(Value::Enum { enum_name, variant_name, data });
+                }
+                OpCode::IsVariant(enum_const_idx, var_const_idx) => {
+                    let val = self.pop_stack();
+                    let resolved = self.resolve_value(val);
+                    
+                    let e_name = match &self.constants[enum_const_idx] {
+                        Value::String(s) => s.as_str(),
+                        _ => "",
+                    };
+                    let v_name = match &self.constants[var_const_idx] {
+                        Value::String(s) => s.as_str(),
+                        _ => panic!("Runtime Error: IsVariant expected variant name"),
+                    };
+
+                    if let Value::Enum { enum_name, variant_name, .. } = resolved {
+                         let matches = (e_name.is_empty() || e_name == enum_name) && v_name == variant_name;
+                         self.stack.push(Value::Bool(matches));
+                    } else {
+                        self.stack.push(Value::Bool(false));
+                    }
+                }
+                OpCode::GetVariantData => {
+                    let val = self.pop_stack();
+                    let resolved = self.resolve_value(val);
+                    if let Value::Enum { data, .. } = resolved {
+                         if let Some(d) = data {
+                             self.stack.push(*d);
+                         } else {
+                             self.stack.push(Value::Void);
+                         }
+                    } else {
+                        panic!("Runtime Error: GetVariantData expected Enum");
+                    }
+                }
             }
             self.ip += 1;
         }
