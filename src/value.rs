@@ -378,12 +378,14 @@ impl Number {
     }
 }
 
+use std::sync::Arc;
+
 #[derive(Debug, Clone)]
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct Function {
     pub name: String,
-    pub instructions: Vec<OpCode>,
-    pub constants: Vec<Value>,
+    pub instructions: Arc<Vec<OpCode>>,
+    pub constants: Arc<Vec<Value>>,
     pub param_count: usize,
     // Index of the param in this list matches the index in the function's local env
     // bool = true if it's an owned parameter (<)

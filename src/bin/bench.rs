@@ -4,7 +4,6 @@ use ngn::analyzer::Analyzer;
 use ngn::compiler::Compiler;
 use ngn::vm::VM;
 use ngn::bytecode::OpCode;
-use ngn::value::Value;
 use std::time::Instant;
 use std::fs;
 use std::path::Path;

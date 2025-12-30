@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use crate::bytecode::OpCode;
 use crate::lexer::Token;
 use crate::parser::{Expr, Statement, Pattern, EnumDef};
@@ -247,8 +248,8 @@ impl Compiler {
 
                 let func = Function {
                     name: name.clone(),
-                    instructions: sub_compiler.instructions,
-                    constants: sub_compiler.constants,
+                    instructions: Arc::new(sub_compiler.instructions),
+                    constants: Arc::new(sub_compiler.constants),
                     param_count: param_ownership.len(),
                     param_ownership,
                 };

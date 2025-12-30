@@ -1,5 +1,6 @@
 use crate::{bytecode::OpCode, toolbox::{NATIVE_ABS, NATIVE_ASSERT}, value::{Value}};
 use std::io::Write;
+use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -10,13 +11,14 @@ pub struct Variable {
 }
 
 pub struct VM {
-    instructions: Vec<OpCode>,
-    constants: Vec<Value>,
+    instructions: Arc<Vec<OpCode>>,
+    constants: Arc<Vec<Value>>,
     stack: Vec<Value>,
     env_stack: Vec<Vec<Option<Variable>>>,
-    pub call_stack: Vec<(Vec<OpCode>, Vec<Value>, usize, usize)>,
+    pub call_stack: Vec<(Arc<Vec<OpCode>>, Arc<Vec<Value>>, usize, usize)>,
     ip: usize,
     current_env_idx: usize,
+    env_pool: Vec<Vec<Option<Variable>>>,
 }
  
 impl VM {
@@ -24,13 +26,14 @@ impl VM {
         let mut globals = Vec::with_capacity(global_slots);
         globals.resize(global_slots, None);
         Self {
-            instructions,
-            constants,
+            instructions: Arc::new(instructions),
+            constants: Arc::new(constants),
             stack: Vec::new(),
             env_stack: vec![globals],
             call_stack: Vec::new(),
             ip: 0,
             current_env_idx: 0,
+            env_pool: Vec::with_capacity(32),
         }
     }
     pub fn init_globals(&mut self, size: usize) {
@@ -51,7 +54,8 @@ impl VM {
     fn perform_call(&mut self, callable_value: Value) -> bool {
         match callable_value {
             Value::Function(func) => {
-                let mut new_env = Vec::new();
+                let mut new_env = self.env_pool.pop().unwrap_or_else(|| Vec::with_capacity(func.param_count));
+                new_env.clear();
 
                 for i in (0..func.param_count).rev() {
                     let arg = self.pop_stack();
@@ -79,10 +83,10 @@ impl VM {
                 new_env.reverse();
 
                 let next_env_idx = self.env_stack.len();
-                self.call_stack.push((self.instructions.clone(), self.constants.clone(), self.ip + 1, self.current_env_idx));
-                self.instructions = func.instructions.clone();
+                self.call_stack.push((Arc::clone(&self.instructions), Arc::clone(&self.constants), self.ip + 1, self.current_env_idx));
+                self.instructions = Arc::clone(&func.instructions);
                 self.ip = 0;
-                self.constants = func.constants.clone(); // Swap the constants pool
+                self.constants = Arc::clone(&func.constants); // Swap the constants pool
                 self.env_stack.push(new_env);
                 self.current_env_idx = next_env_idx;
                 true // We switched IP
@@ -168,7 +172,10 @@ impl VM {
                         }
                     }
 
-                    self.env_stack.pop(); // Pop the function's environment
+                    let mut old_env = self.env_stack.pop().expect("Stack underflow"); // Pop the function's environment
+                    old_env.clear();
+                    self.env_pool.push(old_env);
+
                     self.instructions = saved_instructions;
                     self.constants = saved_constants; // Restore the constants pool
                     self.ip = saved_ip;
@@ -491,7 +498,10 @@ impl VM {
                             }
                         }
 
-                        self.env_stack.pop(); // Pop the isolated environment
+                        let mut old_env = self.env_stack.pop().expect("Stack underflow"); // Pop the isolated environment
+                        old_env.clear();
+                        self.env_pool.push(old_env);
+
                         self.instructions = saved_instructions;
                         self.constants = saved_constants; // Restore the constants pool
                         self.ip = saved_ip;
