@@ -10,6 +10,7 @@ pub struct Compiler {
     pub global_table: HashMap<String, usize>,
     pub next_index: usize,
     pub reg_top: u16,      // Current top of register "stack"
+    pub max_reg: u16,      // Peak register usage
     pub temp_start: u16,   // Where temporaries start (after locals)
     pub instructions: Vec<OpCode>,
     pub constants: Vec<Value>,
@@ -27,6 +28,7 @@ impl Compiler {
             global_table: HashMap::new(),
             next_index: 0,
             reg_top: 0,
+            max_reg: 0,
             temp_start: 0,
             instructions: Vec::new(),
             constants: Vec::new(),
@@ -41,6 +43,9 @@ impl Compiler {
     fn alloc_reg(&mut self) -> u16 {
         let reg = self.reg_top;
         self.reg_top += 1;
+        if self.reg_top > self.max_reg {
+            self.max_reg = self.reg_top;
+        }
         reg
     }
 
@@ -331,6 +336,7 @@ impl Compiler {
                 // Fix: Ensure reg_top starts AFTER parameters
                 sub_compiler.temp_start = sub_compiler.next_index as u16;
                 sub_compiler.reg_top = sub_compiler.temp_start;
+                sub_compiler.max_reg = sub_compiler.reg_top;
 
                 for stmt in body {
                     sub_compiler.compile_statement(stmt);
@@ -343,6 +349,7 @@ impl Compiler {
                     constants: Arc::new(sub_compiler.constants),
                     param_count: param_ownership.len(),
                     param_ownership,
+                    reg_count: sub_compiler.max_reg as usize,
                 };
 
                 let const_idx = self.add_constant(Value::Function(Box::new(func)));

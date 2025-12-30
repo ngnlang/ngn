@@ -388,8 +388,10 @@ pub struct Function {
     pub constants: Arc<Vec<Value>>,
     pub param_count: usize,
     // Index of the param in this list matches the index in the function's local env
+    // Index of the param in this list matches the index in the function's local env
     // bool = true if it's an owned parameter (<)
-    pub param_ownership: Vec<bool>, 
+    pub param_ownership: Vec<bool>,
+    pub reg_count: usize,
 }
 
 #[derive(Debug, Clone)]
