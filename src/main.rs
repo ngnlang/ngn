@@ -1,30 +1,19 @@
-mod analyzer;
-mod bytecode;
-mod compiler;
-mod error;
-mod lexer;
-mod parser;
-pub mod toolbox;
-mod utils;
-mod value;
-mod vm;
-
+use ngn::compiler::Compiler;
+use ngn::vm::VM;
+use ngn::analyzer::Analyzer;
+use ngn::lexer::{Lexer, Token};
+use ngn::parser::Parser;
+use ngn::parser::Statement;
+use ngn::bytecode::OpCode;
+use ngn::value::Value;
 use std::env;
 use std::fs;
-use compiler::Compiler;
-use vm::VM;
-use analyzer::Analyzer;
 use std::io::{Read, Seek, SeekFrom};
-
-use crate::bytecode::OpCode;
-use crate::parser::Statement;
-use crate::value::Value;
-use crate::{lexer::{Lexer, Token}, parser::Parser};
 
 fn main() {
     // Check for "Self-Running" mode
     if let Some((instructions, constants)) = check_for_embedded_bytecode() {
-        let mut vm = VM::new(instructions, constants);
+        let mut vm = VM::new(instructions, constants, 0);
         vm.run();
         return;
     }
@@ -48,7 +37,7 @@ fn main() {
         let (instructions, constants): (Vec<OpCode>, Vec<Value>) = 
             bincode::deserialize(&bytes).expect("Failed to deserialize bytecode");
 
-        let mut vm = VM::new(instructions, constants);
+        let mut vm = VM::new(instructions, constants, 0);
         vm.run();
         return;
     }
@@ -102,13 +91,13 @@ fn main() {
         "run" => {
             let mut final_instructions = compiler.instructions.clone();
             if let Some(&main_idx) = compiler.global_table.get("main") {
-                final_instructions.push(bytecode::OpCode::CallGlobal(main_idx));
-                final_instructions.push(bytecode::OpCode::Halt);
+                final_instructions.push(OpCode::CallGlobal(main_idx));
+                final_instructions.push(OpCode::Halt);
             } else {
                 panic!("ngn Error: No main() function defined!");
             }
             
-            let mut my_vm = VM::new(final_instructions, compiler.constants);
+            let mut my_vm = VM::new(final_instructions, compiler.constants, compiler.next_index);
             my_vm.run();
         }
         "build" => {
@@ -117,8 +106,8 @@ fn main() {
             
             // Add the bootstrap call to main
             if let Some(&main_idx) = compiler.global_table.get("main") {
-                final_instructions.push(bytecode::OpCode::CallGlobal(main_idx));
-                final_instructions.push(bytecode::OpCode::Halt);
+                final_instructions.push(OpCode::CallGlobal(main_idx));
+                final_instructions.push(OpCode::Halt);
             }
 
             // Serialize to bytes

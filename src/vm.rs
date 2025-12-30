@@ -14,23 +14,38 @@ pub struct VM {
     constants: Vec<Value>,
     stack: Vec<Value>,
     env_stack: Vec<Vec<Option<Variable>>>,
-    pub call_stack: Vec<(Vec<OpCode>, Vec<Value>, usize)>,
+    pub call_stack: Vec<(Vec<OpCode>, Vec<Value>, usize, usize)>,
     ip: usize,
+    current_env_idx: usize,
 }
-
+ 
 impl VM {
-    pub fn new(instructions: Vec<OpCode>, constants: Vec<Value>) -> Self {
+    pub fn new(instructions: Vec<OpCode>, constants: Vec<Value>, global_slots: usize) -> Self {
+        let mut globals = Vec::with_capacity(global_slots);
+        globals.resize(global_slots, None);
         Self {
             instructions,
             constants,
             stack: Vec::new(),
-            env_stack: vec![Vec::new()],
+            env_stack: vec![globals],
             call_stack: Vec::new(),
             ip: 0,
+            current_env_idx: 0,
         }
     }
+    pub fn init_globals(&mut self, size: usize) {
+        self.env_stack[0].resize(size, None);
+    }
+    pub fn define_global(&mut self, idx: usize, val: Value, is_mutable: bool) {
+        let env = &mut self.env_stack[0];
+        if idx >= env.len() {
+            env.resize(idx + 1, None);
+        }
+        env[idx] = Some(Variable { value: val, is_mutable, reference_count: 0 });
+    }
+
     fn current_env(&mut self) -> &mut Vec<Option<Variable>> {
-        self.env_stack.last_mut().expect("No active environment!")
+        &mut self.env_stack[self.current_env_idx]
     }
 
     fn perform_call(&mut self, callable_value: Value) -> bool {
@@ -63,11 +78,13 @@ impl VM {
 
                 new_env.reverse();
 
-                self.call_stack.push((self.instructions.clone(), self.constants.clone(), self.ip + 1));
+                let next_env_idx = self.env_stack.len();
+                self.call_stack.push((self.instructions.clone(), self.constants.clone(), self.ip + 1, self.current_env_idx));
                 self.instructions = func.instructions.clone();
                 self.ip = 0;
                 self.constants = func.constants.clone(); // Swap the constants pool
                 self.env_stack.push(new_env);
+                self.current_env_idx = next_env_idx;
                 true // We switched IP
             }
             Value::NativeFunction(id) => {
@@ -139,12 +156,23 @@ impl VM {
             // If we've reached the end of the current code, stop.
             if self.ip >= self.instructions.len() {
                 // Check if we have somewhere to return to
-                if let Some((saved_instructions, saved_constants, saved_ip)) = self.call_stack.pop() {
+                if let Some((saved_instructions, saved_constants, saved_ip, saved_env_idx)) = self.call_stack.pop() {
+                    // Resolve the return value if it's a reference to the env we're about to pop
+                    if let Some(top) = self.stack.last() {
+                        if let Value::Reference(e, _) = top {
+                            if *e == self.current_env_idx {
+                                let val = self.pop_stack();
+                                let resolved = self.resolve_value(val);
+                                self.stack.push(resolved);
+                            }
+                        }
+                    }
+
+                    self.env_stack.pop(); // Pop the function's environment
                     self.instructions = saved_instructions;
                     self.constants = saved_constants; // Restore the constants pool
                     self.ip = saved_ip;
-                    // Important: Don't continue the loop yet, let it increment 
-                    // in the next step or just continue.
+                    self.current_env_idx = saved_env_idx;
                     continue; 
                 } else {
                     // We finished the entry-point instructions (bootstrap)
@@ -292,10 +320,11 @@ impl VM {
                 OpCode::DefVar(idx, is_mutable) => {
                     let val = self.pop_stack();
                     let new_var = Variable { value: val.clone(), is_mutable, reference_count: 0 };
-                    let env = self.current_env();
+                    let env_idx = self.current_env_idx;
+                    let env = &mut self.env_stack[env_idx];
                     if idx >= env.len() { env.resize(idx + 1, None); }
                     env[idx] = Some(new_var);
-
+ 
                     // Restore reference count if we're pushing it back
                     if let Value::Reference(e, v) = &val {
                         if let Some(env) = self.env_stack.get_mut(*e) {
@@ -307,10 +336,10 @@ impl VM {
                     self.stack.push(val);
                 }
                 OpCode::GetVar(idx) => {
-                    let current_env_idx = self.env_stack.len() - 1;
-                    if let Some(Some(var)) = self.current_env().get_mut(idx) {
+                    let env_idx = self.current_env_idx;
+                    if let Some(Some(var)) = self.env_stack[env_idx].get_mut(idx) {
                         var.reference_count += 1;
-                        self.stack.push(Value::Reference(current_env_idx, idx));
+                        self.stack.push(Value::Reference(env_idx, idx));
                     } else {
                         panic!("Runtime error: Undefined local variable '{}'", idx);
                     }
@@ -325,7 +354,8 @@ impl VM {
                 }
                 OpCode::AssignVar(idx) => {
                     let new_val = self.pop_stack();
-                    if let Some(Some(var)) = self.current_env().get_mut(idx) {
+                    let env_idx = self.current_env_idx;
+                    if let Some(Some(var)) = self.env_stack[env_idx].get_mut(idx) {
                         if var.reference_count > 0 {
                             panic!("Borrow error: Cannot mutate '{}' while it is borrowed!", idx);
                         }
@@ -333,6 +363,14 @@ impl VM {
                             panic!("Runtime error: Cannot assign to constant '{}'", idx);
                         }
                         var.value = new_val.clone();
+                        // Increment count since we're pushing it back
+                        if let Value::Reference(e, v) = &new_val {
+                            if let Some(env) = self.env_stack.get_mut(*e) {
+                                if let Some(Some(var)) = env.get_mut(*v) {
+                                    var.reference_count += 1;
+                                }
+                            }
+                        }
                         self.stack.push(new_val);
                     } else {
                         panic!("Runtime error: Cannot assign to undefined local variable '{}'", idx);
@@ -348,6 +386,14 @@ impl VM {
                             panic!("Runtime error: Cannot assign to constant global '{}'", idx);
                         }
                         var.value = new_val.clone();
+                        // Increment count since we're pushing it back
+                        if let Value::Reference(e, v) = &new_val {
+                            if let Some(env) = self.env_stack.get_mut(*e) {
+                                if let Some(Some(var)) = env.get_mut(*v) {
+                                    var.reference_count += 1;
+                                }
+                            }
+                        }
                         self.stack.push(new_val);
                     } else {
                         panic!("Runtime error: Cannot assign to undefined global variable '{}'", idx);
@@ -432,14 +478,24 @@ impl VM {
                     self.stack.push(Value::String(result));
                 }
                 OpCode::Return => {
-                    // Pop the isolated environment
-                    self.env_stack.pop();
-
                     // Restore the previous caller's state
-                    if let Some((saved_instructions, saved_constants, saved_ip)) = self.call_stack.pop() {
+                    if let Some((saved_instructions, saved_constants, saved_ip, saved_env_idx)) = self.call_stack.pop() {
+                        // Resolve the return value if it's a reference to the env we're about to pop
+                        if let Some(top) = self.stack.last() {
+                            if let Value::Reference(e, _) = top {
+                                if *e == self.current_env_idx {
+                                    let val = self.pop_stack();
+                                    let resolved = self.resolve_value(val);
+                                    self.stack.push(resolved);
+                                }
+                            }
+                        }
+
+                        self.env_stack.pop(); // Pop the isolated environment
                         self.instructions = saved_instructions;
                         self.constants = saved_constants; // Restore the constants pool
                         self.ip = saved_ip;
+                        self.current_env_idx = saved_env_idx;
 
                         continue;
                     } else {
