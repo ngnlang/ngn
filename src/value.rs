@@ -377,7 +377,7 @@ impl Number {
     }
 
     // Higher rank = more capacity
-    fn rank(&self) -> u8 {
+    pub fn rank(&self) -> u8 {
         match self {
             Number::U8(_)  => 1,
             Number::U16(_) => 2,

@@ -772,7 +772,46 @@ impl Analyzer {
                     // Tuple methods
                     Type::Tuple(_) => {
                         match method.as_str() {
-                            "size" => Type::I64,
+                            "size" => {
+                                if !args.is_empty() { self.errors.push("Type Error: .size() takes no arguments".to_string()); }
+                                Type::I64
+                            }
+                            "toArray" => {
+                                if !args.is_empty() { self.errors.push("Type Error: .toArray() takes no arguments".to_string()); }
+                                Type::Array(Box::new(Type::Any))
+                            }
+                            "includes" => {
+                                if args.len() != 1 { self.errors.push("Type Error: .includes() takes 1 argument".to_string()); }
+                                else { self.check_expression(&args[0]); }
+                                Type::Bool
+                            }
+                            "index" => {
+                                if args.len() != 1 { self.errors.push("Type Error: .index() takes 1 argument".to_string()); }
+                                else { self.check_expression(&args[0]); }
+                                Type::I64
+                            }
+                            "copy" => {
+                                if args.len() > 2 {
+                                    self.errors.push("Type Error: .copy() takes at most 2 arguments".to_string());
+                                }
+                                for arg in args {
+                                    let arg_ty = self.check_expression(arg);
+                                    if !self.types_compatible(&Type::I64, &arg_ty) {
+                                        self.errors.push(format!("Type Error: .copy() arguments must be I64, got {:?}", arg_ty));
+                                    }
+                                }
+                                Type::Any // Hard to determine tuple size/types at compile time without constant folding
+                            }
+                            "join" => {
+                                if args.len() != 1 { self.errors.push("Type Error: .join() takes 1 argument".to_string()); }
+                                else {
+                                    let arg_ty = self.check_expression(&args[0]);
+                                    if !self.types_compatible(&Type::String, &arg_ty) {
+                                        self.errors.push(format!("Type Error: .join() argument must be string, got {:?}", arg_ty));
+                                    }
+                                }
+                                Type::String
+                            }
                             _ => {
                                 self.errors.push(format!("Type Error: Unknown tuple method '{}'", method));
                                 Type::Any

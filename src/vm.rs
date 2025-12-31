@@ -884,11 +884,66 @@ impl Fiber {
         }
     }
 
-    /// Tuple methods: size
-    fn tuple_method(&self, t: &[Value], method: &str, _args: Vec<Value>) -> Value {
+    /// Tuple methods: size, includes, index, toArray, copy, join
+    fn tuple_method(&self, t: &[Value], method: &str, args: Vec<Value>) -> Value {
         match method {
             "size" => Value::Numeric(crate::value::Number::I64(t.len() as i64)),
+            "includes" => {
+                if args.is_empty() { panic!("includes() requires a value to search for"); }
+                let target = &args[0];
+                Value::Bool(t.iter().any(|v| v.is_equal(target)))
+            }
+            "index" => {
+                if args.is_empty() { panic!("index() requires a value to search for"); }
+                let target = &args[0];
+                for (i, v) in t.iter().enumerate() {
+                    if v.is_equal(target) {
+                        return Value::Numeric(crate::value::Number::I64(i as i64));
+                    }
+                }
+                Value::Numeric(crate::value::Number::I64(-1))
+            }
+            "toArray" => {
+                if t.is_empty() {
+                    return Value::Array(Vec::new());
+                }
+                
+                // Type consistency check
+                let first_val = &t[0];
+                for (i, val) in t.iter().enumerate().skip(1) {
+                    if !self.is_same_basic_type(first_val, val) {
+                        panic!("Runtime Error: Cannot convert mixed-type tuple to array (element {} {:?} differs from first element {:?})", i, val, first_val);
+                    }
+                }
+                Value::Array(t.to_vec())
+            }
+            "copy" => {
+                let start = if !args.is_empty() { self.to_usize(&args[0]).expect("copy() start must be integer") } else { 0 };
+                let end = if args.len() > 1 { self.to_usize(&args[1]).expect("copy() stop must be integer") } else { t.len() };
+                if start > end || end > t.len() { panic!("Range out of bounds"); }
+                Value::Tuple(t[start..end].to_vec())
+            }
+            "join" => {
+                let delim = if args.is_empty() { "" } else {
+                    if let Value::String(s) = &args[0] { s.as_str() } else { panic!("join() separator must be string") }
+                };
+                let parts: Vec<String> = t.iter().map(|v| format!("{}", v)).collect();
+                Value::String(parts.join(delim))
+            }
             _ => panic!("Runtime Error: Unknown tuple method '{}'", method),
+        }
+    }
+
+    fn is_same_basic_type(&self, v1: &Value, v2: &Value) -> bool {
+        match (v1, v2) {
+            (Value::Numeric(n1), Value::Numeric(n2)) => n1.rank() == n2.rank(),
+            (Value::String(_), Value::String(_)) => true,
+            (Value::Bool(_), Value::Bool(_)) => true,
+            (Value::Array(_), Value::Array(_)) => true, // Could be stricter but for now variants match
+            (Value::Tuple(_), Value::Tuple(_)) => true,
+            (Value::Enum { enum_name: e1, variant_name: vr1, .. }, Value::Enum { enum_name: e2, variant_name: vr2, .. }) => e1 == e2 && vr1 == vr2,
+            (Value::Void, Value::Void) => true,
+            _ => false,
         }
     }
 
