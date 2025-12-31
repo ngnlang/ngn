@@ -188,6 +188,22 @@ impl Fiber {
                     panic!("Runtime Error: GreaterThan expects numeric types, got {:?} and {:?}", l, r);
                 }
             }
+            OpCode::Negate(dest, src) => {
+                let val = self.get_reg_at(src);
+                if let Value::Numeric(n) = val {
+                    self.set_reg_at(dest, Value::Numeric(n.negate()));
+                } else {
+                    panic!("Runtime Error: Negate expects numeric type, got {:?}", val);
+                }
+            }
+            OpCode::Not(dest, src) => {
+                let val = self.get_reg_at(src);
+                if let Value::Bool(b) = val {
+                    self.set_reg_at(dest, Value::Bool(!b));
+                } else {
+                    panic!("Runtime Error: Not expects boolean type, got {:?}", val);
+                }
+            }
             OpCode::GetGlobal(dest, idx) => {
                 let val = globals[idx].clone();
                 self.set_reg_at(dest, val);
@@ -635,6 +651,43 @@ impl Fiber {
                     panic!("Runtime Error: .close() on non-channel");
                 }
             }
+            OpCode::CallMethod(dest, obj_reg, method_idx, arg_start, arg_count) => {
+                let obj = self.get_reg_at(obj_reg);
+                let method_name = if let Value::String(s) = &self.constants[method_idx] {
+                    s.clone()
+                } else {
+                    panic!("Runtime Error: Invalid method name constant");
+                };
+                
+                // Collect arguments
+                let mut args = Vec::new();
+                for i in 0..arg_count {
+                    args.push(self.get_reg_at(arg_start + i as u16));
+                }
+                
+                // Dispatch to appropriate method implementation (non-mutating)
+                let result = self.call_builtin_method(obj, &method_name, args);
+                self.set_reg_at(dest, result);
+            }
+            OpCode::CallMethodMut(dest, obj_reg, method_idx, arg_start, arg_count) => {
+                let obj = self.get_reg_at(obj_reg);
+                let method_name = if let Value::String(s) = &self.constants[method_idx] {
+                    s.clone()
+                } else {
+                    panic!("Runtime Error: Invalid method name constant");
+                };
+                
+                // Collect arguments
+                let mut args = Vec::new();
+                for i in 0..arg_count {
+                    args.push(self.get_reg_at(arg_start + i as u16));
+                }
+                
+                // Dispatch to mutating method - returns (result, new_object)
+                let (result, new_obj) = self.call_builtin_method_mut(obj, &method_name, args);
+                self.set_reg_at(dest, result);
+                self.set_reg_at(obj_reg, new_obj);
+            }
             OpCode::Halt => {
                 self.status = FiberStatus::Finished;
                 return FiberStatus::Finished;
@@ -667,6 +720,186 @@ impl Fiber {
         self.constants = func.constants.clone();
         self.ip = 0;
         self.current_closure = closure;
+    }
+    
+    /// Dispatch built-in method calls on arrays, strings, tuples, etc.
+    fn call_builtin_method(&self, obj: Value, method: &str, args: Vec<Value>) -> Value {
+        match obj {
+            Value::Array(arr) => self.array_method(arr, method, args),
+            Value::String(s) => self.string_method(&s, method, args),
+            Value::Tuple(t) => self.tuple_method(&t, method, args),
+            _ => panic!("Runtime Error: Cannot call method '{}' on {:?}", method, obj),
+        }
+    }
+
+    /// Dispatch mutating built-in method calls. Returns (result, modified_object).
+    fn call_builtin_method_mut(&self, obj: Value, method: &str, args: Vec<Value>) -> (Value, Value) {
+        match obj {
+            Value::Array(arr) => self.array_method_mut(arr, method, args),
+            Value::String(s) => self.string_method_mut(s, method, args),
+            _ => panic!("Runtime Error: Cannot call mutating method '{}' on {:?}", method, obj),
+        }
+    }
+
+    /// Array non-mutating methods: size, copy, each (placeholder)
+    fn array_method(&self, arr: Vec<Value>, method: &str, args: Vec<Value>) -> Value {
+        match method {
+            "size" => Value::Numeric(crate::value::Number::I64(arr.len() as i64)),
+            "copy" => {
+                let start = if !args.is_empty() { self.to_usize(&args[0]).unwrap_or(0) } else { 0 };
+                let end = if args.len() > 1 { self.to_usize(&args[1]).unwrap_or(arr.len()) } else { arr.len() };
+                if start > end || end > arr.len() { panic!("Range out of bounds"); }
+                Value::Array(arr[start..end].to_vec())
+            }
+            "each" => panic!("Runtime Error: each() method not yet implemented in v2 (try 'for' loop instead)"),
+            _ => panic!("Runtime Error: Unknown non-mutating array method '{}'", method),
+        }
+    }
+
+    /// Array mutating methods: push, pull, slice, splice
+    fn array_method_mut(&self, mut arr: Vec<Value>, method: &str, args: Vec<Value>) -> (Value, Value) {
+        match method {
+            "push" => {
+                if args.is_empty() { panic!("push() requires item"); }
+                let item = args[0].clone();
+                if args.len() > 1 {
+                    let idx = self.to_usize(&args[1]).expect("push() index must be integer");
+                    if idx > arr.len() { panic!("push() index out of bounds"); }
+                    arr.insert(idx, item);
+                } else {
+                    arr.push(item);
+                }
+                (Value::Numeric(crate::value::Number::I64(arr.len() as i64)), Value::Array(arr))
+            }
+            "pull" => {
+                let removed = if args.len() > 0 {
+                    let idx = self.to_usize(&args[0]).expect("pull() index must be integer");
+                    if idx >= arr.len() { panic!("pull() index out of bounds"); }
+                    arr.remove(idx)
+                } else {
+                    arr.pop().expect("pull() from empty array")
+                };
+                (removed, Value::Array(arr))
+            }
+            "slice" => {
+                let start = self.to_usize(&args[0]).expect("slice() start must be an integer");
+                let end = if args.len() > 1 { self.to_usize(&args[1]).expect("slice() stop must be an integer") } else { arr.len() };
+                if start > end || end > arr.len() { panic!("Range out of bounds"); }
+                let removed: Vec<Value> = arr.drain(start..end).collect();
+                (Value::Array(removed), Value::Array(arr))
+            }
+            "splice" => {
+                let items = if let Value::Array(items) = &args[0] { items.clone() } else { panic!("splice() expects an array as first argument") };
+                let start = if args.len() > 1 { self.to_usize(&args[1]).unwrap_or(arr.len()) } else { arr.len() };
+                if start > arr.len() { panic!("Index out of bounds"); }
+                for (i, item) in items.into_iter().enumerate() {
+                    arr.insert(start + i, item);
+                }
+                (Value::Numeric(crate::value::Number::I64(arr.len() as i64)), Value::Array(arr))
+            }
+            _ => panic!("Runtime Error: Unknown mutating array method '{}'", method),
+        }
+    }
+
+    /// String non-mutating methods: length, index, includes, starts, ends, split, replace, copy, upper, lower, trim, repeat
+    fn string_method(&self, s: &str, method: &str, args: Vec<Value>) -> Value {
+        match method {
+            "length" => Value::Numeric(crate::value::Number::I64(s.len() as i64)),
+            "index" => {
+                if args.is_empty() { panic!("index() requires search pattern"); }
+                let pattern = if let Value::String(p) = &args[0] { p } else { panic!("index() expects string pattern") };
+                let start = if args.len() > 1 { self.to_usize(&args[1]).unwrap_or(0) } else { 0 };
+                if start >= s.len() {
+                    Value::Numeric(crate::value::Number::I64(-1))
+                } else {
+                    match s[start..].find(pattern.as_str()) {
+                        Some(i) => Value::Numeric(crate::value::Number::I64((i + start) as i64)),
+                        None => Value::Numeric(crate::value::Number::I64(-1)),
+                    }
+                }
+            }
+            "includes" => {
+                if args.is_empty() { panic!("includes() requires search pattern"); }
+                let search = if let Value::String(p) = &args[0] { p } else { panic!("includes() expects string") };
+                Value::Bool(s.contains(search.as_str()))
+            }
+            "starts" => {
+                if args.is_empty() { panic!("starts() requires prefix"); }
+                let prefix = if let Value::String(p) = &args[0] { p } else { panic!("starts() expects string") };
+                Value::Bool(s.starts_with(prefix.as_str()))
+            }
+            "ends" => {
+                if args.is_empty() { panic!("ends() requires suffix"); }
+                let suffix = if let Value::String(p) = &args[0] { p } else { panic!("ends() expects string") };
+                Value::Bool(s.ends_with(suffix.as_str()))
+            }
+            "split" => {
+                if args.is_empty() {
+                    let parts: Vec<Value> = s.chars().map(|c| Value::String(c.to_string())).collect();
+                    Value::Array(parts)
+                } else if let Value::String(delim) = &args[0] {
+                    let parts: Vec<Value> = s.split(delim.as_str()).map(|part| Value::String(part.to_string())).collect();
+                    Value::Array(parts)
+                } else {
+                    panic!("split() argument must be string");
+                }
+            }
+            "replace" => {
+                if args.len() < 2 { panic!("replace() requires search and replacement patterns"); }
+                let search = if let Value::String(s) = &args[0] { s } else { panic!("replace() expects string search pattern") };
+                let repl = if let Value::String(s) = &args[1] { s } else { panic!("replace() expects string replacement") };
+                Value::String(s.replacen(search.as_str(), repl.as_str(), 1))
+            }
+            "copy" => {
+                let start = if !args.is_empty() { self.to_usize(&args[0]).unwrap_or(0) } else { 0 };
+                let end = if args.len() > 1 { self.to_usize(&args[1]).unwrap_or(s.len()) } else { s.len() };
+                if start > end || end > s.len() { panic!("Range out of bounds"); }
+                Value::String(s[start..end].to_string())
+            }
+            "upper" => Value::String(s.to_uppercase()),
+            "lower" => Value::String(s.to_lowercase()),
+            "trim" => Value::String(s.trim().to_string()),
+            "repeat" => {
+                if args.is_empty() { panic!("repeat() requires count"); }
+                let count = self.to_usize(&args[0]).expect("repeat() expects integer count");
+                Value::String(s.repeat(count))
+            }
+            _ => panic!("Runtime Error: Unknown non-mutating string method '{}'", method),
+        }
+    }
+
+    /// String mutating methods: slice
+    fn string_method_mut(&self, s: String, method: &str, args: Vec<Value>) -> (Value, Value) {
+        match method {
+            "slice" => {
+                let start = self.to_usize(&args[0]).expect("slice() start must be integer");
+                let end = if args.len() > 1 { self.to_usize(&args[1]).expect("slice() stop must be integer") } else { s.len() };
+                if start > end || end > s.len() { panic!("Range out of bounds"); }
+                let removed = s[start..end].to_string();
+                let mut new_s = s;
+                new_s.replace_range(start..end, "");
+                (Value::String(removed), Value::String(new_s))
+            }
+            _ => panic!("Runtime Error: Unknown mutating string method '{}'", method),
+        }
+    }
+
+    /// Tuple methods: size
+    fn tuple_method(&self, t: &[Value], method: &str, _args: Vec<Value>) -> Value {
+        match method {
+            "size" => Value::Numeric(crate::value::Number::I64(t.len() as i64)),
+            _ => panic!("Runtime Error: Unknown tuple method '{}'", method),
+        }
+    }
+
+    /// Helper to convert Value to usize for indexing
+    fn to_usize(&self, val: &Value) -> Option<usize> {
+        match val {
+            Value::Numeric(crate::value::Number::I64(n)) => {
+                if *n >= 0 { Some(*n as usize) } else { None }
+            }
+            _ => None,
+        }
     }
 }
 

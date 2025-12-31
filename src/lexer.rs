@@ -20,7 +20,7 @@ pub enum Token {
 	Bool(bool),
     
     // Symbols
-    Equal, EqualEqual, NotEqual, Plus, Minus, Star, Slash, Power, Percent,
+    Equal, EqualEqual, NotEqual, Plus, Minus, Star, Slash, Power, Percent, Bang,
     LParen, RParen, LBrace, RBrace, LBracket, RBracket,
     Colon, Comma, DoubleColon,
 	LessThan, GreaterThan, LessThanEqual, GreaterThanEqual,
@@ -223,7 +223,7 @@ impl Lexer {
 					self.cursor += 1;
 					Token::NotEqual
 				} else {
-					panic!("Unknown character '!'");
+					Token::Bang
 				}
 			}
             '<' => {

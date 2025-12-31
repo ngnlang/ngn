@@ -136,6 +136,23 @@ impl Compiler {
         self.constants.len() - 1
     }
 
+    // Compile a list of expressions into consecutive registers starting at current reg_top.
+    // Returns the start_reg.
+    fn compile_args(&mut self, args: &[Expr]) -> u16 {
+        let start_reg = self.reg_top;
+        for (i, arg) in args.iter().enumerate() {
+            let expected_reg = start_reg + i as u16;
+            let result_reg = self.compile_expr(arg);
+            if result_reg != expected_reg {
+                self.instructions.push(OpCode::Move(expected_reg, result_reg));
+            }
+            if self.reg_top <= expected_reg {
+                self.reg_top = expected_reg + 1;
+            }
+        }
+        start_reg
+    }
+
     pub fn compile_expr(&mut self, expr: &Expr) -> u16 {
         match expr {
             Expr::Assign { name, value } => {
@@ -176,23 +193,8 @@ impl Compiler {
                     }
                     _ => {}
                 }
-                let start_reg = self.reg_top; // Arguments start here
-                
-                // Compile each argument and ensure it's placed in consecutive slots
-                for (i, arg) in args.iter().enumerate() {
-                    let expected_reg = start_reg + i as u16;
-                    let result_reg = self.compile_expr(arg);
-                    
-                    if result_reg != expected_reg {
-                        // Move result to the expected slot
-                        self.instructions.push(OpCode::Move(expected_reg, result_reg));
-                    }
-                    // Ensure reg_top is past this argument
-                    if self.reg_top <= expected_reg {
-                        self.reg_top = expected_reg + 1;
-                    }
-                }
 
+                let start_reg = self.compile_args(args);
                 let dest = self.alloc_reg();
 
                 // Ownership Check
@@ -246,23 +248,7 @@ impl Compiler {
                 dest
             }
             Expr::InterpolatedString(parts) => {
-                let start_reg = self.reg_top;
-                
-                // Compile each part and ensure it's placed in consecutive slots
-                for (i, part) in parts.iter().enumerate() {
-                    let expected_reg = start_reg + i as u16;
-                    let result_reg = self.compile_expr(part);
-                    
-                    if result_reg != expected_reg {
-                        // Move result to the expected slot
-                        self.instructions.push(OpCode::Move(expected_reg, result_reg));
-                    }
-                    // Ensure reg_top is past this part
-                    if self.reg_top <= expected_reg {
-                        self.reg_top = expected_reg + 1;
-                    }
-                }
-                
+                let start_reg = self.compile_args(parts);
                 let dest = self.alloc_reg();
                 self.instructions.push(OpCode::Concat(dest, start_reg, parts.len()));
                 self.reg_top = dest + 1;
@@ -356,10 +342,7 @@ impl Compiler {
                  dest
             }
             Expr::EnumVariant { enum_name, variant_name, args } => {
-                let start_reg = self.reg_top;
-                for arg in args {
-                    self.compile_expr(arg);
-                }
+                let start_reg = self.compile_args(args);
                 
                 let actual_enum_name = if let Some(e) = enum_name {
                     e.clone()
@@ -399,20 +382,14 @@ impl Compiler {
                 dest
             }
             Expr::Array(elements) => {
-                let start_reg = self.reg_top;
-                for element in elements {
-                    self.compile_expr(element);
-                }
+                let start_reg = self.compile_args(elements);
                 let dest = self.alloc_reg();
                 self.instructions.push(OpCode::BuildArray(dest, start_reg, elements.len()));
                 self.reg_top = dest + 1;
                 dest
             }
             Expr::Tuple(elements) => {
-                let start_reg = self.reg_top;
-                for element in elements {
-                    self.compile_expr(element);
-                }
+                let start_reg = self.compile_args(elements);
                 let dest = self.alloc_reg();
                 self.instructions.push(OpCode::BuildTuple(dest, start_reg, elements.len()));
                 self.reg_top = dest + 1;
@@ -470,17 +447,48 @@ impl Compiler {
             }
             Expr::MethodCall(obj_expr, method, args) => {
                 let obj_reg = self.compile_expr(obj_expr);
-                let mut arg_regs = Vec::new();
-                for arg in args {
-                    arg_regs.push(self.compile_expr(arg));
-                }
                 let dest = self.alloc_reg();
+                
+                // State actor and channel methods use dedicated opcodes
                 match method.as_str() {
-                    "read" => self.instructions.push(OpCode::StateRead(dest, obj_reg)),
-                    "write" => self.instructions.push(OpCode::StateWrite(obj_reg, arg_regs[0])),
-                    "update" => self.instructions.push(OpCode::StateUpdate(obj_reg, arg_regs[0])),
-                    "close" => self.instructions.push(OpCode::CloseChannel(obj_reg)),
-                    _ => panic!("Compiler Error: Unknown method '{}'", method),
+                    "read" => {
+                        self.instructions.push(OpCode::StateRead(dest, obj_reg));
+                        self.reg_top = dest + 1;
+                        return dest;
+                    }
+                    "write" => {
+                        let arg_reg = self.compile_expr(&args[0]);
+                        self.instructions.push(OpCode::StateWrite(obj_reg, arg_reg));
+                        self.reg_top = dest + 1;
+                        return dest;
+                    }
+                    "update" => {
+                        let arg_reg = self.compile_expr(&args[0]);
+                        self.instructions.push(OpCode::StateUpdate(obj_reg, arg_reg));
+                        self.reg_top = dest + 1;
+                        return dest;
+                    }
+                    "close" => {
+                        self.instructions.push(OpCode::CloseChannel(obj_reg));
+                        self.reg_top = dest + 1;
+                        return dest;
+                    }
+                    _ => {}
+                }
+                
+                // For all other methods, use the generic CallMethod opcode
+                let arg_start = self.compile_args(args);
+                let method_idx = self.add_constant(Value::String(method.clone()));
+                
+                // Mutating methods need CallMethodMut to write back to the source register
+                let is_mutating = matches!(method.as_str(), 
+                    "push" | "pull" | "slice" | "splice"  // array mutating methods
+                );
+                
+                if is_mutating {
+                    self.instructions.push(OpCode::CallMethodMut(dest, obj_reg, method_idx, arg_start, args.len() as u8));
+                } else {
+                    self.instructions.push(OpCode::CallMethod(dest, obj_reg, method_idx, arg_start, args.len() as u8));
                 }
                 self.reg_top = dest + 1;
                 dest
@@ -490,6 +498,17 @@ impl Compiler {
                 let index_reg = self.compile_expr(index_expr);
                 let dest = self.alloc_reg();
                 self.instructions.push(OpCode::GetIndex(dest, obj_reg, index_reg));
+                self.reg_top = dest + 1;
+                dest
+            }
+            Expr::Unary { op, right } => {
+                let reg = self.compile_expr(right);
+                let dest = self.alloc_reg();
+                match op {
+                    Token::Minus => self.instructions.push(OpCode::Negate(dest, reg)),
+                    Token::Bang => self.instructions.push(OpCode::Not(dest, reg)),
+                    _ => panic!("Compiler Error: Unknown unary operator {:?}", op),
+                }
                 self.reg_top = dest + 1;
                 dest
             }

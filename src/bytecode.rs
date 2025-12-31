@@ -16,6 +16,10 @@ pub enum OpCode {
     LessThan(u16, u16, u16),
     GreaterThan(u16, u16, u16),
 
+    // Unary: (DestReg, SrcReg)
+    Negate(u16, u16),
+    Not(u16, u16),
+
     // Data Movement
     LoadConst(u16, usize),   // (DestReg, ConstantIndex)
     Move(u16, u16),          // (DestReg, SrcReg)
@@ -86,4 +90,12 @@ pub enum OpCode {
     Concat(u16, u16, usize), // (DestReg, StartReg, Count)
     GetIndex(u16, u16, u16), // (DestReg, ObjReg, IndexReg)
     CloseChannel(u16),       // (ChannelReg)
+    
+    // Method Calls on built-in types (arrays, strings, tuples, etc.)
+    // (DestReg, ObjReg, MethodNameConstIdx, ArgStartReg, ArgCount)
+    CallMethod(u16, u16, usize, u16, u8),
+    
+    // Mutating method calls - writes modified object back to ObjReg
+    // (DestReg, ObjReg, MethodNameConstIdx, ArgStartReg, ArgCount)
+    CallMethodMut(u16, u16, usize, u16, u8),
 }

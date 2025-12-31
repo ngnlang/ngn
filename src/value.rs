@@ -317,6 +317,21 @@ impl Number {
         }
     }
 
+    pub fn negate(self) -> Number {
+        match self {
+            Number::I64(x) => Number::I64(-x),
+            Number::I32(x) => Number::I32(-x),
+            Number::I16(x) => Number::I16(-x),
+            Number::I8(x) => Number::I8(-x),
+            Number::U64(x) => Number::I64(-(x as i64)),
+            Number::U32(x) => Number::I32(-(x as i32)),
+            Number::U16(x) => Number::I16(-(x as i16)),
+            Number::U8(x) => Number::I8(-(x as i8)),
+            Number::F64(x) => Number::F64(-x),
+            Number::F32(x) => Number::F32(-x),
+        }
+    }
+
     fn promote_to(self, target_rank: u8) -> Number {
         match (self, target_rank) {
             (Number::I8(v), 6) => Number::I16(v as i16),

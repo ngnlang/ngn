@@ -68,7 +68,7 @@ fn main() {
         
         if !found_main {
             eprintln!("ngn Error: Entry point files must define a fn main() function");
-            eprintln!("  Hint: Wrap your code in 'fn main() { ... }'");
+            eprintln!("  Hint: Wrap your code in 'fn main() {{ ... }}'");
             std::process::exit(1);
         }
     }

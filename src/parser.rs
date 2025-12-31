@@ -141,6 +141,10 @@ pub enum Expr {
     State(Box<Expr>),
     MethodCall(Box<Expr>, String, Vec<Expr>),
     Index(Box<Expr>, Box<Expr>),
+    Unary {
+        op: Token,
+        right: Box<Expr>,
+    },
 }
 
 pub struct Parser {
@@ -669,7 +673,7 @@ impl Parser {
     }
 
     fn parse_power(&mut self) -> Expr {
-        let left = self.parse_primary();
+        let left = self.parse_unary();
 
         if self.current_token == Token::Power {
             self.advance();
@@ -681,6 +685,17 @@ impl Parser {
             };
         }
         left
+    }
+
+    fn parse_unary(&mut self) -> Expr {
+        if self.paren_depth > 0 { self.consume_newlines(); }
+        if self.current_token == Token::Minus || self.current_token == Token::Bang {
+            let op = self.current_token.clone();
+            self.advance();
+            let right = self.parse_unary();
+            return Expr::Unary { op, right: Box::new(right) };
+        }
+        self.parse_primary()
     }
 
     fn parse_primary(&mut self) -> Expr {

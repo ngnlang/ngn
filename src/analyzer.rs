@@ -603,7 +603,184 @@ impl Analyzer {
             }
             Expr::MethodCall(obj_expr, method, args) => {
                 let obj_ty = self.check_expression(obj_expr);
-                match obj_ty {
+                
+                match obj_ty.clone() {
+                    // Array methods
+                    Type::Array(inner) => {
+                        match method.as_str() {
+                            "size" => {
+                                if !args.is_empty() { self.errors.push("Type Error: .size() takes no arguments".to_string()); }
+                                Type::I64
+                            }
+                            "push" => {
+                                if args.is_empty() { 
+                                    self.errors.push("Type Error: .push() requires at least 1 argument".to_string()); 
+                                } else {
+                                    let arg_ty = self.check_expression(&args[0]);
+                                    if !self.types_compatible(&inner, &arg_ty) {
+                                        self.errors.push(format!("Type Error: Cannot push {:?} to array of {:?}", arg_ty, *inner));
+                                    }
+                                    if args.len() > 1 {
+                                        let idx_ty = self.check_expression(&args[1]);
+                                        if !self.types_compatible(&Type::I64, &idx_ty) {
+                                            self.errors.push(format!("Type Error: push() index must be I64, got {:?}", idx_ty));
+                                        }
+                                    }
+                                }
+                                Type::I64 // Returns new size
+                            }
+                            "pull" => {
+                                if args.len() > 1 { self.errors.push("Type Error: .pull() takes at most 1 argument".to_string()); }
+                                if !args.is_empty() {
+                                    let idx_ty = self.check_expression(&args[0]);
+                                    if !self.types_compatible(&Type::I64, &idx_ty) {
+                                        self.errors.push(format!("Type Error: pull() index must be I64, got {:?}", idx_ty));
+                                    }
+                                }
+                                *inner
+                            }
+                            "splice" => {
+                                if args.len() < 1 { 
+                                    self.errors.push("Type Error: .splice() requires an array as the first argument".to_string()); 
+                                } else {
+                                    let items_ty = self.check_expression(&args[0]);
+                                    if !self.types_compatible(&Type::Array(inner.clone()), &items_ty) {
+                                        self.errors.push(format!("Type Error: .splice() first argument must be array of {:?}, got {:?}", *inner, items_ty));
+                                    }
+                                    if args.len() > 1 {
+                                        let idx_ty = self.check_expression(&args[1]);
+                                        if !self.types_compatible(&Type::I64, &idx_ty) {
+                                            self.errors.push(format!("Type Error: splice() index must be I64, got {:?}", idx_ty));
+                                        }
+                                    }
+                                }
+                                Type::I64 // Returns new size
+                            }
+                            "slice" | "copy" => {
+                                // args: start, optional end
+                                for arg in args {
+                                    let arg_ty = self.check_expression(arg);
+                                    if !self.types_compatible(&Type::I64, &arg_ty) {
+                                        self.errors.push(format!("Type Error: {} index must be I64, got {:?}", method, arg_ty));
+                                    }
+                                }
+                                Type::Array(inner)
+                            }
+                            "each" => {
+                                if args.len() != 1 { 
+                                    self.errors.push("Type Error: .each() takes 1 argument".to_string()); 
+                                } else {
+                                    let closure_ty = self.check_expression(&args[0]);
+                                    if let Type::Function { params, .. } = closure_ty {
+                                        if params.is_empty() || !self.types_compatible(&params[0], &inner) {
+                                             self.errors.push(format!("Type Error: .each() closure must accept item of type {:?}", *inner));
+                                        }
+                                    } else {
+                                        self.errors.push("Type Error: .each() expects a closure".to_string());
+                                    }
+                                }
+                                Type::Void
+                            }
+                            _ => {
+                                self.errors.push(format!("Type Error: Unknown array method '{}'", method));
+                                Type::Any
+                            }
+                        }
+                    }
+                    
+                    // String methods
+                    Type::String => {
+                        match method.as_str() {
+                            "length" => {
+                                if !args.is_empty() { self.errors.push("Type Error: .length() takes no arguments".to_string()); }
+                                Type::I64
+                            }
+                            "index" => {
+                                if args.is_empty() { self.errors.push("Type Error: .index() requires at least 1 argument".to_string()); }
+                                for (i, arg) in args.iter().enumerate() {
+                                    let arg_ty = self.check_expression(arg);
+                                    if i == 0 {
+                                        if !self.types_compatible(&Type::String, &arg_ty) {
+                                            self.errors.push(format!("Type Error: index() pattern must be string, got {:?}", arg_ty));
+                                        }
+                                    } else if !self.types_compatible(&Type::I64, &arg_ty) {
+                                        self.errors.push(format!("Type Error: index() start index must be I64, got {:?}", arg_ty));
+                                    }
+                                }
+                                Type::I64
+                            }
+                            "includes" | "starts" | "ends" => {
+                                if args.len() != 1 { self.errors.push(format!("Type Error: .{}() takes 1 argument", method)); }
+                                else {
+                                    let arg_ty = self.check_expression(&args[0]);
+                                    if !self.types_compatible(&Type::String, &arg_ty) {
+                                        self.errors.push(format!("Type Error: .{}() argument must be string", method));
+                                    }
+                                }
+                                Type::Bool
+                            }
+                            "upper" | "lower" | "trim" => {
+                                if !args.is_empty() { self.errors.push(format!("Type Error: .{}() takes no arguments", method)); }
+                                Type::String
+                            }
+                            "replace" => {
+                                if args.len() != 2 { self.errors.push("Type Error: .replace() takes 2 arguments".to_string()); }
+                                for arg in args {
+                                    let arg_ty = self.check_expression(arg);
+                                    if !self.types_compatible(&Type::String, &arg_ty) {
+                                        self.errors.push(format!("Type Error: replace() arguments must be strings, got {:?}", arg_ty));
+                                    }
+                                }
+                                Type::String
+                            }
+                            "repeat" => {
+                                if args.len() != 1 { self.errors.push("Type Error: .repeat() takes 1 argument".to_string()); }
+                                else {
+                                    let arg_ty = self.check_expression(&args[0]);
+                                    if !self.types_compatible(&Type::I64, &arg_ty) {
+                                        self.errors.push(format!("Type Error: repeat() count must be I64, got {:?}", arg_ty));
+                                    }
+                                }
+                                Type::String
+                            }
+                            "copy" | "slice" => {
+                                for arg in args {
+                                    let arg_ty = self.check_expression(arg);
+                                    if !self.types_compatible(&Type::I64, &arg_ty) {
+                                        self.errors.push(format!("Type Error: {} index must be I64, got {:?}", method, arg_ty));
+                                    }
+                                }
+                                Type::String
+                            }
+                            "split" => {
+                                if args.len() > 1 { self.errors.push("Type Error: .split() takes at most 1 argument".to_string()); }
+                                if !args.is_empty() {
+                                    let arg_ty = self.check_expression(&args[0]);
+                                    if !self.types_compatible(&Type::String, &arg_ty) {
+                                        self.errors.push(format!("Type Error: split() delimiter must be string, got {:?}", arg_ty));
+                                    }
+                                }
+                                Type::Array(Box::new(Type::String))
+                            }
+                            _ => {
+                                self.errors.push(format!("Type Error: Unknown string method '{}'", method));
+                                Type::Any
+                            }
+                        }
+                    }
+                    
+                    // Tuple methods
+                    Type::Tuple(_) => {
+                        match method.as_str() {
+                            "size" => Type::I64,
+                            _ => {
+                                self.errors.push(format!("Type Error: Unknown tuple method '{}'", method));
+                                Type::Any
+                            }
+                        }
+                    }
+                    
+                    // State methods
                     Type::State(inner) => {
                         match method.as_str() {
                             "read" => {
@@ -611,8 +788,11 @@ impl Analyzer {
                                 *inner
                             }
                             "write" => {
-                                if args.len() != 1 { self.errors.push("Type Error: .write() takes 1 argument".to_string()); }
-                                else {
+                                if args.len() != 1 { 
+                                    self.errors.push("Type Error: .write() takes 1 argument".to_string()); 
+                                } else {
+                                    // Note: args were already checked at the top of this match
+                                    // Type compatibility check for write value
                                     let arg_ty = self.check_expression(&args[0]);
                                     if !self.types_compatible(&inner, &arg_ty) {
                                         self.errors.push(format!("Type Error: Cannot write {:?} to state of type {:?}", arg_ty, *inner));
@@ -621,8 +801,10 @@ impl Analyzer {
                                 Type::Void
                             }
                             "update" => {
-                                if args.len() != 1 { self.errors.push("Type Error: .update() takes 1 argument".to_string()); }
-                                else {
+                                if args.len() != 1 { 
+                                    self.errors.push("Type Error: .update() takes 1 argument".to_string()); 
+                                } else {
+                                    // Type check: closure should be |T| -> T
                                     let closure_ty = self.check_expression(&args[0]);
                                     if let Type::Function { params, return_type } = closure_ty {
                                         if params.len() != 1 || !self.types_compatible(&params[0], &inner) || !self.types_compatible(&inner, &return_type) {
@@ -640,6 +822,8 @@ impl Analyzer {
                             }
                         }
                     }
+                    
+                    // Channel methods
                     Type::Channel(_) => {
                         match method.as_str() {
                             "close" => {
@@ -652,6 +836,7 @@ impl Analyzer {
                             }
                         }
                     }
+                    
                     _ => {
                          self.errors.push(format!("Type Error: Methods not supported for type {:?}", obj_ty));
                          Type::Any
@@ -672,6 +857,27 @@ impl Analyzer {
                     Type::Any => Type::Any,
                     _ => {
                         self.errors.push(format!("Type Error: Type {:?} does not support indexing", obj_ty));
+                        Type::Any
+                    }
+                }
+            }
+            Expr::Unary { op, right } => {
+                let right_ty = self.check_expression(right);
+                match op {
+                    Token::Minus => {
+                        if !self.is_numeric(&right_ty) {
+                            self.errors.push(format!("Type Error: Cannot negate type {:?}", right_ty));
+                        }
+                        right_ty
+                    }
+                    Token::Bang => {
+                        if !self.types_compatible(&Type::Bool, &right_ty) {
+                            self.errors.push(format!("Type Error: Cannot apply ! to type {:?}", right_ty));
+                        }
+                        Type::Bool
+                    }
+                    _ => {
+                        self.errors.push(format!("Type Error: Unknown unary operator {:?}", op));
                         Type::Any
                     }
                 }
