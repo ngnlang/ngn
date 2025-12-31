@@ -421,6 +421,52 @@ impl Compiler {
                 self.reg_top = dest + 1;
                 dest
             }
+            Expr::ReceiveCount(chan_expr, count_expr) => {
+                let chan_reg = self.compile_expr(chan_expr);
+                let count_reg = self.compile_expr(count_expr);
+                let dest = self.alloc_reg();
+                self.instructions.push(OpCode::ReceiveCount(dest, chan_reg, count_reg));
+                self.reg_top = dest + 1;
+                dest
+            }
+            Expr::ReceiveMaybe(chan_expr) => {
+                let chan_reg = self.compile_expr(chan_expr);
+                let dest = self.alloc_reg();
+                self.instructions.push(OpCode::ReceiveMaybe(dest, chan_reg));
+                self.reg_top = dest + 1;
+                dest
+            }
+            Expr::State(initial_expr) => {
+                let initial_reg = self.compile_expr(initial_expr);
+                let dest = self.alloc_reg();
+                self.instructions.push(OpCode::CreateState(dest, initial_reg));
+                self.reg_top = dest + 1;
+                dest
+            }
+            Expr::MethodCall(obj_expr, method, args) => {
+                let obj_reg = self.compile_expr(obj_expr);
+                let mut arg_regs = Vec::new();
+                for arg in args {
+                    arg_regs.push(self.compile_expr(arg));
+                }
+                let dest = self.alloc_reg();
+                match method.as_str() {
+                    "read" => self.instructions.push(OpCode::StateRead(dest, obj_reg)),
+                    "write" => self.instructions.push(OpCode::StateWrite(obj_reg, arg_regs[0])),
+                    "update" => self.instructions.push(OpCode::StateUpdate(obj_reg, arg_regs[0])),
+                    _ => panic!("Compiler Error: Unknown method '{}'", method),
+                }
+                self.reg_top = dest + 1;
+                dest
+            }
+            Expr::Index(obj_expr, index_expr) => {
+                let obj_reg = self.compile_expr(obj_expr);
+                let index_reg = self.compile_expr(index_expr);
+                let dest = self.alloc_reg();
+                self.instructions.push(OpCode::GetIndex(dest, obj_reg, index_reg));
+                self.reg_top = dest + 1;
+                dest
+            }
         }
     }
 

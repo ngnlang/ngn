@@ -65,6 +65,12 @@ pub enum OpCode {
     Send(u16, u16),       // (ChannelReg, ValueReg)
     Receive(u16, u16),    // (DestReg, ChannelReg)
     CreateChannel(u16, u16), // (DestReg, Capacity)
+    CreateState(u16, u16),   // (DestReg, InitialValueReg)
+    StateRead(u16, u16),     // (DestReg, StateReg)
+    StateWrite(u16, u16),    // (StateReg, ValueReg)
+    StateUpdate(u16, u16),   // (StateReg, ClosureReg)
+    ReceiveCount(u16, u16, u16), // (DestReg, ChannelReg, CountReg)
+    ReceiveMaybe(u16, u16),     // (DestReg, ChannelReg)
 
     // Builtins/Misc
     Print(u16),
@@ -78,4 +84,5 @@ pub enum OpCode {
     Pop,
     Dup,
     Concat(u16, u16, usize), // (DestReg, StartReg, Count)
+    GetIndex(u16, u16, u16), // (DestReg, ObjReg, IndexReg)
 }

@@ -12,6 +12,7 @@ pub struct Analyzer {
     scopes: Vec<HashMap<String, Symbol>>,
     errors: Vec<String>,
     current_return_type: Option<Type>,
+    infer_stack: Vec<Option<Type>>,
     enums: HashMap<String, EnumDef>,
 }
 
@@ -74,6 +75,7 @@ impl Analyzer {
             scopes: vec![global_scope],
             errors: Vec::new(),
             current_return_type: None,
+            infer_stack: Vec::new(),
             enums: HashMap::new(),
         };
 
@@ -208,13 +210,13 @@ impl Analyzer {
                 let actual_return_type = return_type.clone().unwrap_or(Type::Void);
                 
                 self.define(name, Type::Function {
-                    params: param_types,
+                    params: param_types.clone(),
                     return_type: Box::new(actual_return_type.clone()),
                 }, false);
 
                 let prev_return = self.current_return_type.clone();
                 self.current_return_type = Some(actual_return_type);
-                
+
                 self.enter_scope();
                 for param in params {
                     if let Some(ty) = &param.ty {
@@ -301,6 +303,18 @@ impl Analyzer {
                     if !self.types_compatible(expected, &actual) {
                         self.errors.push(format!("Type Error: Return type mismatch. Expected {:?}, got {:?}", expected, actual));
                     }
+                } else if let Some(last_inferred) = self.infer_stack.last_mut() {
+                    match last_inferred {
+                        Some(prev) => {
+                            let prev_cloned = prev.clone();
+                            if !self.types_compatible(&prev_cloned, &actual) {
+                                self.errors.push(format!("Type Error: Return type inconsistency. Previously inferred {:?}, but now got {:?}", prev_cloned, actual));
+                            }
+                        }
+                        None => {
+                            *last_inferred = Some(actual);
+                        }
+                    }
                 }
                 Type::Void
             }
@@ -334,24 +348,27 @@ impl Analyzer {
                     param_types.push(ty);
                 }
                 
-                let expected_ret = if let Some(rt) = return_type {
-                    rt.clone()
-                } else {
-                    self.errors.push(format!("Type Error: Closure missing return type"));
-                    Type::Void
-                };
-                
                 let previous_return_type = self.current_return_type.clone();
-                self.current_return_type = Some(expected_ret.clone());
+                self.current_return_type = return_type.clone();
+                
+                if return_type.is_none() {
+                    self.infer_stack.push(None);
+                }
 
                 self.check_statement(body);
                 
+                let actual_ret = if return_type.is_none() {
+                    self.infer_stack.pop().unwrap().unwrap_or(Type::Void)
+                } else {
+                    return_type.clone().unwrap()
+                };
+
                 self.current_return_type = previous_return_type;
                 self.exit_scope();
                 
                 Type::Function {
                     params: param_types,
-                    return_type: Box::new(expected_ret),
+                    return_type: Box::new(actual_ret),
                 }
             }
             Expr::Variable(name) => {
@@ -537,6 +554,93 @@ impl Analyzer {
                 }
                 Type::Channel(Box::new(inner_ty.clone().unwrap_or(Type::Any)))
             }
+            Expr::ReceiveCount(chan_expr, count_expr) => {
+                let chan_ty = self.check_expression(chan_expr);
+                let _count_ty = self.check_expression(count_expr);
+                // TODO: verify count is numeric
+                if let Type::Channel(inner) = chan_ty {
+                    Type::Array(inner)
+                } else {
+                    self.errors.push(format!("Type Error: Cannot receive from non-channel type {:?}", chan_ty));
+                    Type::Any
+                }
+            }
+            Expr::ReceiveMaybe(chan_expr) => {
+                let chan_ty = self.check_expression(chan_expr);
+                if let Type::Channel(_) = chan_ty {
+                    Type::Enum("Maybe".to_string())
+                } else {
+                    self.errors.push(format!("Type Error: Cannot receive from non-channel type {:?}", chan_ty));
+                    Type::Enum("Maybe".to_string())
+                }
+            }
+            Expr::State(initial_expr) => {
+                let initial_ty = self.check_expression(initial_expr);
+                Type::State(Box::new(initial_ty))
+            }
+            Expr::MethodCall(obj_expr, method, args) => {
+                let obj_ty = self.check_expression(obj_expr);
+                match obj_ty {
+                    Type::State(inner) => {
+                        match method.as_str() {
+                            "read" => {
+                                if !args.is_empty() { self.errors.push("Type Error: .read() takes no arguments".to_string()); }
+                                *inner
+                            }
+                            "write" => {
+                                if args.len() != 1 { self.errors.push("Type Error: .write() takes 1 argument".to_string()); }
+                                else {
+                                    let arg_ty = self.check_expression(&args[0]);
+                                    if !self.types_compatible(&inner, &arg_ty) {
+                                        self.errors.push(format!("Type Error: Cannot write {:?} to state of type {:?}", arg_ty, *inner));
+                                    }
+                                }
+                                Type::Void
+                            }
+                            "update" => {
+                                if args.len() != 1 { self.errors.push("Type Error: .update() takes 1 argument".to_string()); }
+                                else {
+                                    let closure_ty = self.check_expression(&args[0]);
+                                    if let Type::Function { params, return_type } = closure_ty {
+                                        if params.len() != 1 || !self.types_compatible(&params[0], &inner) || !self.types_compatible(&inner, &return_type) {
+                                            self.errors.push(format!("Type Error: .update() expects closure |{:?}| -> {:?}", *inner, *inner));
+                                        }
+                                    } else {
+                                        self.errors.push("Type Error: .update() expects a closure".to_string());
+                                    }
+                                }
+                                Type::Void
+                            }
+                            _ => {
+                                self.errors.push(format!("Type Error: Unknown method '{}' for State type", method));
+                                Type::Any
+                            }
+                        }
+                    }
+                    _ => {
+                         self.errors.push(format!("Type Error: Methods not supported for type {:?}", obj_ty));
+                         Type::Any
+                    }
+                }
+            }
+            Expr::Index(obj, index) => {
+                let obj_ty = self.check_expression(obj);
+                let index_ty = self.check_expression(index);
+                
+                if !self.types_compatible(&Type::I64, &index_ty) {
+                    self.errors.push(format!("Type Error: Array index must be I64, got {:?}", index_ty));
+                }
+                
+                match obj_ty {
+                    Type::Array(inner) => *inner,
+                    Type::String => Type::String,
+                    Type::Any => Type::Any,
+                    _ => {
+                        self.errors.push(format!("Type Error: Type {:?} does not support indexing", obj_ty));
+                        Type::Any
+                    }
+                }
+            }
         }
     }
 
@@ -566,6 +670,12 @@ impl Analyzer {
 
         if let Type::Channel(expected_inner) = expected {
             if let Type::Channel(actual_inner) = actual {
+                return self.types_compatible(expected_inner, actual_inner);
+            }
+        }
+
+        if let Type::State(expected_inner) = expected {
+            if let Type::State(actual_inner) = actual {
                 return self.types_compatible(expected_inner, actual_inner);
             }
         }

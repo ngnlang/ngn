@@ -6,7 +6,7 @@ pub enum Token {
     Import, From, As, Enum,
 
 	// Built-ins
-	Print, Echo, Sleep, Thread, Channel,
+	Print, Echo, Sleep, Thread, Channel, State,
     
     // Identifiers and Literals
     Identifier(String),
@@ -25,7 +25,7 @@ pub enum Token {
     Colon, Comma, DoubleColon,
 	LessThan, GreaterThan, LessThanEqual, GreaterThanEqual,
     PlusEqual, MinusEqual, StarEqual, SlashEqual, PercentEqual, StarStarEqual, CaretEqual,
-    FatArrow, LArrow, Pipe,
+    FatArrow, LArrow, Pipe, Question, Period,
     
     // Formatting
     Newline,
@@ -248,6 +248,8 @@ impl Lexer {
             '[' => Token::LBracket,
             ']' => Token::RBracket,
             ',' => Token::Comma,
+            '?' => Token::Question,
+            '.' => Token::Period,
             '_' => Token::Underscore,
             _ => panic!("Unknown character: {}", ch),
         };
@@ -303,6 +305,7 @@ impl Lexer {
 			"as" => Token::As,
             "thread" => Token::Thread,
             "channel" => Token::Channel,
+            "state" => Token::State,
 			"enum" => Token::Enum,
 			"true" => Token::Bool(true),
     		"false" => Token::Bool(false),

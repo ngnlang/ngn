@@ -17,6 +17,7 @@ pub enum Type {
     Any,
     Enum(String),
     Channel(Box<Type>),
+    State(Box<Type>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -134,7 +135,12 @@ pub enum Expr {
     Thread(Box<Expr>),
     Send(Box<Expr>, Box<Expr>),
     Receive(Box<Expr>),
+    ReceiveCount(Box<Expr>, Box<Expr>),
+    ReceiveMaybe(Box<Expr>),
     Channel(Option<Type>),
+    State(Box<Expr>),
+    MethodCall(Box<Expr>, String, Vec<Expr>),
+    Index(Box<Expr>, Box<Expr>),
 }
 
 pub struct Parser {
@@ -700,8 +706,29 @@ impl Parser {
             }
             Token::LArrow => {
                 self.advance();
-                let chan = self.parse_expression();
-                Expr::Receive(Box::new(chan))
+                
+                // Case 1: <-? chan (MaybeReceive)
+                if self.current_token == Token::Question {
+                    self.advance();
+                    let chan = self.parse_expression();
+                    Expr::ReceiveMaybe(Box::new(chan))
+                } else {
+                    // We need to distinguish between <- chan and <- count chan
+                    // In ngn2's current parser, we can try to parse one expression
+                    let first = self.parse_expression();
+                    
+                    // If the NEXT token can start a channel expression (like an identifier, bracket, etc.)
+                    // then 'first' was likely a count.
+                    // This is slightly ambiguous but let's follow the simple heuristic: 
+                    // if it's a number literal, it's a count if followed by another expression.
+                    
+                    if self.can_start_expression() {
+                        let chan = self.parse_expression();
+                        Expr::ReceiveCount(Box::new(chan), Box::new(first))
+                    } else {
+                        Expr::Receive(Box::new(first))
+                    }
+                }
             }
             Token::Channel => {
                 self.advance();
@@ -715,27 +742,75 @@ impl Parser {
                 };
                 Expr::Channel(ty)
             }
+            Token::State => {
+                self.advance();
+                self.expect(Token::LParen);
+                let initial = self.parse_expression();
+                self.expect(Token::RParen);
+                Expr::State(Box::new(initial))
+            }
             _ => panic!("Expected expression, found {:?}", self.current_token),
         };
 
-        if self.current_token == Token::LParen {
-            self.advance(); // consume '('
-            let mut args = Vec::new();
-            while self.current_token != Token::RParen {
-                args.push(self.parse_expression());
-                if self.current_token == Token::Comma { self.advance(); }
-            }
-            self.expect(Token::RParen);
-            
-            if let Expr::Variable(name) = expr {
-                expr = Expr::Call { name, args };
-            } else if let Expr::EnumVariant { enum_name, variant_name, .. } = expr {
-                expr = Expr::EnumVariant { enum_name, variant_name, args };
+        loop {
+            match self.current_token {
+                Token::LParen => {
+                    self.advance(); // consume '('
+                    let mut args = Vec::new();
+                    while self.current_token != Token::RParen {
+                        args.push(self.parse_expression());
+                        if self.current_token == Token::Comma { self.advance(); }
+                    }
+                    self.expect(Token::RParen);
+                    
+                    if let Expr::Variable(name) = expr {
+                        expr = Expr::Call { name, args };
+                    } else if let Expr::EnumVariant { enum_name, variant_name, .. } = expr {
+                        expr = Expr::EnumVariant { enum_name, variant_name, args };
+                    } else {
+                        panic!("Syntax Error: Current expression {:?} cannot be called", expr);
+                    }
+                }
+                Token::Period => {
+                    self.advance(); // consume '.'
+                    let method_name = self.expect_identifier();
+                    
+                    // Check for method call: .method(args)
+                    if self.current_token == Token::LParen {
+                        self.advance();
+                        let mut args = Vec::new();
+                        while self.current_token != Token::RParen {
+                            args.push(self.parse_expression());
+                            if self.current_token == Token::Comma { self.advance(); }
+                        }
+                        self.expect(Token::RParen);
+                        expr = Expr::MethodCall(Box::new(expr), method_name, args);
+                    } else {
+                        panic!("Field access not implemented yet, expected '(' for method call after '.'");
+                    }
+                }
+                Token::LBracket => {
+                    self.advance(); // consume '['
+                    let index_expr = self.parse_expression();
+                    self.expect(Token::RBracket);
+                    expr = Expr::Index(Box::new(expr), Box::new(index_expr));
+                }
+                _ => break,
             }
         }
 
         expr
     }
+    fn can_start_expression(&mut self) -> bool {
+        matches!(
+            self.current_token,
+            Token::Identifier(_) | Token::Number(_) | Token::Float(_) | 
+            Token::StringStart | Token::LParen | Token::LBracket | 
+            Token::Thread | Token::LArrow | Token::Channel | Token::State |
+            Token::Bool(_) | Token::Enum | Token::Underscore
+        )
+    }
+
     fn parse_interpolated_string(&mut self) -> Expr {
         self.expect(Token::StringStart);
         let mut parts = Vec::new();
@@ -1204,15 +1279,14 @@ impl Parser {
             None
         };
 
-        // Parse body - expect block
-        let body = if self.current_token == Token::LBrace {
-             self.parse_block()
+        // Parse body - expect block or expression
+        let body_stmt = if self.current_token == Token::LBrace {
+             Box::new(Statement::Block(self.parse_block()))
         } else {
-             panic!("Closure body must be a block {{ ... }}");
+             // Single expression implicit return
+             let expr = self.parse_expression();
+             Box::new(Statement::Return(Some(expr)))
         };
-
-        // Coerce Vec<Statement> (Block) into Box<Statement::Block>
-        let body_stmt = Box::new(Statement::Block(body));
 
         Expr::Closure {
             params,

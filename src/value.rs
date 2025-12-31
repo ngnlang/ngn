@@ -429,6 +429,7 @@ pub enum Value {
         variant_name: String,
         data: Option<Box<Value>>,
     },
+    State(Arc<Mutex<Value>>),
     Void,
 }
 
@@ -591,6 +592,10 @@ impl fmt::Display for Value {
             }
             Value::Closure(_) => write!(f, "<closure>"),
             Value::Channel(c) => write!(f, "<channel {}>", c.name),
+            Value::State(s) => {
+                let val = s.lock().unwrap();
+                write!(f, "{}", *val)
+            }
             Value::Void => write!(f, "void"),
         }
     }
