@@ -343,7 +343,6 @@ impl Analyzer {
                 Type::Void
             }
             _ => Type::Void,
-
         }
     }
 

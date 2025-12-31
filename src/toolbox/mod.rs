@@ -27,7 +27,6 @@ impl Toolbox {
         
         Self { modules }
     }
-
     
     /// Get a specific module: "math" from "tbx::math"
     pub fn get_module(&self, name: &str) -> Option<&ToolboxModule> {
