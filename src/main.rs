@@ -46,6 +46,33 @@ fn main() {
     let source = fs::read_to_string(filename)
         .expect(&format!("Could not read file: {}", filename));
 
+    // Pre-check: Ensure fn main() exists before full parsing
+    // This gives a clearer error than "const can only be used inside functions"
+    {
+        let mut check_lexer = Lexer::new(&source);
+        let mut found_main = false;
+        let mut current = check_lexer.next_token();
+        
+        while current != Token::EOF {
+            if current == Token::Fn {
+                current = check_lexer.next_token();
+                if let Token::Identifier(name) = &current {
+                    if name == "main" {
+                        found_main = true;
+                        break;
+                    }
+                }
+            }
+            current = check_lexer.next_token();
+        }
+        
+        if !found_main {
+            eprintln!("ngn Error: Entry point files must define a fn main() function");
+            eprintln!("  Hint: Wrap your code in 'fn main() { ... }'");
+            std::process::exit(1);
+        }
+    }
+
     let lexer = Lexer::new(&source);
     let mut parser = Parser::new(lexer);
     let mut compiler = Compiler::new(None);
