@@ -54,7 +54,7 @@ fn run_benchmark(path: &Path) {
 
     // 3. Compile
     let start_compile = Instant::now();
-    let mut compiler = Compiler::new();
+    let mut compiler = Compiler::new(None);
     compiler.inject_builtins();
     
     // Register globals
