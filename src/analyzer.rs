@@ -100,7 +100,6 @@ impl Analyzer {
                 let ret_ty = if let Some(ty) = return_type {
                     ty.clone()
                 } else {
-                    self.errors.push(format!("Type Error: Missing return type annotation for function '{}'. Use ': void' for functions that return nothing.", name));
                     Type::Void
                 };
                 
