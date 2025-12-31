@@ -73,9 +73,14 @@ fn main() {
     // 2. PASS ONE: Register all function names in the symbol table
     // (We don't compile them yet, just reserve their slots)
     for stmt in &statements {
-        if let Statement::Function { name, .. } = stmt {
+        if let Statement::Function { name, params, .. } = stmt {
             let var_idx = compiler.next_index;
             compiler.global_table.insert(name.clone(), var_idx);
+            
+            // Register function signature for ownership checks
+            let ownership: Vec<bool> = params.iter().map(|p| p.is_owned).collect();
+            compiler.signatures.insert(name.clone(), ownership);
+
             compiler.next_index += 1;
         }
     }

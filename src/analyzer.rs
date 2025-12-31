@@ -182,8 +182,23 @@ impl Analyzer {
                 Type::Void
             }
             Statement::Expression(expr) => self.check_expression(expr),
-            Statement::Function { name: _, params, body, return_type, .. } => {
+            Statement::Function { name, params, body, return_type, .. } => {
+                // Register local function in outer scope first
+                let mut param_types = Vec::new();
+                for p in params {
+                    if let Some(ty) = &p.ty {
+                        param_types.push(ty.clone());
+                    } else {
+                        param_types.push(Type::Any);
+                    }
+                }
                 let actual_return_type = return_type.clone().unwrap_or(Type::Void);
+                
+                self.define(name, Type::Function {
+                    params: param_types,
+                    return_type: Box::new(actual_return_type.clone()),
+                }, false);
+
                 let prev_return = self.current_return_type.clone();
                 self.current_return_type = Some(actual_return_type);
                 

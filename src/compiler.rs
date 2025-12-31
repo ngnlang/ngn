@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use crate::bytecode::OpCode;
 use crate::lexer::Token;
@@ -19,6 +19,8 @@ pub struct Compiler {
     pub next_body_patches: Vec<Vec<usize>>,
     pub is_global: bool,
     pub enums: HashMap<String, EnumDef>,
+    pub signatures: HashMap<String, Vec<bool>>,
+    pub moved_locals: HashSet<String>,
 }
 
 impl Compiler {
@@ -37,6 +39,8 @@ impl Compiler {
             next_body_patches: Vec::new(),
             is_global: true,
             enums: HashMap::new(),
+            signatures: HashMap::new(),
+            moved_locals: HashSet::new(),
         }
     }
 
@@ -127,6 +131,19 @@ impl Compiler {
                 }
 
                 let dest = self.alloc_reg();
+
+                // Ownership Check
+                if let Some(sig) = self.signatures.get(name) {
+                    for (i, arg_expr) in args.iter().enumerate() {
+                        if i < sig.len() && sig[i] {
+                             // This param is OWNED. Check if we passed a variable.
+                             if let Expr::Variable(var_name) = arg_expr {
+                                 self.moved_locals.insert(var_name.clone());
+                             }
+                        }
+                    }
+                }
+
                 if let Some(&idx) = self.symbol_table.get(name) {
                     // Local function: load from local register into a temp, then call
                     let func_reg = self.alloc_reg();
@@ -189,6 +206,9 @@ impl Compiler {
                 dest
             }
             Expr::Variable(name) => {
+                if self.moved_locals.contains(name) {
+                    panic!("Compiler Error: Use of moved variable '{}'", name);
+                }
                 if let Some(&idx) = self.symbol_table.get(name) {
                     idx as u16
                 } else if let Some(enum_name) = self.enums.values()
@@ -322,6 +342,7 @@ impl Compiler {
                     sub_compiler.global_table.insert(n.clone(), idx);
                 }
                 sub_compiler.enums = self.enums.clone();
+                sub_compiler.signatures = self.signatures.clone();
 
                 sub_compiler.next_index = 0;
 
@@ -342,6 +363,8 @@ impl Compiler {
                     sub_compiler.compile_statement(stmt);
                 }
                 sub_compiler.instructions.push(OpCode::ReturnVoid);
+                
+                self.signatures.insert(name.clone(), param_ownership.clone());
 
                 let func = Function {
                     name: name.clone(),
@@ -367,7 +390,7 @@ impl Compiler {
                     self.next_index += 1;
                     idx
                 };
-
+                
                 if self.is_global {
                     // For globals, load directly into the global slot
                     self.instructions.push(OpCode::LoadConst(var_idx as u16, const_idx));
@@ -380,6 +403,7 @@ impl Compiler {
                     self.instructions.push(OpCode::LoadConst(reg, const_idx));
                     self.instructions.push(OpCode::DefVar(var_idx, false));
                     self.instructions.push(OpCode::Move(var_idx as u16, reg));
+                    self.temp_start = self.next_index as u16;
                     self.reg_top = self.temp_start;
                 }
             }

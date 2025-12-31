@@ -188,18 +188,19 @@ impl Parser {
         let mut params = Vec::new();
 
         while self.current_token != Token::RParen {
-            let mut is_owned = false;
-            
-            if self.current_token == Token::LessThan {
-                is_owned = true;
-                self.advance();
-            }
-
             let param_name = self.expect_identifier();
             
             let mut ty = None;
+            let mut is_owned = false;
+
             if self.current_token == Token::Colon {
                 self.advance();
+                
+                if self.current_token == Token::LessThan {
+                    is_owned = true;
+                    self.advance();
+                }
+
                 ty = Some(self.parse_type());
             }
 

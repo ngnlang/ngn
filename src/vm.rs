@@ -52,8 +52,6 @@ impl VM {
         self.stack[idx] = Some(Variable { value: val, is_mutable, reference_count: 0 });
     }
 
-    /* Deleted duplicate current_env */
-
     fn perform_call(&mut self, callable_value: Value, dest_reg: Option<u16>, arg_start: u16, arg_count: u8) -> bool {
         match callable_value {
             Value::Function(func) => {
@@ -294,9 +292,9 @@ impl VM {
                         _ => panic!("Runtime Error: Invalid operands for >"),
                     }
                 }
-                OpCode::Call(dest, func_reg, arg_start, arg_count) => {
-                    let callable = self.get_reg_at(func_reg);
-                    if self.perform_call(callable, Some(dest), arg_start, arg_count) {
+                OpCode::Call(dest_reg, callable_reg, arg_start_reg, arg_count) => {
+                    let callable = self.get_reg_at(callable_reg);
+                    if self.perform_call(callable, Some(dest_reg), arg_start_reg, arg_count) {
                         continue;
                     }
                 }
