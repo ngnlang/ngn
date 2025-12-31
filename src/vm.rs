@@ -1,7 +1,7 @@
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::collections::VecDeque;
-use crate::value::{Value, Number};
+use crate::value::{Value, Number, Channel};
 use crate::bytecode::OpCode;
 
 #[derive(Clone, Debug)]
@@ -33,6 +33,7 @@ pub struct Fiber {
     pub constants: Arc<Vec<Value>>,
     pub current_closure: Option<Box<crate::value::Closure>>,
     pub status: FiberStatus,
+    pub completion_channel: Option<Channel>,
 }
 
 #[derive(Debug, Clone)]
@@ -55,6 +56,7 @@ impl Fiber {
             constants: func.constants.clone(),
             current_closure: Some(closure),
             status: FiberStatus::Running,
+            completion_channel: None,
         };
         // Use invoke_function logic? Or simplified setup for new fiber.
         // A new fiber starts by calling the closure.
@@ -75,13 +77,12 @@ impl Fiber {
             constants: Arc::new(constants),
             current_closure: None,
             status: FiberStatus::Running,
+            completion_channel: None,
         }
     }
 }
 
 pub struct VM {
-    instructions: Arc<Vec<OpCode>>, // Keep for main script init if needed?
-    constants: Arc<Vec<Value>>,     // OR remove, VM::new creates Main Fiber
     globals: Vec<Option<Variable>>,
     fibers: VecDeque<Fiber>,
     current_fiber: Option<Fiber>,
@@ -421,6 +422,9 @@ impl Fiber {
                         *state.lock().unwrap() = result;
                     }
                 } else {
+                    if let Some(chan) = &self.completion_channel {
+                        chan.buffer.lock().unwrap().push_back(result);
+                    }
                     self.status = FiberStatus::Finished;
                     return FiberStatus::Finished;
                 }
@@ -441,6 +445,9 @@ impl Fiber {
                         *state.lock().unwrap() = Value::Void;
                     }
                 } else {
+                    if let Some(chan) = &self.completion_channel {
+                        chan.buffer.lock().unwrap().push_back(Value::Void);
+                    }
                     self.status = FiberStatus::Finished;
                     return FiberStatus::Finished;
                 }
@@ -599,8 +606,17 @@ impl Fiber {
             OpCode::Spawn(dest, closure_reg) => {
                 let val = self.get_reg_at(closure_reg);
                 if let Value::Closure(closure) = val {
-                    let new_fiber = Fiber::new(closure);
-                    self.set_reg_at(dest, Value::Void); // Return Void for now
+                    let mut new_fiber = Fiber::new(closure);
+                    
+                    // Create completion channel
+                    let chan = Channel {
+                        name: "thread_result".to_string(),
+                        buffer: Arc::new(Mutex::new(VecDeque::new())),
+                        capacity: 1,
+                    };
+                    new_fiber.completion_channel = Some(chan.clone());
+                    
+                    self.set_reg_at(dest, Value::Channel(chan));
                     return FiberStatus::Spawning(Box::new(new_fiber));
                 } else {
                     panic!("Runtime Error: Spawn expects a closure");
@@ -746,8 +762,6 @@ impl VM {
         let main_fiber = Fiber::new_main(instructions, constants);
 
         Self {
-            instructions: Arc::new(Vec::new()), // Dummy
-            constants: Arc::new(Vec::new()),     // Dummy
             globals,
             fibers: VecDeque::new(),
             current_fiber: Some(main_fiber),
