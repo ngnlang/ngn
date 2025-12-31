@@ -457,6 +457,21 @@ impl Parser {
                     }
                 }
             }
+            Token::Fn => {
+                self.advance(); // consume 'fn'
+                self.parse_fn_type()
+            }
+            Token::Channel => {
+                self.advance(); // consume 'channel'
+                if self.current_token == Token::LessThan {
+                    self.advance(); // consume '<'
+                    let inner = self.parse_type();
+                    self.expect(Token::GreaterThan);
+                    Type::Channel(Box::new(inner))
+                } else {
+                    panic!("Syntax Error: channel type requires a type argument, e.g. channel<i64>");
+                }
+            }
             Token::LParen => {
                 self.advance();
                 let mut inner_types = Vec::new();
@@ -470,6 +485,48 @@ impl Parser {
                 Type::Tuple(inner_types)
             }
             _ => panic!("Syntax Error: Expected a type, but found {:?}", self.current_token),
+        }
+    }
+
+    /// Parse function type generics: fn, fn<T>, or fn<T, E, ...>
+    /// - fn (bare) -> Function { params: [], return_type: Void }
+    /// - fn<T> -> Function { params: [], return_type: T }
+    /// - fn<T, E> -> Function { params: [T], return_type: E }
+    /// - fn<T, E, R> -> Function { params: [T, E], return_type: R }
+    fn parse_fn_type(&mut self) -> Type {
+        if self.current_token != Token::LessThan {
+            // Bare `fn` with no type info
+            return Type::Function {
+                params: vec![],
+                return_type: Box::new(Type::Void),
+            };
+        }
+
+        self.advance(); // consume '<'
+
+        let mut type_args = Vec::new();
+        type_args.push(self.parse_type());
+
+        while self.current_token == Token::Comma {
+            self.advance(); // consume ','
+            type_args.push(self.parse_type());
+        }
+
+        self.expect(Token::GreaterThan);
+
+        if type_args.len() == 1 {
+            // fn<return_type> means () -> return_type
+            Type::Function {
+                params: vec![],
+                return_type: Box::new(type_args.remove(0)),
+            }
+        } else {
+            // fn<arg1, arg2, ..., return_type> - last is return, rest are params
+            let return_type = type_args.pop().unwrap();
+            Type::Function {
+                params: type_args,
+                return_type: Box::new(return_type),
+            }
         }
     }
 
