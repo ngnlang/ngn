@@ -177,6 +177,20 @@ impl Analyzer {
                 } else {
                     inferred
                 };
+
+                if let Type::Channel(_) = &ty {
+                    if *is_mutable {
+                        self.errors.push(format!("Type Error: Channel '{}' must be declared as 'const' or 'static', not 'var'.", name));
+                    }
+                }
+
+                // Closure
+                if let Type::Function { .. } = &ty {
+                    if *is_mutable {
+                        self.errors.push(format!("Type Error: Closure '{}' must be declared as 'const' or 'static', not 'var'.", name));
+                    }
+                }
+
                 self.define(name, ty, *is_mutable);
                 Type::Void
             }
@@ -307,6 +321,39 @@ impl Analyzer {
                 Type::String
             }
             Expr::Bool(_) => Type::Bool,
+            Expr::Closure { params, body, return_type } => {
+                self.enter_scope();
+                let mut param_types = Vec::new();
+                for param in params {
+                    let ty = if let Some(t) = &param.ty {
+                         t.clone()
+                    } else {
+                         Type::Any 
+                    };
+                    self.define(&param.name, ty.clone(), false);
+                    param_types.push(ty);
+                }
+                
+                let expected_ret = if let Some(rt) = return_type {
+                    rt.clone()
+                } else {
+                    self.errors.push(format!("Type Error: Closure missing return type"));
+                    Type::Void
+                };
+                
+                let previous_return_type = self.current_return_type.clone();
+                self.current_return_type = Some(expected_ret.clone());
+
+                self.check_statement(body);
+                
+                self.current_return_type = previous_return_type;
+                self.exit_scope();
+                
+                Type::Function {
+                    params: param_types,
+                    return_type: Box::new(expected_ret),
+                }
+            }
             Expr::Variable(name) => {
                 if let Some(sym) = self.lookup(name) {
                     sym.ty.clone()
@@ -454,6 +501,42 @@ impl Analyzer {
                 let types = elements.iter().map(|e| self.check_expression(e)).collect();
                 Type::Tuple(types)
             }
+            Expr::Thread(expr) => {
+                let closure_ty = self.check_expression(expr);
+                if let Type::Function { return_type, .. } = closure_ty {
+                    Type::Channel(return_type)
+                } else {
+                    self.errors.push("Type Error: thread() expects a closure".to_string());
+                    Type::Void
+                }
+            }
+            Expr::Send(chan_expr, val_expr) => {
+                let chan_ty = self.check_expression(chan_expr);
+                let val_ty = self.check_expression(val_expr);
+                if let Type::Channel(inner) = chan_ty {
+                    if !self.types_compatible(&inner, &val_ty) {
+                        self.errors.push(format!("Type Error: Cannot send {:?} to channel of type {:?}", val_ty, *inner));
+                    }
+                } else {
+                    self.errors.push(format!("Type Error: Cannot send to non-channel type {:?}", chan_ty));
+                }
+                Type::Void
+            }
+            Expr::Receive(chan_expr) => {
+                let chan_ty = self.check_expression(chan_expr);
+                if let Type::Channel(inner) = chan_ty {
+                    *inner
+                } else {
+                    self.errors.push(format!("Type Error: Cannot receive from non-channel type {:?}", chan_ty));
+                    Type::Any
+                }
+            }
+            Expr::Channel(inner_ty) => {
+                if inner_ty.is_none() {
+                    self.errors.push(format!("Type Error: channel() requires a data type suffix (e.g. channel(): i64)"));
+                }
+                Type::Channel(Box::new(inner_ty.clone().unwrap_or(Type::Any)))
+            }
         }
     }
 
@@ -478,6 +561,12 @@ impl Analyzer {
             if let Type::Tuple(actual_elements) = actual {
                 if expected_elements.len() != actual_elements.len() { return false; }
                 return expected_elements.iter().zip(actual_elements.iter()).all(|(e, a)| self.types_compatible(e, a));
+            }
+        }
+
+        if let Type::Channel(expected_inner) = expected {
+            if let Type::Channel(actual_inner) = actual {
+                return self.types_compatible(expected_inner, actual_inner);
             }
         }
 

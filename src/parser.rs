@@ -16,6 +16,7 @@ pub enum Type {
     },
     Any,
     Enum(String),
+    Channel(Box<Type>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -125,6 +126,15 @@ pub enum Expr {
         variant_name: String,
         args: Vec<Expr>,
     },
+    Closure {
+        params: Vec<Parameter>,
+        body: Box<Statement>,
+        return_type: Option<Type>,
+    },
+    Thread(Box<Expr>),
+    Send(Box<Expr>, Box<Expr>),
+    Receive(Box<Expr>),
+    Channel(Option<Type>),
 }
 
 pub struct Parser {
@@ -458,8 +468,18 @@ impl Parser {
     }
 
     pub fn parse_expression(&mut self) -> Expr {
-        // Start with the lowest precedence
-        self.parse_assignment()
+        self.parse_send()
+    }
+
+    fn parse_send(&mut self) -> Expr {
+        let mut left = self.parse_assignment();
+        
+        while self.current_token == Token::LArrow {
+            self.advance();
+            let right = self.parse_assignment();
+            left = Expr::Send(Box::new(left), Box::new(right));
+        }
+        left
     }
 
     fn parse_assignment(&mut self) -> Expr {
@@ -670,6 +690,31 @@ impl Parser {
                 }
             }
             Token::LBracket => self.parse_array_literal(),
+            Token::Pipe => self.parse_closure(),
+            Token::Thread => {
+                self.advance();
+                self.expect(Token::LParen);
+                let expr = self.parse_expression();
+                self.expect(Token::RParen);
+                Expr::Thread(Box::new(expr))
+            }
+            Token::LArrow => {
+                self.advance();
+                let chan = self.parse_expression();
+                Expr::Receive(Box::new(chan))
+            }
+            Token::Channel => {
+                self.advance();
+                self.expect(Token::LParen);
+                self.expect(Token::RParen);
+                let ty = if self.current_token == Token::Colon {
+                    self.advance();
+                    Some(self.parse_type())
+                } else {
+                    None
+                };
+                Expr::Channel(ty)
+            }
             _ => panic!("Expected expression, found {:?}", self.current_token),
         };
 
@@ -1108,6 +1153,71 @@ impl Parser {
                 }
             }
             _ => Pattern::Literal(self.parse_expression()),
+        }
+    }
+
+    fn parse_closure(&mut self) -> Expr {
+        self.advance(); // consume first '|'
+
+        let mut params = Vec::new();
+
+        if self.current_token != Token::Pipe {
+            loop {
+                if self.current_token == Token::Pipe { break; }
+
+                let param_name = self.expect_identifier();
+                
+                let mut ty = None;
+                let mut is_owned = false;
+
+                if self.current_token == Token::Colon {
+                    self.advance();
+                    
+                    if self.current_token == Token::LessThan {
+                        is_owned = true;
+                        self.advance();
+                    }
+                    
+                    ty = Some(self.parse_type());
+                }
+
+                params.push(Parameter {
+                    name: param_name,
+                    is_owned,
+                    ty,
+                });
+
+                if self.current_token == Token::Comma {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+        }
+
+        self.expect(Token::Pipe);
+
+        let return_type = if self.current_token == Token::Colon {
+             self.advance();
+             Some(self.parse_type())
+        } else {
+            None
+        };
+
+        // Parse body - expect block
+        let body = if self.current_token == Token::LBrace {
+             self.parse_block()
+        } else {
+             panic!("Closure body must be a block {{ ... }}");
+        };
+
+        // Coerce Vec<Statement> (Block) into Box<Statement::Block>
+        let body_stmt = Box::new(Statement::Block(body));
+
+        Expr::Closure {
+            params,
+            body: body_stmt,
+            return_type,
         }
     }
 

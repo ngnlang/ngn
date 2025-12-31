@@ -5,7 +5,14 @@ use crate::lexer::Token;
 use crate::parser::{Expr, Statement, Pattern, EnumDef};
 use crate::value::{Function, Number, Value};
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct Upvalue {
+    pub index: u16,
+    pub is_local: bool,
+}
+
 pub struct Compiler {
+    pub enclosing: *mut Compiler,
     pub symbol_table: HashMap<String, usize>,
     pub global_table: HashMap<String, usize>,
     pub next_index: usize,
@@ -21,11 +28,17 @@ pub struct Compiler {
     pub enums: HashMap<String, EnumDef>,
     pub signatures: HashMap<String, Vec<bool>>,
     pub moved_locals: HashSet<String>,
+    pub upvalues: Vec<Upvalue>,
 }
 
 impl Compiler {
-    pub fn new() -> Self {
+    pub fn new(enclosing_opt: Option<&mut Compiler>) -> Self {
+        let enclosing = match enclosing_opt {
+             Some(c) => c as *mut Compiler,
+             None => std::ptr::null_mut(),
+        };
         Self {
+            enclosing,
             symbol_table: HashMap::new(),
             global_table: HashMap::new(),
             next_index: 0,
@@ -41,6 +54,7 @@ impl Compiler {
             enums: HashMap::new(),
             signatures: HashMap::new(),
             moved_locals: HashSet::new(),
+            upvalues: Vec::new(),
         }
     }
 
@@ -55,6 +69,30 @@ impl Compiler {
 
     // Registers are allocated using a simple bump allocator
     // and freed by resetting reg_top to a previous state (temp_start or saved value)
+
+    pub fn resolve_upvalue(&mut self, name: &str) -> Option<u16> {
+        if self.enclosing.is_null() { return None; }
+        let parent = unsafe { &mut *self.enclosing };
+        
+        if let Some(&idx) = parent.symbol_table.get(name) {
+            return Some(self.add_upvalue(idx as u16, true));
+        }
+        
+        if let Some(up_idx) = parent.resolve_upvalue(name) {
+             return Some(self.add_upvalue(up_idx, false));
+        }
+        None
+    }
+
+    fn add_upvalue(&mut self, index: u16, is_local: bool) -> u16 {
+        for (i, up) in self.upvalues.iter().enumerate() {
+            if up.index == index && up.is_local == is_local {
+                return i as u16;
+            }
+        }
+        self.upvalues.push(Upvalue { index, is_local });
+        (self.upvalues.len() - 1) as u16
+    }
 
     pub fn inject_builtins(&mut self) {
         // Built-in Result
@@ -211,6 +249,10 @@ impl Compiler {
                 }
                 if let Some(&idx) = self.symbol_table.get(name) {
                     idx as u16
+                } else if let Some(up_idx) = self.resolve_upvalue(name) {
+                     let dest = self.alloc_reg();
+                     self.instructions.push(OpCode::GetUpvalue(dest, up_idx));
+                     dest
                 } else if let Some(enum_name) = self.enums.values()
                     .find(|e| e.variants.iter().any(|v| &v.name == name))
                     .map(|e| e.name.clone()) {
@@ -225,6 +267,68 @@ impl Compiler {
                 } else {
                     panic!("Compiler Error: Undefined variable '{}'", name);
                 }
+            }
+            Expr::Closure { params, body, return_type: _ } => {
+                 let (func, upvalues) = {
+                    let global_table = self.global_table.clone(); 
+                    let enums = self.enums.clone();
+                    let signatures = self.signatures.clone();
+
+                    let mut sub_compiler = Compiler::new(Some(self));
+                    sub_compiler.is_global = false;
+                    sub_compiler.global_table = global_table;
+                    sub_compiler.enums = enums;
+                    sub_compiler.signatures = signatures;
+                    sub_compiler.next_index = 0;
+                    
+                    let mut param_ownership = Vec::new();
+                    for param in params {
+                        let p_idx = sub_compiler.next_index;
+                        sub_compiler.symbol_table.insert(param.name.clone(), p_idx);
+                        sub_compiler.next_index += 1;
+                        param_ownership.push(param.is_owned);
+                    }
+                    
+                    sub_compiler.temp_start = sub_compiler.next_index as u16;
+                    sub_compiler.reg_top = sub_compiler.temp_start;
+                    sub_compiler.max_reg = sub_compiler.reg_top;
+                    
+                    sub_compiler.compile_statement(*body.clone());
+                    sub_compiler.instructions.push(OpCode::ReturnVoid);
+                    
+                    let captured_upvalues = sub_compiler.upvalues.clone();
+                    
+                    let func = Function {
+                        name: "closure".to_string(),
+                        instructions: Arc::new(sub_compiler.instructions),
+                        constants: Arc::new(sub_compiler.constants),
+                        param_count: params.len(),
+                        param_ownership,
+                        reg_count: sub_compiler.max_reg as usize,
+                    };
+                    
+                    (func, captured_upvalues)
+                 };
+                 
+                 let upvalue_start = self.reg_top;
+
+                 for (i, up) in upvalues.iter().enumerate() {
+                     let target_reg = upvalue_start + i as u16;
+                     if self.reg_top <= target_reg { self.reg_top = target_reg + 1; }
+                     
+                     if up.is_local {
+                         self.instructions.push(OpCode::Move(target_reg, up.index));
+                     } else {
+                         self.instructions.push(OpCode::GetUpvalue(target_reg, up.index));
+                     }
+                 }
+                 
+                 let func_idx = self.add_constant(Value::Function(Box::new(func)));
+                 let dest = self.alloc_reg();
+                 self.instructions.push(OpCode::MakeClosure(dest, func_idx, upvalue_start, upvalues.len() as u8));
+                 self.reg_top = dest + 1;
+                 
+                 dest
             }
             Expr::EnumVariant { enum_name, variant_name, args } => {
                 let start_reg = self.reg_top;
@@ -289,6 +393,34 @@ impl Compiler {
                 self.reg_top = dest + 1;
                 dest
             }
+            Expr::Thread(expr) => {
+                let closure_reg = self.compile_expr(expr);
+                let dest = self.alloc_reg();
+                self.instructions.push(OpCode::Spawn(dest, closure_reg));
+                self.reg_top = dest + 1;
+                dest
+            }
+            Expr::Channel(_) => {
+                let dest = self.alloc_reg();
+                self.instructions.push(OpCode::CreateChannel(dest, 10)); // Default capacity
+                self.reg_top = dest + 1;
+                dest
+            }
+            Expr::Receive(chan_expr) => {
+                let chan_reg = self.compile_expr(chan_expr);
+                let dest = self.alloc_reg();
+                self.instructions.push(OpCode::Receive(dest, chan_reg));
+                self.reg_top = dest + 1;
+                dest
+            }
+            Expr::Send(chan_expr, val_expr) => {
+                let chan_reg = self.compile_expr(chan_expr);
+                let val_reg = self.compile_expr(val_expr);
+                let dest = self.alloc_reg();
+                self.instructions.push(OpCode::Send(chan_reg, val_reg));
+                self.reg_top = dest + 1;
+                dest
+            }
         }
     }
 
@@ -331,7 +463,7 @@ impl Compiler {
                 self.reg_top = self.temp_start;
             }
             Statement::Function { name, params, body, return_type: _ } => {
-                let mut sub_compiler = Compiler::new();
+                let mut sub_compiler = Compiler::new(None);
                 sub_compiler.is_global = false;
 
                 // Inherit all current symbols as GLOBALS for the function
@@ -354,7 +486,6 @@ impl Compiler {
                     param_ownership.push(param.is_owned);
                 }
 
-                // Fix: Ensure reg_top starts AFTER parameters
                 sub_compiler.temp_start = sub_compiler.next_index as u16;
                 sub_compiler.reg_top = sub_compiler.temp_start;
                 sub_compiler.max_reg = sub_compiler.reg_top;

@@ -378,7 +378,16 @@ impl Number {
     }
 }
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::collections::VecDeque;
+
+#[derive(Debug, Clone)]
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct Channel {
+    pub name: String,
+    pub buffer: Arc<Mutex<VecDeque<Value>>>,
+    pub capacity: usize,
+}
 
 #[derive(Debug, Clone)]
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -395,17 +404,26 @@ pub struct Function {
 }
 
 #[derive(Debug, Clone)]
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct Closure {
+    pub function: Box<Function>,
+    pub upvalues: Vec<Value>,
+}
+
+#[derive(Debug, Clone)]
 #[allow(dead_code)]
 #[derive(serde::Serialize, serde::Deserialize)]
 pub enum Value {
     Bool(bool),
     Function(Box<Function>),
+    Closure(Box<Closure>),
     NativeFunction(u16),
     Numeric(Number),
     String(String),
     Reference(usize, usize), // (EnvironmentIndex, VariableIndex)
     Array(Vec<Value>),
     Tuple(Vec<Value>),
+    Channel(Channel),
     Enum {
         enum_name: String,
         variant_name: String,
@@ -571,6 +589,8 @@ impl fmt::Display for Value {
                     write!(f, "{}::{}", enum_name, variant_name)
                 }
             }
+            Value::Closure(_) => write!(f, "<closure>"),
+            Value::Channel(c) => write!(f, "<channel {}>", c.name),
             Value::Void => write!(f, "void"),
         }
     }

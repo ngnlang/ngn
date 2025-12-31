@@ -48,10 +48,10 @@ fn main() {
 
     let lexer = Lexer::new(&source);
     let mut parser = Parser::new(lexer);
-    let mut compiler = Compiler::new();
+    let mut compiler = Compiler::new(None);
     compiler.inject_builtins();
 
-    // 1. COLLECT all statements into a list first
+    // 1. Collect all statements into a list
     let mut statements = Vec::new();
     while parser.current_token != Token::EOF {
         if parser.current_token == Token::Newline {

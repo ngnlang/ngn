@@ -1,6 +1,8 @@
-use crate::{bytecode::OpCode, value::Value};
 use std::io::Write;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::collections::VecDeque;
+use crate::value::Value;
+use crate::bytecode::OpCode;
 
 #[derive(Clone, Debug)]
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -10,126 +12,89 @@ pub struct Variable {
     pub reference_count: usize,
 }
 
+#[derive(Debug, Clone)]
 pub struct CallFrame {
     instructions: Arc<Vec<OpCode>>,
     constants: Arc<Vec<Value>>,
     ip: usize,
     fp: usize,
     dest_reg: Option<u16>,
+    closure: Option<Box<crate::value::Closure>>,
 }
 
-pub struct VM {
-    instructions: Arc<Vec<OpCode>>,
-    constants: Arc<Vec<Value>>,
-    stack: Vec<Option<Variable>>,
-    frames: Vec<CallFrame>,
-    ip: usize,
-    fp: usize,
+#[derive(Debug, Clone)]
+pub struct Fiber {
+    pub stack: Vec<Option<Variable>>,
+    pub frames: Vec<CallFrame>,
+    pub ip: usize,
+    pub fp: usize,
+    pub instructions: Arc<Vec<OpCode>>,
+    pub constants: Arc<Vec<Value>>,
+    pub current_closure: Option<Box<crate::value::Closure>>,
+    pub status: FiberStatus,
 }
- 
-impl VM {
-    pub fn new(instructions: Vec<OpCode>, constants: Vec<Value>, global_slots: usize) -> Self {
-        let mut stack = Vec::with_capacity(1024);
-        stack.resize(global_slots, None);
-        Self {
-            instructions: Arc::new(instructions),
-            constants: Arc::new(constants),
-            stack,
+
+#[derive(Debug, Clone)]
+pub enum FiberStatus {
+    Running,
+    Suspended,
+    Finished,
+    Spawning(Box<Fiber>),
+}
+
+impl Fiber {
+    pub fn new(closure: Box<crate::value::Closure>) -> Self {
+        let func = closure.function.clone();
+        let mut fiber = Self {
+            stack: Vec::with_capacity(1024),
             frames: Vec::with_capacity(64),
             ip: 0,
             fp: 0,
+            instructions: func.instructions.clone(),
+            constants: func.constants.clone(),
+            current_closure: Some(closure),
+            status: FiberStatus::Running,
+        };
+        // Use invoke_function logic? Or simplified setup for new fiber.
+        // A new fiber starts by calling the closure.
+        // Stack resize handled by perform_call logic?
+        // We simulate a call.
+        fiber.stack.resize(func.reg_count, None);
+        fiber
+    }
+    
+    // Main script fiber (no closure)
+    pub fn new_main(instructions: Vec<OpCode>, constants: Vec<Value>) -> Self {
+        Self {
+            stack: Vec::with_capacity(1024),
+            frames: Vec::new(),
+            ip: 0,
+            fp: 0,
+            instructions: Arc::new(instructions),
+            constants: Arc::new(constants),
+            current_closure: None,
+            status: FiberStatus::Running,
         }
     }
-    pub fn init_globals(&mut self, size: usize) {
-        if size > self.stack.len() {
-            self.stack.resize(size, None);
-        }
-    }
-    pub fn define_global(&mut self, idx: usize, val: Value, is_mutable: bool) {
-        if idx >= self.stack.len() {
-            self.stack.resize(idx + 1, None);
-        }
-        self.stack[idx] = Some(Variable { value: val, is_mutable, reference_count: 0 });
-    }
+}
 
-    fn perform_call(&mut self, callable_value: Value, dest_reg: Option<u16>, arg_start: u16, arg_count: u8) -> bool {
-        match callable_value {
-            Value::Function(func) => {
-                let new_fp = self.stack.len();
-                
-                // Ensure room for registers
-                self.stack.resize(new_fp + func.reg_count, None);
-
-                for i in 0..arg_count as usize {
-                    let arg = self.get_reg_at(arg_start + i as u16);
-                    let is_owned = if i < func.param_ownership.len() { func.param_ownership[i] } else { false };
-                    
-                    if is_owned {
-                         // ownership logic simplified: copy value. 
-                         // To strictly enforce move, we'd nullify the source, but register index reuse makes that tricky.
-                         // For performance, we copy.
-                    }
-
-                    self.stack[new_fp + i] = Some(Variable {
-                        value: arg,
-                        is_mutable: true,
-                        reference_count: 0
-                    });
-                }
-
-                // Push CallFrame
-                self.frames.push(CallFrame {
-                    instructions: Arc::clone(&self.instructions),
-                    constants: Arc::clone(&self.constants),
-                    ip: self.ip + 1, // Return to next instruction
-                    fp: self.fp,
-                    dest_reg,
-                });
-
-                // Switch to new function
-                self.instructions = Arc::clone(&func.instructions);
-                self.constants = Arc::clone(&func.constants);
-                self.ip = 0;
-                self.fp = new_fp;
-                true
-            }
-            Value::NativeFunction(id) => {
-                let arg = if arg_count > 0 { self.get_reg_at(arg_start) } else { Value::Void };
-                let resolved = arg;
-
-                let result = match id {
-                    crate::toolbox::NATIVE_ASSERT => {
-                        match resolved {
-                            Value::Bool(true) => {
-                                println!("✅ Assertion passed");
-                                Value::Void
-                            }
-                            Value::Bool(false) => panic!("❌ Assertion failed! Expected true, got false."),
-                            other => panic!("❌ Assertion failed! Expected Boolean, got {}", other),
-                        }
-                    }
-                    crate::toolbox::NATIVE_ABS => {
-                        match resolved {
-                             Value::Numeric(crate::value::Number::I64(n)) => Value::Numeric(crate::value::Number::I64(n.abs())),
-                             Value::Numeric(crate::value::Number::F64(n)) => Value::Numeric(crate::value::Number::F64(n.abs())),
-                             other => panic!("❌ ABS failed! Expected Number, got {}", other),
-                        }
-                    }
-                    _ => panic!("Runtime Error: Unknown Native ID {}", id),
-                };
-                
-                if let Some(dest) = dest_reg {
-                    self.set_reg_at(dest, result);
-                }
-                false
-            }
-            _ => panic!("Runtime Error: Not a callable: {:?}", callable_value),
-        }
-    }
-
+pub struct VM {
+    instructions: Arc<Vec<OpCode>>, // Keep for main script init if needed?
+    constants: Arc<Vec<Value>>,     // OR remove, VM::new creates Main Fiber
+    globals: Vec<Option<Variable>>,
+    fibers: VecDeque<Fiber>,
+    current_fiber: Option<Fiber>,
+}
+ 
+impl Fiber {
     // Updated for Sliding Window: Uses fp + idx
     fn get_reg_at(&self, idx: u16) -> Value {
-        self.stack[self.fp + idx as usize]
+        let abs = self.fp + idx as usize;
+        // If reg is OOB or stack is small, uninitialized => Void
+        if abs >= self.stack.len() {
+             return Value::Void;
+        }
+        self.stack[abs]
             .as_ref()
             .map(|v| v.value.clone())
             .unwrap_or(Value::Void)
@@ -155,28 +120,91 @@ impl VM {
         });
     }
 
-    // Helper for globals (always at bottom of stack)
-    fn get_global(&self, idx: u16) -> Value {
-        self.stack[idx as usize]
-            .as_ref()
-            .map(|v| v.value.clone())
-            .unwrap_or(Value::Void)
+    fn invoke_function(&mut self, func: &crate::value::Function, closure: Option<Box<crate::value::Closure>>, dest_reg: Option<u16>, arg_start: u16, arg_count: u8) -> bool {
+                 let new_fp = self.stack.len();
+                
+                // Ensure room for registers
+                self.stack.resize(new_fp + func.reg_count, None);
+
+                for i in 0..arg_count as usize {
+                    let arg = self.get_reg_at(arg_start + i as u16);
+                    let _is_owned = if i < func.param_ownership.len() { func.param_ownership[i] } else { false };
+                    
+                    self.stack[new_fp + i] = Some(Variable {
+                        value: arg,
+                        is_mutable: true,
+                        reference_count: 0
+                    });
+                }
+
+                // Push CallFrame
+                self.frames.push(CallFrame {
+                    instructions: Arc::clone(&self.instructions),
+                    constants: Arc::clone(&self.constants),
+                    ip: self.ip,
+                    fp: self.fp,
+                    dest_reg,
+                    closure: self.current_closure.clone(),
+                });
+
+                // Switch to new function
+                self.instructions = Arc::clone(&func.instructions);
+                self.constants = Arc::clone(&func.constants);
+                self.ip = 0;
+                self.fp = new_fp;
+                self.current_closure = closure;
+                true
     }
 
-    fn set_global(&mut self, idx: u16, val: Value) {
-         if idx as usize >= self.stack.len() {
-            self.stack.resize(idx as usize + 1, None);
+    fn perform_call(&mut self, callable_value: Value, dest_reg: Option<u16>, arg_start: u16, arg_count: u8) -> bool {
+        match callable_value {
+            Value::Function(func) => {
+                self.invoke_function(&func, None, dest_reg, arg_start, arg_count)
+            }
+            Value::Closure(closure) => {
+                 let func = closure.function.clone();
+                 self.invoke_function(&func, Some(closure), dest_reg, arg_start, arg_count)
+            }
+            Value::NativeFunction(id) => {
+                let arg = if arg_count > 0 { self.get_reg_at(arg_start) } else { Value::Void };
+                let resolved = arg;
+
+                let result = match id {
+                    crate::toolbox::NATIVE_ASSERT => {
+                        match resolved {
+                            Value::Bool(true) => {
+                                println!("✅ Assertion passed");
+                                Value::Void
+                            }
+                            Value::Bool(false) => panic!("❌ Assertion failed! Expected true, got false."),
+                            other => panic!("❌ Assertion failed! Expected Boolean, got {}", other),
+                        }
+                    }
+                    crate::toolbox::NATIVE_ABS => {
+                        match resolved {
+                             Value::Numeric(crate::value::Number::I64(n)) => Value::Numeric(crate::value::Number::I64(n.abs())),
+                             Value::Numeric(crate::value::Number::F64(n)) => Value::Numeric(crate::value::Number::F64(n.abs())),
+                             other => panic!("❌ ABS failed! Expected Number, got {}", other),
+                        }
+                    }
+                     // Print, Echo, Sleep are OpCodes now, so NativeCall might not need them unless generalized?
+                     // Currently checking ID.
+                     // 0 = print? No, builtins have explicit opcodes.
+                     // But NativeCall OpCode uses ID reg.
+                    _ => panic!("Runtime Error: Unknown Native ID {}", id),
+                };
+                
+                if let Some(dest) = dest_reg {
+                    self.set_reg_at(dest, result);
+                }
+                false
+            }
+            _ => panic!("Runtime Error: Not a callable: {:?}", callable_value),
         }
-        self.stack[idx as usize] = Some(Variable {
-            value: val,
-            is_mutable: true, // Globals created via assignment? define_global handles mutability.
-            reference_count: 0,
-        });
     }
 
-    pub fn run(&mut self) {
-        loop {
-            if self.ip >= self.instructions.len() {
+    pub fn run_step(&mut self, globals: &mut Vec<Option<Variable>>) -> FiberStatus {
+         if self.ip >= self.instructions.len() {
                 if let Some(frame) = self.frames.pop() {
                     self.stack.truncate(self.fp);
                     self.instructions = frame.instructions;
@@ -187,17 +215,23 @@ impl VM {
                     if let Some(dest) = frame.dest_reg {
                         self.set_reg_at(dest, Value::Void);
                     }
-                    continue; 
+                    return FiberStatus::Running;
                 } else {
-                    break;
+                    self.status = FiberStatus::Finished;
+                    return FiberStatus::Finished;
                 }
-            }
+         }
 
             let instruction = self.instructions[self.ip].clone();
+            self.ip += 1;
 
             match instruction {
                 OpCode::LoadConst(dest, idx) => {
                     let val = self.constants[idx].clone();
+                    self.set_reg_at(dest, val);
+                }
+                OpCode::Move(dest, src) => {
+                    let val = self.get_reg_at(src);
                     self.set_reg_at(dest, val);
                 }
                 OpCode::Add(dest, src1, src2) => {
@@ -256,7 +290,7 @@ impl VM {
                     }
                 }
                 OpCode::Modulo(dest, src1, src2) => {
-                    let res = {
+                     let res = {
                         let v1 = self.get_reg_ref(src1);
                         let v2 = self.get_reg_ref(src2);
                         v1.clone().remainder(v2.clone())
@@ -293,218 +327,367 @@ impl VM {
                     }
                 }
                 OpCode::Call(dest_reg, callable_reg, arg_start_reg, arg_count) => {
-                    let callable = self.get_reg_at(callable_reg);
-                    if self.perform_call(callable, Some(dest_reg), arg_start_reg, arg_count) {
-                        continue;
-                    }
+                     let callable = self.get_reg_at(callable_reg);
+                     self.perform_call(callable, Some(dest_reg), arg_start_reg, arg_count);
                 }
                 OpCode::CallGlobal(dest, idx, arg_start, arg_count) => {
-                    // Global is at absolute index idx
-                    let callable = self.get_global(idx as u16);
-                    if self.perform_call(callable, Some(dest), arg_start, arg_count) {
-                        continue;
-                    }
+                     // Get global inline
+                     let callable = globals[idx as usize].as_ref().map(|v| v.value.clone()).unwrap_or(Value::Void);
+                     self.perform_call(callable, Some(dest), arg_start, arg_count);
                 }
                 OpCode::NativeCall(dest, id_reg, arg_start, arg_count) => {
                     let val = self.get_reg_at(id_reg);
-                    if self.perform_call(val, Some(dest), arg_start, arg_count) {
-                        continue;
-                    }
-                }
-                OpCode::DefGlobal(_idx, _is_mutable) => {
-                    // Logic for DefGlobal remains largely the same but doesn't pop
-                }
-                OpCode::DefVar(_idx, _is_mutable) => {
-                    // Logic for DefVar remains largely the same
-                }
-                OpCode::GetVar(dest, idx) => {
-                    let val = self.get_reg_at(idx as u16);
-                    self.set_reg_at(dest, val);
-                }
-                OpCode::GetGlobal(dest, idx) => {
-                    let val = self.get_global(idx as u16);
-                    self.set_reg_at(dest, val);
-                }
-                OpCode::AssignVar(idx, src) => {
-                    let _val = self.get_reg_at(src);
-                    self.set_reg_at(idx, _val);
-                }
-                OpCode::AssignGlobal(idx, src) => {
-                    let _val = self.get_reg_at(src);
-                    self.set_global(idx as u16, _val);
-                }
-                OpCode::Move(dest, src) => {
-                    let val = self.get_reg_at(src);
-                    self.set_reg_at(dest, val);
+                    self.perform_call(val, Some(dest), arg_start, arg_count);
                 }
                 OpCode::Print(src) => {
-                    let val = self.get_reg_at(src);
-                    println!("{}", val);
+                     let val = self.get_reg_at(src);
+                     println!("{}", val);
                 }
                 OpCode::Echo(src) => {
-                    let val = self.get_reg_at(src);
-                    print!("{}", val);
-                    let _ = std::io::stdout().flush();
+                     let val = self.get_reg_at(src);
+                     print!("{}", val);
+                     let _ = std::io::stdout().flush();
                 }
                 OpCode::Sleep(src) => {
-                    let val = self.get_reg_at(src);
-                    if let Value::Numeric(crate::value::Number::I64(ms)) = val {
-                        std::thread::sleep(std::time::Duration::from_millis(ms as u64));
-                    }
+                     let val = self.get_reg_at(src);
+                     if let Value::Numeric(crate::value::Number::I64(ms)) = val {
+                         std::thread::sleep(std::time::Duration::from_millis(ms as u64));
+                     }
                 }
                 OpCode::Jump(target) => {
-                    self.ip = target;
-                    continue;
+                     self.ip = target;
                 }
                 OpCode::JumpIfFalse(cond, target) => {
-                    let val = self.get_reg_at(cond);
-                    if matches!(val, Value::Bool(false)) {
-                        self.ip = target;
-                        continue;
-                    }
+                     let val = self.get_reg_at(cond);
+                     if matches!(val, Value::Bool(false)) {
+                         self.ip = target;
+                     }
                 }
                 OpCode::JumpIfTrue(cond, target) => {
-                    let val = self.get_reg_at(cond);
-                    if matches!(val, Value::Bool(true)) {
-                        self.ip = target;
-                        continue;
+                     let val = self.get_reg_at(cond);
+                     if matches!(val, Value::Bool(true)) {
+                         self.ip = target;
+                     }
+                }
+                OpCode::IterStart(iter_reg, src_reg) => {
+                    let src = self.get_reg_at(src_reg);
+                    self.set_reg_at(iter_reg, src);
+                    self.set_reg_at(iter_reg + 1, Value::Numeric(crate::value::Number::I64(0)));
+                }
+                OpCode::IterNext(dest, iter_reg, jump_offset) => {
+                    let collection = self.get_reg_at(iter_reg);
+                    let index_val = self.get_reg_at(iter_reg + 1);
+                    
+                    if let Value::Numeric(crate::value::Number::I64(idx)) = index_val {
+                        match collection {
+                            Value::Array(items) => {
+                                if (idx as usize) < items.len() {
+                                    self.set_reg_at(dest, items[idx as usize].clone());
+                                    self.set_reg_at(iter_reg + 1, Value::Numeric(crate::value::Number::I64(idx + 1)));
+                                } else {
+                                    self.ip = jump_offset;
+                                }
+                            }
+                            Value::Tuple(items) => {
+                                if (idx as usize) < items.len() {
+                                    self.set_reg_at(dest, items[idx as usize].clone());
+                                    self.set_reg_at(iter_reg + 1, Value::Numeric(crate::value::Number::I64(idx + 1)));
+                                } else {
+                                    self.ip = jump_offset;
+                                }
+                            }
+                            _ => panic!("Runtime Error: IterNext on non-collection: {:?}", collection),
+                        }
+                    } else {
+                        panic!("Runtime Error: IterNext on invalid index: {:?}", index_val);
                     }
                 }
                 OpCode::Return(src) => {
-                    let result = self.get_reg_at(src);
-                    if let Some(frame) = self.frames.pop() {
-                        self.stack.truncate(self.fp);
-                        
-                        self.instructions = frame.instructions;
-                        self.constants = frame.constants;
-                        self.ip = frame.ip;
-                        self.fp = frame.fp;
-
-                        if let Some(dest) = frame.dest_reg {
-                            self.set_reg_at(dest, result);
-                        }
-                        continue;
-                    } else {
-                        break;
-                    }
+                     let result = self.get_reg_at(src);
+                     if let Some(frame) = self.frames.pop() {
+                         self.stack.truncate(self.fp);
+                         self.instructions = frame.instructions;
+                         self.constants = frame.constants;
+                         self.ip = frame.ip;
+                         self.fp = frame.fp;
+                         self.current_closure = frame.closure;
+                         
+                         if let Some(dest) = frame.dest_reg {
+                             self.set_reg_at(dest, result);
+                         }
+                     } else {
+                         self.status = FiberStatus::Finished;
+                         return FiberStatus::Finished;
+                     }
                 }
                 OpCode::ReturnVoid => {
-                    if let Some(frame) = self.frames.pop() {
-                        self.stack.truncate(self.fp);
-                        
-                        self.instructions = frame.instructions;
-                        self.constants = frame.constants;
-                        self.ip = frame.ip;
-                        self.fp = frame.fp;
-
-                        if let Some(dest) = frame.dest_reg {
-                            self.set_reg_at(dest, Value::Void);
-                        }
-                        continue;
-                    } else {
-                        break;
-                    }
+                      if let Some(frame) = self.frames.pop() {
+                         self.stack.truncate(self.fp);
+                         self.instructions = frame.instructions;
+                         self.constants = frame.constants;
+                         self.ip = frame.ip;
+                         self.fp = frame.fp;
+                         self.current_closure = frame.closure;
+                         
+                         if let Some(dest) = frame.dest_reg {
+                             self.set_reg_at(dest, Value::Void);
+                         }
+                     } else {
+                         self.status = FiberStatus::Finished;
+                         return FiberStatus::Finished;
+                     }
+                }
+                OpCode::Halt => {
+                    self.status = FiberStatus::Finished;
+                    return FiberStatus::Finished;
                 }
                 OpCode::BuildArray(dest, start, count) => {
-                    let mut elements = Vec::with_capacity(count as usize);
-                    for i in 0..count {
-                        elements.push(self.get_reg_at(start + i as u16));
-                    }
-                    self.set_reg_at(dest, Value::Array(elements));
+                     let mut elements = Vec::with_capacity(count as usize);
+                     for i in 0..count {
+                         elements.push(self.get_reg_at(start + i as u16));
+                     }
+                     self.set_reg_at(dest, Value::Array(elements));
                 }
                 OpCode::BuildTuple(dest, start, count) => {
-                    let mut elements = Vec::with_capacity(count as usize);
+                     let mut elements = Vec::with_capacity(count as usize);
+                     for i in 0..count {
+                         elements.push(self.get_reg_at(start + i as u16));
+                     }
+                     self.set_reg_at(dest, Value::Tuple(elements));
+                }
+                 OpCode::CreateEnum(dest, names_idx, start, count) => {
+                    let names_tuple = self.constants[names_idx].clone();
+                    let (enum_name, variant_name) = if let Value::Tuple(v) = names_tuple {
+                         (v[0].to_string(), v[1].to_string())
+                    } else {
+                         ("?".to_string(), "?".to_string())
+                    };
+
+                    let mut elements = Vec::new();
                     for i in 0..count {
-                        elements.push(self.get_reg_at(start + i as u16));
+                         elements.push(self.get_reg_at(start + i as u16));
                     }
-                    self.set_reg_at(dest, Value::Tuple(elements));
-                }
-                OpCode::IterStart(iter_dest, src) => {
-                    let collection = self.get_reg_at(src);
-                    self.set_reg_at(iter_dest, collection);
-                    self.set_reg_at(iter_dest + 1, Value::Numeric(crate::value::Number::I64(0)));
-                }
-                OpCode::IterNext(val_dest, iter_reg, target) => {
-                    let collection = self.get_reg_at(iter_reg);
-                    let index_val = self.get_reg_at(iter_reg + 1);
-                    if let Value::Numeric(crate::value::Number::I64(idx)) = index_val {
-                        let items = match collection {
-                            Value::Array(ref a) => a,
-                            Value::Tuple(ref t) => t,
-                            _ => panic!("IterNext on non-collection"),
-                        };
-
-                        if (idx as usize) < items.len() {
-                            let val = items[idx as usize].clone();
-                            self.set_reg_at(val_dest, val);
-                            self.set_reg_at(iter_reg + 1, Value::Numeric(crate::value::Number::I64(idx + 1)));
-                        } else {
-                            self.ip = target;
-                            continue;
-                        }
-                    }
-                }
-                OpCode::CreateEnum(dest, names_idx, start, count) => {
-                    let names_val = self.constants[names_idx].clone();
-                    let (enum_name, variant_name) = match names_val {
-                        Value::Tuple(t) if t.len() == 2 => {
-                            if let (Value::String(e), Value::String(v)) = (&t[0], &t[1]) {
-                                (e.clone(), v.clone())
-                            } else {
-                                panic!("CreateEnum error");
-                            }
-                        }
-                        _ => panic!("CreateEnum names error"),
+                    
+                    let val = Value::Enum { 
+                         enum_name,
+                         variant_name,
+                         data: if elements.is_empty() { 
+                             None 
+                         } else if elements.len() == 1 {
+                             Some(Box::new(elements[0].clone()))
+                         } else {
+                             Some(Box::new(Value::Tuple(elements)))
+                         } 
                     };
-
-                    let data = if count > 0 {
-                        Some(Box::new(self.get_reg_at(start)))
-                    } else {
-                        None
-                    };
-
-                    self.set_reg_at(dest, Value::Enum { enum_name, variant_name, data });
+                    self.set_reg_at(dest, val);
                 }
-                OpCode::IsVariant(dest, src, enum_name_idx, var_name_idx) => {
+                OpCode::IsVariant(dest, src, enum_idx, var_idx) => {
                     let val = self.get_reg_at(src);
-                    let e_name = match &self.constants[enum_name_idx] {
-                        Value::String(s) => s.as_str(),
-                        _ => "",
-                    };
-                    let v_name = match &self.constants[var_name_idx] {
-                        Value::String(s) => s.as_str(),
-                        _ => panic!("IsVariant error"),
-                    };
-
-                    let matches = if let Value::Enum { enum_name, variant_name, .. } = val {
-                        (e_name.is_empty() || e_name == enum_name) && v_name == variant_name
+                    let enum_name = self.constants[enum_idx].to_string(); 
+                    let variant_name = self.constants[var_idx].to_string();
+                    
+                    if let Value::Enum { enum_name: e, variant_name: v, .. } = val {
+                         let eq = (enum_name.is_empty() || e == enum_name) && v == variant_name;
+                         self.set_reg_at(dest, Value::Bool(eq));
                     } else {
-                        false
-                    };
-                    self.set_reg_at(dest, Value::Bool(matches));
+                         self.set_reg_at(dest, Value::Bool(false));
+                    }
                 }
                 OpCode::GetVariantData(dest, src) => {
                     let val = self.get_reg_at(src);
                     if let Value::Enum { data, .. } = val {
-                        let inner = data.map(|d| *d).unwrap_or(Value::Void);
-                        self.set_reg_at(dest, inner);
+                        let data_val = match data {
+                            Some(boxed) => *boxed,
+                            None => Value::Tuple(Vec::new()),
+                        };
+                        self.set_reg_at(dest, data_val);
+                    } else {
+                        panic!("Runtime Error: GetVariantData on non-enum");
                     }
                 }
-                OpCode::Halt => break,
-                OpCode::Pop | OpCode::Dup => {} // Obsolete
+                OpCode::MakeClosure(dest, func_idx, up_start, up_count) => {
+                    if let Value::Function(func) = &self.constants[func_idx] {
+                         let mut upvalues = Vec::new();
+                         for i in 0..up_count {
+                             upvalues.push(self.get_reg_at(up_start + i as u16));
+                         }
+                         
+                         let closure = crate::value::Closure {
+                             function: func.clone(),
+                             upvalues,
+                         };
+                         self.set_reg_at(dest, Value::Closure(Box::new(closure)));
+                    } else {
+                        panic!("Runtime Error: MakeClosure on non-function constant");
+                    }
+                }
+                OpCode::GetUpvalue(dest, index) => {
+                    if let Some(closure) = &self.current_closure {
+                        if (index as usize) < closure.upvalues.len() {
+                            self.set_reg_at(dest, closure.upvalues[index as usize].clone());
+                        } else {
+                            panic!("Runtime Error: Upvalue index out of bounds");
+                        }
+                    } else {
+                        panic!("Runtime Error: GetUpvalue called outside of closure");
+                    }
+                }
+                OpCode::GetGlobal(dest, idx) => {
+                    let val = globals[idx as usize].as_ref().map(|v| v.value.clone()).unwrap_or(Value::Void);
+                    self.set_reg_at(dest, val);
+                }
+                OpCode::DefGlobal(idx, _mut) => {
+                     let val = self.get_reg_at(idx as u16);
+                     if idx as usize >= globals.len() {
+                         globals.resize(idx as usize + 1, None);
+                     }
+                     globals[idx as usize] = Some(Variable { value: val, is_mutable: true, reference_count: 0 });
+                }
+                OpCode::AssignGlobal(idx, src) => {
+                     let val = self.get_reg_at(src);
+                     if idx as usize >= globals.len() {
+                         globals.resize(idx as usize + 1, None);
+                     }
+                     globals[idx as usize] = Some(Variable { value: val, is_mutable: true, reference_count: 0 });
+                }
+                OpCode::AssignVar(idx, src) => {
+                     let val = self.get_reg_at(src);
+                     self.set_reg_at(idx, val);
+                }
+                OpCode::DefVar(_idx, _mut) => {}, // No-op
+                OpCode::GetVar(dest, idx) => {
+                     let val = self.get_reg_at(idx as u16);
+                     self.set_reg_at(dest, val);
+                }
                 OpCode::Concat(dest, start, count) => {
-                    let mut result = String::new();
-                    for i in 0..count {
-                        let part = self.get_reg_at(start as u16 + i as u16);
-                        match part {
-                             Value::String(s) => result.push_str(&s),
-                             other => result.push_str(&other.to_string()),
+                     let mut res = String::new();
+                     for i in 0..count {
+                         let val = self.get_reg_at(start + i as u16);
+                         res.push_str(&val.to_string());
+                     }
+                     self.set_reg_at(dest, Value::String(res));
+                }
+                OpCode::Spawn(dest, closure_reg) => {
+                    let val = self.get_reg_at(closure_reg);
+                    if let Value::Closure(closure) = val {
+                        let new_fiber = Fiber::new(closure);
+                        self.set_reg_at(dest, Value::Void); // Return Void for now
+                        return FiberStatus::Spawning(Box::new(new_fiber));
+                    } else {
+                        panic!("Runtime Error: Spawn expects a closure");
+                    }
+                }
+                OpCode::Yield => {
+                    return FiberStatus::Suspended;
+                }
+                OpCode::Send(chan_reg, val_reg) => {
+                    let chan_val = self.get_reg_at(chan_reg);
+                    let val = self.get_reg_at(val_reg);
+                    
+                    if let Value::Channel(chan) = chan_val {
+                         let mut buffer = chan.buffer.lock().unwrap();
+                         if buffer.len() < chan.capacity {
+                             buffer.push_back(val);
+                             // Success
+                         } else {
+                             // Channel full, yield and retry instruction
+                             self.ip -= 1; 
+                             return FiberStatus::Suspended;
+                         }
+                    } else {
+                        panic!("Runtime Error: Send on non-channel");
+                    }
+                }
+                OpCode::Receive(dest, chan_reg) => {
+                     let chan_val = self.get_reg_at(chan_reg);
+                     if let Value::Channel(chan) = chan_val {
+                         let mut buffer = chan.buffer.lock().unwrap();
+                         if let Some(val) = buffer.pop_front() {
+                             self.set_reg_at(dest, val);
+                         } else {
+                             // Channel empty, yield and retry
+                             self.ip -= 1;
+                             return FiberStatus::Suspended;
+                         }
+                     } else {
+                         panic!("Runtime Error: Receive on non-channel");
+                     }
+                }
+                OpCode::CreateChannel(dest, capacity) => {
+                    let chan = crate::value::Channel {
+                        name: "chan".to_string(),
+                        buffer: Arc::new(Mutex::new(VecDeque::new())),
+                        capacity: capacity as usize,
+                    };
+                    self.set_reg_at(dest, Value::Channel(chan));
+                }
+                _ => {} // Pop/Dup ignored
+            }
+        
+        FiberStatus::Running
+    }
+}
+
+impl VM {
+    pub fn new(instructions: Vec<OpCode>, constants: Vec<Value>, global_slots: usize) -> Self {
+        let mut globals = Vec::with_capacity(global_slots);
+        globals.resize(global_slots, None);
+        
+        let main_fiber = Fiber::new_main(instructions, constants);
+
+        Self {
+            instructions: Arc::new(Vec::new()), // Dummy
+            constants: Arc::new(Vec::new()),     // Dummy
+            globals,
+            fibers: VecDeque::new(),
+            current_fiber: Some(main_fiber),
+        }
+    }
+    pub fn init_globals(&mut self, size: usize) {
+        if size > self.globals.len() {
+            self.globals.resize(size, None);
+        }
+    }
+    pub fn define_global(&mut self, idx: usize, val: Value, is_mutable: bool) {
+        if idx >= self.globals.len() {
+            self.globals.resize(idx + 1, None);
+        }
+        self.globals[idx] = Some(Variable { value: val, is_mutable, reference_count: 0 });
+    }
+
+    pub fn run(&mut self) {
+        loop {
+            if let Some(mut fiber) = self.current_fiber.take() {
+                let status = fiber.run_step(&mut self.globals);
+                match status {
+                    FiberStatus::Running => {
+                        self.current_fiber = Some(fiber);
+                    }
+                    FiberStatus::Finished => {
+                        if let Some(next) = self.fibers.pop_front() {
+                            self.current_fiber = Some(next);
+                        } else {
+                            break;
                         }
                     }
-                    self.set_reg_at(dest, Value::String(result));
+                    FiberStatus::Suspended => {
+                         self.fibers.push_back(fiber);
+                         if let Some(next) = self.fibers.pop_front() {
+                             self.current_fiber = Some(next);
+                         } else {
+                             break;
+                         }
+                    }
+                    FiberStatus::Spawning(new_fiber) => {
+                        self.fibers.push_back(*new_fiber);
+                        self.current_fiber = Some(fiber);
+                    }
                 }
+            } else if let Some(next) = self.fibers.pop_front() {
+                 self.current_fiber = Some(next);
+            } else {
+                 break;
             }
-            self.ip += 1;
         }
     }
 }

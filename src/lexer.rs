@@ -6,7 +6,7 @@ pub enum Token {
     Import, From, As, Enum,
 
 	// Built-ins
-	Print, Echo, Sleep,
+	Print, Echo, Sleep, Thread, Channel,
     
     // Identifiers and Literals
     Identifier(String),
@@ -25,7 +25,7 @@ pub enum Token {
     Colon, Comma, DoubleColon,
 	LessThan, GreaterThan, LessThanEqual, GreaterThanEqual,
     PlusEqual, MinusEqual, StarEqual, SlashEqual, PercentEqual, StarStarEqual, CaretEqual,
-    FatArrow, Pipe,
+    FatArrow, LArrow, Pipe,
     
     // Formatting
     Newline,
@@ -230,6 +230,9 @@ impl Lexer {
                 if self.peek_current() == '=' {
                     self.cursor += 1;
                     Token::LessThanEqual
+                } else if self.peek_current() == '-' {
+                    self.cursor += 1;
+                    Token::LArrow
                 } else {
                     Token::LessThan
                 }
@@ -298,6 +301,8 @@ impl Lexer {
 			"import" => Token::Import,
 			"from" => Token::From,
 			"as" => Token::As,
+            "thread" => Token::Thread,
+            "channel" => Token::Channel,
 			"enum" => Token::Enum,
 			"true" => Token::Bool(true),
     		"false" => Token::Bool(false),

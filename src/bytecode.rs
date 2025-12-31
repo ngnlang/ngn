@@ -55,6 +55,17 @@ pub enum OpCode {
     IsVariant(u16, u16, usize, usize), // (DestReg, SrcReg, EnumNameIdx, VariantNameIdx)
     GetVariantData(u16, u16), // (DestReg, SrcReg)
 
+    // Closures
+    MakeClosure(u16, usize, u16, u8), // (DestReg, FunctionConstIdx, UpvalueStartReg, UpvalueCount)
+    GetUpvalue(u16, u16),             // (DestReg, UpvalueIndex)
+
+    // Concurrency
+    Spawn(u16, u16),      // (DestChannelReg, ClosureReg)
+    Yield,
+    Send(u16, u16),       // (ChannelReg, ValueReg)
+    Receive(u16, u16),    // (DestReg, ChannelReg)
+    CreateChannel(u16, u16), // (DestReg, Capacity)
+
     // Builtins/Misc
     Print(u16),
     Echo(u16),
