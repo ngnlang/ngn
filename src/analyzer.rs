@@ -45,14 +45,6 @@ impl Analyzer {
             is_mutable: false,
         });
 
-        global_scope.insert("assert".to_string(), Symbol {
-            ty: Type::Function {
-                params: vec![Type::Any],
-                return_type: Box::new(Type::Void),
-            },
-            is_mutable: false,
-        });
-
         // Built-in Result
         let result_enum = EnumDef {
             name: "Result".to_string(),
@@ -252,6 +244,8 @@ impl Analyzer {
                 let element_ty = match iter_ty {
                     Type::Array(inner) => *inner,
                     Type::Tuple(_) => Type::Any,
+                    Type::Enum(ref name) if name == "Maybe" => Type::Any,
+                    Type::Channel(inner) => *inner,
                     Type::Any => Type::Any,
                     _ => {
                         self.errors.push(format!("Type Error: Cannot iterate over type {:?}", iter_ty));
@@ -319,7 +313,37 @@ impl Analyzer {
                 Type::Void
             }
             Statement::Break => Type::Void,
+            Statement::Import { names, source } => {
+                // Handle toolbox imports by registering functions in scope
+                if source.starts_with("tbx::") {
+                    let module = source.strip_prefix("tbx::").unwrap();
+                    for name in names {
+                        // Determine the function type based on known toolbox functions
+                        let fn_type = match (module, name.as_str()) {
+                            ("test", "assert") => Type::Function {
+                                params: vec![Type::Bool],
+                                return_type: Box::new(Type::Void),
+                            },
+                            ("math", "abs") | ("math", "round") | ("math", "floor") | ("math", "ceil") => Type::Function {
+                                params: vec![Type::Any],
+                                return_type: Box::new(Type::Any),
+                            },
+                            ("math", "sin") => Type::Function {
+                                params: vec![Type::F64],
+                                return_type: Box::new(Type::F64),
+                            },
+                            _ => Type::Function {
+                                params: vec![Type::Any],
+                                return_type: Box::new(Type::Any),
+                            },
+                        };
+                        self.define(name, fn_type, false);
+                    }
+                }
+                Type::Void
+            }
             _ => Type::Void,
+
         }
     }
 
@@ -613,6 +637,18 @@ impl Analyzer {
                             }
                             _ => {
                                 self.errors.push(format!("Type Error: Unknown method '{}' for State type", method));
+                                Type::Any
+                            }
+                        }
+                    }
+                    Type::Channel(_) => {
+                        match method.as_str() {
+                            "close" => {
+                                if !args.is_empty() { self.errors.push("Type Error: .close() takes no arguments".to_string()); }
+                                Type::Void
+                            }
+                            _ => {
+                                self.errors.push(format!("Type Error: Unknown method '{}' for Channel type", method));
                                 Type::Any
                             }
                         }

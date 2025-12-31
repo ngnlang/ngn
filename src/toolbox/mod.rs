@@ -1,4 +1,5 @@
 pub mod math;
+pub mod test;
 
 pub const NATIVE_ABS: u16 = 1;
 pub const NATIVE_ASSERT: u16 = 2;
@@ -22,9 +23,11 @@ impl Toolbox {
     pub fn new() -> Self {
         let mut modules = HashMap::new();
         modules.insert("math".to_string(), math::create_module());
+        modules.insert("test".to_string(), test::create_module());
         
         Self { modules }
     }
+
     
     /// Get a specific module: "math" from "tbx::math"
     pub fn get_module(&self, name: &str) -> Option<&ToolboxModule> {

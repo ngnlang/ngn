@@ -115,6 +115,13 @@ impl Compiler {
 
         self.enums.insert("Result".to_string(), result_enum);
         self.enums.insert("Maybe".to_string(), maybe_enum);
+
+        // Standard Functions (handled as special opcodes, not CallGlobal)
+        // These entries are just for name resolution in the compiler
+        self.global_table.insert("print".to_string(), 0);
+        self.global_table.insert("echo".to_string(), 1);
+        self.global_table.insert("sleep".to_string(), 2);
+        self.next_index = 3;
     }
 
     // Helper to add a constant and return its index
@@ -151,6 +158,24 @@ impl Compiler {
                 dest
             }
             Expr::Call { name, args } => {
+                match name.as_str() {
+                    "print" => {
+                        let reg = self.compile_expr(&args[0]);
+                        self.instructions.push(OpCode::Print(reg));
+                        return reg;
+                    }
+                    "echo" => {
+                        let reg = self.compile_expr(&args[0]);
+                        self.instructions.push(OpCode::Echo(reg));
+                        return reg;
+                    }
+                    "sleep" => {
+                        let reg = self.compile_expr(&args[0]);
+                        self.instructions.push(OpCode::Sleep(reg));
+                        return reg;
+                    }
+                    _ => {}
+                }
                 let start_reg = self.reg_top; // Arguments start here
                 
                 // Compile each argument and ensure it's placed in consecutive slots
@@ -454,6 +479,7 @@ impl Compiler {
                     "read" => self.instructions.push(OpCode::StateRead(dest, obj_reg)),
                     "write" => self.instructions.push(OpCode::StateWrite(obj_reg, arg_regs[0])),
                     "update" => self.instructions.push(OpCode::StateUpdate(obj_reg, arg_regs[0])),
+                    "close" => self.instructions.push(OpCode::CloseChannel(obj_reg)),
                     _ => panic!("Compiler Error: Unknown method '{}'", method),
                 }
                 self.reg_top = dest + 1;
@@ -482,9 +508,7 @@ impl Compiler {
                     // For global/static, compile expression and move result to global slot
                     let res_reg = self.compile_expr(&value);
                     self.global_table.insert(name, var_idx);
-                    // Immediately move to global slot to avoid temp register conflicts
-                    self.instructions.push(OpCode::Move(var_idx as u16, res_reg));
-                    self.instructions.push(OpCode::DefGlobal(var_idx, is_mutable));
+                    self.instructions.push(OpCode::AssignGlobal(var_idx, res_reg));
                 } else {
                     // For locals, compile into the variable slot directly if possible
                     let res_reg = self.compile_expr(&value);
@@ -569,10 +593,11 @@ impl Compiler {
                 };
                 
                 if self.is_global {
-                    // For globals, load directly into the global slot
-                    self.instructions.push(OpCode::LoadConst(var_idx as u16, const_idx));
-                    self.instructions.push(OpCode::DefGlobal(var_idx, false));
-                    // Keep temp registers in sync with next_index for globals
+                    // For globals, load and then assign to the global table
+                    let reg = self.alloc_reg();
+                    self.instructions.push(OpCode::LoadConst(reg, const_idx));
+                    self.instructions.push(OpCode::AssignGlobal(var_idx, reg));
+                    
                     self.temp_start = self.next_index as u16;
                     self.reg_top = self.temp_start;
                 } else {
@@ -752,12 +777,17 @@ impl Compiler {
     }
 
     fn compile_for(&mut self, binding: String, index_binding: Option<String>, iterable: Expr, body: Box<Statement>) {
-        // 1. Compile iterable
-        let src_reg = self.compile_expr(&iterable);
+        // Special case: for (msg in <-? chan)
+        let src_reg = if let Expr::ReceiveMaybe(chan_expr) = iterable {
+            self.compile_expr(&chan_expr)
+        } else {
+            // 1. Compile iterable normally
+            self.compile_expr(&iterable)
+        };
         
-        // 2. Allocate two registers for iterator: [array, current_index]
+        // 2. Allocate two registers for iterator: [coll, index]
         let iter_reg = self.alloc_reg();
-        let _idx_temp = self.alloc_reg(); // Reserved for internal index
+        let _idx_temp = self.alloc_reg(); // Reserved for internal index (or -1 for channel)
         
         // Keep next_index in sync to avoid collision with binding variables
         if (self.reg_top as usize) > self.next_index {

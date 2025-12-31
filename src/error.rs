@@ -5,6 +5,7 @@ pub enum RuntimeError {
     UndefinedVariable(String),
     UndefinedFunction(String),
     ImportError(String),
+    AssertionError(String),
 }
 
 impl std::fmt::Display for RuntimeError {
@@ -15,6 +16,8 @@ impl std::fmt::Display for RuntimeError {
             RuntimeError::UndefinedVariable(name) => write!(f, "Undefined variable: {}", name),
             RuntimeError::UndefinedFunction(name) => write!(f, "Undefined function: {}", name),
             RuntimeError::ImportError(msg) => write!(f, "Import error: {}", msg),
+            RuntimeError::AssertionError(msg) => write!(f, "Assertion failed: {}", msg),
         }
     }
 }
+

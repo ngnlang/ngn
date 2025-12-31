@@ -387,6 +387,7 @@ pub struct Channel {
     pub name: String,
     pub buffer: Arc<Mutex<VecDeque<Value>>>,
     pub capacity: usize,
+    pub is_closed: Arc<Mutex<bool>>,
 }
 
 #[derive(Debug, Clone)]

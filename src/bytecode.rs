@@ -85,4 +85,5 @@ pub enum OpCode {
     Dup,
     Concat(u16, u16, usize), // (DestReg, StartReg, Count)
     GetIndex(u16, u16, u16), // (DestReg, ObjReg, IndexReg)
+    CloseChannel(u16),       // (ChannelReg)
 }
