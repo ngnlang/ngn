@@ -1,6 +1,6 @@
-use crate::parser::{Statement, Expr, Type, EnumDef, EnumVariantDef, Pattern};
+use crate::parser::{Statement, Expr, Type, EnumDef, EnumVariantDef, Pattern, ModelDef, RoleDef};
 use crate::lexer::Token;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
 pub struct Symbol {
@@ -14,6 +14,10 @@ pub struct Analyzer {
     current_return_type: Option<Type>,
     infer_stack: Vec<Option<Type>>,
     enums: HashMap<String, EnumDef>,
+    models: HashMap<String, ModelDef>,
+    roles: HashMap<String, RoleDef>,
+    custom_methods: HashMap<Type, HashMap<String, Type>>,
+    model_roles: HashMap<Type, HashSet<String>>,
 }
 
 impl Analyzer {
@@ -69,6 +73,10 @@ impl Analyzer {
             current_return_type: None,
             infer_stack: Vec::new(),
             enums: HashMap::new(),
+            models: HashMap::new(),
+            roles: HashMap::new(),
+            custom_methods: HashMap::new(),
+            model_roles: HashMap::new(),
         };
 
         analyzer.register_enum(&result_enum);
@@ -78,33 +86,67 @@ impl Analyzer {
     }
 
     pub fn analyze(&mut self, statements: &[Statement]) -> Result<(), Vec<String>> {
-        // Pass 1: Collect top-level function signatures
+        // Pass 1a: Collect all top-level types (Enums, Models, Roles)
         for stmt in statements {
-            if let Statement::Function { name, params, return_type, .. } = stmt {
-                let mut param_types = Vec::new();
-                for p in params {
-                    if let Some(ty) = &p.ty {
-                        param_types.push(ty.clone());
-                    } else {
-                        self.errors.push(format!("Type Error: Missing type annotation for parameter '{}' in function '{}'", p.name, name));
-                        param_types.push(Type::Any);
+            match stmt {
+                Statement::Enum(enum_def) => {
+                    self.register_enum(enum_def);
+                }
+                Statement::Model(model_def) => {
+                    self.models.insert(model_def.name.clone(), model_def.clone());
+                }
+                Statement::Role(role_def) => {
+                    self.roles.insert(role_def.name.clone(), role_def.clone());
+                }
+                _ => {}
+            }
+        }
+
+        // Pass 1b: Collect function signatures and extensions with normalized types
+        for stmt in statements {
+            match stmt {
+                Statement::Function { name, params, return_type, .. } => {
+                    let mut param_types = Vec::new();
+                    for p in params {
+                        let ty = p.ty.clone().unwrap_or(Type::Any);
+                        param_types.push(self.normalize_type(ty));
+                    }
+                    let ret_ty = return_type.clone().unwrap_or(Type::Void);
+                    let ret_ty = self.normalize_type(ret_ty);
+                    self.define(name, Type::Function {
+                        params: param_types,
+                        return_type: Box::new(ret_ty),
+                    }, false); 
+                }
+                Statement::Extend { target, role, methods } => {
+                    let target = self.normalize_type(target.clone());
+                    if let Some(role_name) = role {
+                        self.model_roles.entry(target.clone()).or_insert_with(HashSet::new).insert(role_name.clone());
+                    }
+                    
+                    let mut methods_to_add = Vec::new();
+                    for m in methods {
+                        if let Statement::Function { name, params, return_type, .. } = m {
+                            let mut param_types = Vec::new();
+                            for p in params {
+                                let ty = p.ty.clone().unwrap_or(Type::Any);
+                                param_types.push(self.normalize_type(ty));
+                            }
+                            let ret_ty = return_type.clone().unwrap_or(Type::Void);
+                            let ret_ty = self.normalize_type(ret_ty);
+                            methods_to_add.push((name.clone(), Type::Function {
+                                params: param_types,
+                                return_type: Box::new(ret_ty),
+                            }));
+                        }
+                    }
+
+                    let methods_map = self.custom_methods.entry(target).or_insert_with(HashMap::new);
+                    for (name, ty) in methods_to_add {
+                        methods_map.insert(name, ty);
                     }
                 }
-
-                let ret_ty = if let Some(ty) = return_type {
-                    ty.clone()
-                } else {
-                    Type::Void
-                };
-                
-                let ty = Type::Function {
-                    params: param_types,
-                    return_type: Box::new(ret_ty),
-                };
-                
-                self.define(name, ty, false); 
-            } else if let Statement::Enum(enum_def) = stmt {
-                self.register_enum(enum_def);
+                _ => {}
             }
         }
 
@@ -201,10 +243,22 @@ impl Analyzer {
                 }
                 let actual_return_type = return_type.clone().unwrap_or(Type::Void);
                 
-                self.define(name, Type::Function {
-                    params: param_types.clone(),
-                    return_type: Box::new(actual_return_type.clone()),
-                }, false);
+                // Check if function is already defined (from Pass 1 or previous statement)
+                // If this is a nested function, we still need to define it.
+                // If it's top-level, it's already defined in Pass 1.
+                let mut already_defined = false;
+                if let Some(scope) = self.scopes.last() {
+                    if scope.contains_key(name) {
+                        already_defined = true;
+                    }
+                }
+
+                if !already_defined {
+                     self.define(name, Type::Function {
+                        params: param_types.clone(),
+                        return_type: Box::new(actual_return_type.clone()),
+                    }, false);
+                }
 
                 let prev_return = self.current_return_type.clone();
                 self.current_return_type = Some(actual_return_type);
@@ -276,6 +330,58 @@ impl Analyzer {
             }
             Statement::Enum(_) => Type::Void,
             Statement::Next => Type::Void,
+            Statement::Model(_) => Type::Void,
+            Statement::Role(_) => Type::Void,
+            Statement::Extend { target, role, methods } => {
+                // If role is provided, verify it exists and methods match
+                if let Some(role_name) = role {
+                    if let Some(role_def) = self.roles.get(role_name).cloned() {
+                        for rm in &role_def.methods {
+                            if let Statement::Function { name: rm_name, params: rm_params, return_type: rm_ret, .. } = rm {
+                                if let Some(m) = methods.iter().find(|m| {
+                                    if let Statement::Function { name: m_name, .. } = m {
+                                         m_name == rm_name
+                                    } else { false }
+                                }) {
+                                     if let Statement::Function { params: m_params, return_type: m_ret, .. } = m {
+                                         if m_params.len() != rm_params.len() {
+                                             self.errors.push(format!("Type Error: Method '{}' in extend of '{:?}' with role '{}' has wrong number of parameters", rm_name, target, role_name));
+                                         }
+                                     }
+                                } else {
+                                    self.errors.push(format!("Type Error: Target '{:?}' does not implement method '{}' required by role '{}'", target, rm_name, role_name));
+                                }
+                            }
+                        }
+                    } else {
+                        self.errors.push(format!("Type Error: Cannot use unknown role '{}' in extend", role_name));
+                    }
+                }
+
+                // Check method bodies
+                for method in methods {
+                    if let Statement::Function { name, params, body, return_type, .. } = method {
+                        let actual_return_type = return_type.clone().unwrap_or(Type::Void);
+                        let prev_return = self.current_return_type.clone();
+                        self.current_return_type = Some(actual_return_type);
+
+                        self.enter_scope();
+                        self.define("this", target.clone(), false);
+
+                        for param in params {
+                            self.define(&param.name, param.ty.clone().unwrap_or(Type::Any), true);
+                        }
+
+                        for s in body {
+                            self.check_statement(s);
+                        }
+
+                        self.exit_scope();
+                        self.current_return_type = prev_return;
+                    }
+                }
+                Type::Void
+            }
             Statement::Block(stmts) => {
                 self.enter_scope();
                 for s in stmts { self.check_statement(s); }
@@ -601,10 +707,125 @@ impl Analyzer {
                 let initial_ty = self.check_expression(initial_expr);
                 Type::State(Box::new(initial_ty))
             }
+            Expr::ModelInstance { name, fields } => {
+                if let Some(model_def) = self.models.get(name).cloned() {
+                    for (f_name, f_val_expr) in fields {
+                        if let Some((_, f_ty)) = model_def.fields.iter().find(|(n, _)| n == f_name) {
+                            let val_ty = self.check_expression(f_val_expr);
+                            if !self.types_compatible(f_ty, &val_ty) {
+                                self.errors.push(format!("Type Error: Field '{}' in model '{}' expected {:?}, got {:?}", f_name, name, f_ty, val_ty));
+                            }
+                        } else {
+                            self.errors.push(format!("Type Error: Model '{}' has no field named '{}'", name, f_name));
+                        }
+                    }
+                    for (f_name, _) in &model_def.fields {
+                        if !fields.iter().any(|(n, _)| n == f_name) {
+                            self.errors.push(format!("Type Error: Missing field '{}' in instantiation of model '{}'", f_name, name));
+                        }
+                    }
+                    Type::Model(name.clone())
+                } else {
+                    self.errors.push(format!("Type Error: Undefined model '{}'", name));
+                    Type::Any
+                }
+            }
+            Expr::FieldAccess { object, field } => {
+                let obj_ty = self.check_expression(object);
+                match obj_ty {
+                    Type::Model(name) => {
+                        if let Some(model_def) = self.models.get(&name) {
+                            if let Some((_, f_ty)) = model_def.fields.iter().find(|(f, _)| f == field) {
+                                f_ty.clone()
+                            } else {
+                                self.errors.push(format!("Type Error: Model '{}' has no field named '{}'", name, field));
+                                Type::Any
+                            }
+                        } else {
+                            self.errors.push(format!("Type Error: Undefined model '{}'", name));
+                            Type::Any
+                        }
+                    }
+                    _ => {
+                        self.errors.push(format!("Type Error: Cannot access field '{}' on non-model type {:?}", field, obj_ty));
+                        Type::Any
+                    }
+                }
+            }
+            Expr::This => {
+                if let Some(sym) = self.lookup("this") {
+                    sym.ty.clone()
+                } else {
+                    self.errors.push("Type Error: 'this' can only be used inside model methods".to_string());
+                    Type::Any
+                }
+            }
             Expr::MethodCall(obj_expr, method, args) => {
                 let obj_ty = self.check_expression(obj_expr);
+                let obj_ty = self.normalize_type(obj_ty);
                 
+                // Check custom methods from 'extend'
+                let mut custom_method_ty = None;
+                if let Some(methods_map) = self.custom_methods.get(&obj_ty) {
+                    if let Some(method_ty) = methods_map.get(method) {
+                        custom_method_ty = Some(method_ty.clone());
+                    }
+                }
+
+                if let Some(Type::Function { params, return_type }) = custom_method_ty {
+                    if args.len() != params.len() {
+                        self.errors.push(format!("Type Error: Method '{}' expected {} arguments, got {}", method, params.len(), args.len()));
+                    }
+                    for (p_ty, arg_expr) in params.iter().zip(args) {
+                        let arg_ty = self.check_expression(arg_expr);
+                        if !self.types_compatible(p_ty, &arg_ty) {
+                            self.errors.push(format!("Type Error: Method '{}' parameter mismatch, expected {:?}, got {:?}", method, p_ty, arg_ty));
+                        }
+                    }
+                    return *return_type;
+                }
                 match obj_ty.clone() {
+                    Type::Model(name) => {
+                         self.errors.push(format!("Type Error: Method '{}' not found on model '{}'", method, name));
+                         Type::Any
+                    }
+                    Type::Role(role_name) => {
+                        if let Some(role_def) = self.roles.get(&role_name) {
+                            let mut found_method = None;
+                            for m in &role_def.methods {
+                                if let Statement::Function { name, params, return_type, .. } = m {
+                                    if name == method {
+                                        let mut param_types = Vec::new();
+                                        for p in params {
+                                            param_types.push(p.ty.clone().unwrap_or(Type::Any));
+                                        }
+                                        let ret_ty = return_type.clone().unwrap_or(Type::Void);
+                                        found_method = Some((param_types, ret_ty));
+                                        break;
+                                    }
+                                }
+                            }
+                            
+                            if let Some((params, ret_ty)) = found_method {
+                                if args.len() != params.len() {
+                                    self.errors.push(format!("Type Error: Role method '{}' expected {} arguments, got {}", method, params.len(), args.len()));
+                                }
+                                for (p_ty, arg_expr) in params.iter().zip(args) {
+                                    let arg_ty = self.check_expression(arg_expr);
+                                    if !self.types_compatible(p_ty, &arg_ty) {
+                                        self.errors.push(format!("Type Error: Role method '{}' parameter mismatch, expected {:?}, got {:?}", method, p_ty, arg_ty));
+                                    }
+                                }
+                                return ret_ty;
+                            } else {
+                                self.errors.push(format!("Type Error: Method '{}' not found in role '{}'", method, role_name));
+                                Type::Any
+                            }
+                        } else {
+                            self.errors.push(format!("Type Error: Unknown role '{}'", role_name));
+                            Type::Any
+                        }
+                    }
                     // Array methods
                     Type::Array(inner) => {
                         match method.as_str() {
@@ -928,39 +1149,60 @@ impl Analyzer {
         matches!(ty, Type::I64 | Type::I32 | Type::I16 | Type::I8 | Type::U64 | Type::U32 | Type::U16 | Type::U8 | Type::F64 | Type::F32 | Type::Any)
     }
 
+    fn normalize_type(&self, ty: Type) -> Type {
+        match ty {
+            Type::Model(name) => {
+                if self.roles.contains_key(&name) {
+                    Type::Role(name)
+                } else {
+                    Type::Model(name)
+                }
+            }
+            Type::Array(inner) => Type::Array(Box::new(self.normalize_type(*inner))),
+            Type::Tuple(elements) => Type::Tuple(elements.into_iter().map(|t| self.normalize_type(t)).collect()),
+            Type::Channel(inner) => Type::Channel(Box::new(self.normalize_type(*inner))),
+            Type::State(inner) => Type::State(Box::new(self.normalize_type(*inner))),
+            Type::Function { params, return_type } => Type::Function {
+                params: params.into_iter().map(|p| self.normalize_type(p)).collect(),
+                return_type: Box::new(self.normalize_type(*return_type)),
+            },
+            _ => ty,
+        }
+    }
+
     fn types_compatible(&self, expected: &Type, actual: &Type) -> bool {
+        let expected = self.normalize_type(expected.clone());
+        let actual = self.normalize_type(actual.clone());
+        
         if matches!(expected, Type::Any) || matches!(actual, Type::Any) { return true; }
         if expected == actual { return true; }
         
-        if self.is_numeric(expected) && self.is_numeric(actual) { return true; }
-        
-        if let Type::Array(expected_inner) = expected {
-            if let Type::Array(actual_inner) = actual {
-                if matches!(**actual_inner, Type::Any) { return true; }
-                return self.types_compatible(expected_inner, actual_inner);
-            }
-        }
-        
-        if let Type::Tuple(expected_elements) = expected {
-            if let Type::Tuple(actual_elements) = actual {
-                if expected_elements.len() != actual_elements.len() { return false; }
-                return expected_elements.iter().zip(actual_elements.iter()).all(|(e, a)| self.types_compatible(e, a));
-            }
-        }
+        if self.is_numeric(&expected) && self.is_numeric(&actual) { return true; }
 
-        if let Type::Channel(expected_inner) = expected {
-            if let Type::Channel(actual_inner) = actual {
-                return self.types_compatible(expected_inner, actual_inner);
+        match (&expected, &actual) {
+            (Type::Array(e_inner), Type::Array(a_inner)) => {
+                if matches!(a_inner.as_ref(), Type::Any) { return true; }
+                self.types_compatible(e_inner.as_ref(), a_inner.as_ref())
             }
-        }
-
-        if let Type::State(expected_inner) = expected {
-            if let Type::State(actual_inner) = actual {
-                return self.types_compatible(expected_inner, actual_inner);
+            (Type::Tuple(e_els), Type::Tuple(a_els)) => {
+                if e_els.len() != a_els.len() { return false; }
+                e_els.iter().zip(a_els.iter()).all(|(e, a)| self.types_compatible(e, a))
             }
+            (Type::Channel(e_inner), Type::Channel(a_inner)) => {
+                self.types_compatible(e_inner.as_ref(), a_inner.as_ref())
+            }
+            (Type::State(e_inner), Type::State(a_inner)) => {
+                self.types_compatible(e_inner.as_ref(), a_inner.as_ref())
+            }
+            (Type::Role(expected_role_name), _) => {
+                if let Some(roles) = self.model_roles.get(&actual) {
+                    roles.contains(expected_role_name)
+                } else {
+                    false
+                }
+            }
+            _ => false,
         }
-
-        false
     }
 
     fn check_pattern(&mut self, pattern: &Pattern, matched_type: &Type) {

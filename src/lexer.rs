@@ -4,6 +4,7 @@ pub enum Token {
     Var, Const, Static, Fn, Return,
     If, While, Until, Loop, For, In, Match, Next, Any, Break, Once,
     Import, From, As, Enum,
+    Model, Role, Extend, With, This,
 
 	// Built-ins
 	Print, Echo, Sleep, Thread, Channel, State,
@@ -307,6 +308,11 @@ impl Lexer {
             "channel" => Token::Channel,
             "state" => Token::State,
 			"enum" => Token::Enum,
+            "model" => Token::Model,
+            "role" => Token::Role,
+            "extend" => Token::Extend,
+            "with" => Token::With,
+            "this" => Token::This,
 			"true" => Token::Bool(true),
     		"false" => Token::Bool(false),
             _ => Token::Identifier(ident),

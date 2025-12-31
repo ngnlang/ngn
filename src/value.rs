@@ -446,6 +446,10 @@ pub enum Value {
         data: Option<Box<Value>>,
     },
     State(Arc<Mutex<Value>>),
+    Object {
+        model_name: String,
+        fields: std::collections::HashMap<String, Value>,
+    },
     Void,
 }
 
@@ -568,8 +572,38 @@ impl Value {
                     _ => false,
                 }
             }
+            (Value::Object { model_name: m1, fields: f1 }, Value::Object { model_name: m2, fields: f2 }) => {
+                if m1 != m2 || f1.len() != f2.len() { return false; }
+                for (k, v1) in f1 {
+                    if let Some(v2) = f2.get(k) {
+                        if !v1.is_equal(v2) { return false; }
+                    } else { return false; }
+                }
+                true
+            }
             (Value::Void, Value::Void) => true,
             _ => false,
+        }
+    }
+
+    pub fn type_name(&self) -> &str {
+        match self {
+            Value::Numeric(n) => match n {
+                Number::I64(_) | Number::I32(_) | Number::I16(_) | Number::I8(_) |
+                Number::U64(_) | Number::U32(_) | Number::U16(_) | Number::U8(_) => "i64",
+                Number::F64(_) | Number::F32(_) => "f64",
+            },
+            Value::String(_) => "string",
+            Value::Bool(_) => "bool",
+            Value::Array(_) => "array",
+            Value::Tuple(_) => "tuple",
+            Value::Object { model_name, .. } => model_name,
+            Value::Channel(_) => "channel",
+            Value::State(_) => "state",
+            Value::Enum { enum_name, .. } => enum_name,
+            Value::Function(_) | Value::Closure(_) | Value::NativeFunction(_) => "function",
+            Value::Void => "void",
+            Value::Reference(_, _) => "reference",
         }
     }
 }
@@ -611,6 +645,16 @@ impl fmt::Display for Value {
             Value::State(s) => {
                 let val = s.lock().unwrap();
                 write!(f, "{}", *val)
+            }
+            Value::Object { model_name, fields } => {
+                write!(f, "{} {{", model_name)?;
+                let mut first = true;
+                for (name, val) in fields {
+                    if !first { write!(f, ", ")?; }
+                    write!(f, "{}: {}", name, val)?;
+                    first = false;
+                }
+                write!(f, "}}")
             }
             Value::Void => write!(f, "void"),
         }

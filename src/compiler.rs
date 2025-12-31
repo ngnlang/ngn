@@ -445,6 +445,44 @@ impl Compiler {
                 self.reg_top = dest + 1;
                 dest
             }
+            Expr::ModelInstance { name, fields } => {
+                let model_name_idx = self.add_constant(Value::String(name.clone()));
+                let start_reg = self.reg_top;
+                let mut field_names = Vec::new();
+                for (f_name, f_expr) in fields {
+                    field_names.push(Value::String(f_name.clone()));
+                    self.compile_expr(f_expr);
+                }
+                let count = (self.reg_top - start_reg) as u8;
+                let fields_idx = self.add_constant(Value::Tuple(field_names));
+                let dest = self.alloc_reg();
+                self.instructions.push(OpCode::CreateObject(dest, model_name_idx, fields_idx, start_reg, count));
+                self.reg_top = dest + 1;
+                dest
+            }
+            Expr::FieldAccess { object, field } => {
+                let obj_reg = self.compile_expr(object);
+                let field_idx = self.add_constant(Value::String(field.clone()));
+                let dest = self.alloc_reg();
+                self.instructions.push(OpCode::GetField(dest, obj_reg, field_idx));
+                self.reg_top = dest + 1;
+                dest
+            }
+            Expr::This => {
+                if let Some(idx) = self.symbol_table.get("this").cloned() {
+                    let dest = self.alloc_reg();
+                    self.instructions.push(OpCode::Move(dest, idx as u16));
+                    self.reg_top = dest + 1;
+                    dest
+                } else if let Some(up_idx) = self.resolve_upvalue("this") {
+                    let dest = self.alloc_reg();
+                    self.instructions.push(OpCode::GetUpvalue(dest, up_idx));
+                    self.reg_top = dest + 1;
+                    dest
+                } else {
+                    panic!("Compiler Error: 'this' used outside of method context");
+                }
+            }
             Expr::MethodCall(obj_expr, method, args) => {
                 let obj_reg = self.compile_expr(obj_expr);
                 let dest = self.alloc_reg();
@@ -539,6 +577,45 @@ impl Compiler {
                 self.temp_start = self.next_index as u16;
                 self.reg_top = self.temp_start;
             }
+            Statement::Model(_) | Statement::Role(_) => {}
+            Statement::Extend { target, methods, .. } => {
+                let target_name = match target {
+                    crate::parser::Type::I64 | crate::parser::Type::I32 | crate::parser::Type::I16 | crate::parser::Type::I8 => "i64".to_string(),
+                    crate::parser::Type::U64 | crate::parser::Type::U32 | crate::parser::Type::U16 | crate::parser::Type::U8 => "i64".to_string(),
+                    crate::parser::Type::F64 | crate::parser::Type::F32 => "f64".to_string(),
+                    crate::parser::Type::String => "string".to_string(),
+                    crate::parser::Type::Bool => "bool".to_string(),
+                    crate::parser::Type::Array(_) => "array".to_string(),
+                    crate::parser::Type::Tuple(_) => "tuple".to_string(),
+                    crate::parser::Type::Model(ref name) => name.clone(),
+                    crate::parser::Type::Channel(_) => "channel".to_string(),
+                    crate::parser::Type::State(_) => "state".to_string(),
+                    _ => "".to_string(),
+                };
+                
+                if target_name.is_empty() { return; }
+                let target_idx = self.add_constant(Value::String(target_name));
+                
+                for method in methods {
+                    if let Statement::Function { name, params, body, .. } = method {
+                        let mut method_params = vec![crate::parser::Parameter { 
+                            name: "this".to_string(), 
+                            ty: Some(target.clone()),
+                            is_owned: false,
+                        }];
+                        method_params.extend(params);
+                        
+                        let func = self.compile_function_helper(name.clone(), method_params, body);
+                        let func_idx = self.add_constant(Value::Function(Box::new(func)));
+                        let closure_reg = self.alloc_reg();
+                        self.instructions.push(OpCode::MakeClosure(closure_reg, func_idx, 0, 0));
+                        
+                        let name_idx = self.add_constant(Value::String(name));
+                        self.instructions.push(OpCode::DefMethod(target_idx, name_idx, closure_reg));
+                        self.reg_top = self.temp_start;
+                    }
+                }
+            }
             Statement::Return(expr_opt) => {
                 if let Some(expr) = expr_opt {
                     let reg = self.compile_expr(&expr);
@@ -552,49 +629,7 @@ impl Compiler {
                 self.reg_top = self.temp_start;
             }
             Statement::Function { name, params, body, return_type: _ } => {
-                let mut sub_compiler = Compiler::new(None);
-                sub_compiler.is_global = false;
-
-                // Inherit all current symbols as GLOBALS for the function
-                for (n, &idx) in &self.symbol_table {
-                    sub_compiler.global_table.insert(n.clone(), idx);
-                }
-                for (n, &idx) in &self.global_table {
-                    sub_compiler.global_table.insert(n.clone(), idx);
-                }
-                sub_compiler.enums = self.enums.clone();
-                sub_compiler.signatures = self.signatures.clone();
-
-                sub_compiler.next_index = 0;
-
-                let mut param_ownership = Vec::new();
-                for param in &params {
-                    let p_idx = sub_compiler.next_index;
-                    sub_compiler.symbol_table.insert(param.name.clone(), p_idx);
-                    sub_compiler.next_index += 1;
-                    param_ownership.push(param.is_owned);
-                }
-
-                sub_compiler.temp_start = sub_compiler.next_index as u16;
-                sub_compiler.reg_top = sub_compiler.temp_start;
-                sub_compiler.max_reg = sub_compiler.reg_top;
-
-                for stmt in body {
-                    sub_compiler.compile_statement(stmt);
-                }
-                sub_compiler.instructions.push(OpCode::ReturnVoid);
-                
-                self.signatures.insert(name.clone(), param_ownership.clone());
-
-                let func = Function {
-                    name: name.clone(),
-                    instructions: Arc::new(sub_compiler.instructions),
-                    constants: Arc::new(sub_compiler.constants),
-                    param_count: param_ownership.len(),
-                    param_ownership,
-                    reg_count: sub_compiler.max_reg as usize,
-                };
-
+                let func = self.compile_function_helper(name.clone(), params, body);
                 let const_idx = self.add_constant(Value::Function(Box::new(func)));
                 let var_idx = if let Some(&existing_idx) = self.global_table.get(&name) {
                     existing_idx
@@ -1090,5 +1125,50 @@ impl Compiler {
             }
         }
         patch_indices
+    }
+
+    fn compile_function_helper(&mut self, name: String, params: Vec<crate::parser::Parameter>, body: Vec<Statement>) -> Function {
+        let mut sub_compiler = Compiler::new(Some(self));
+        sub_compiler.is_global = false;
+
+        // Inherit all current symbols as GLOBALS for the function
+        for (n, &idx) in &self.symbol_table {
+            sub_compiler.global_table.insert(n.clone(), idx);
+        }
+        for (n, &idx) in &self.global_table {
+            sub_compiler.global_table.insert(n.clone(), idx);
+        }
+        sub_compiler.enums = self.enums.clone();
+        sub_compiler.signatures = self.signatures.clone();
+
+        sub_compiler.next_index = 0;
+
+        let mut param_ownership = Vec::new();
+        for param in &params {
+            let p_idx = sub_compiler.next_index;
+            sub_compiler.symbol_table.insert(param.name.clone(), p_idx);
+            sub_compiler.next_index += 1;
+            param_ownership.push(param.is_owned);
+        }
+
+        sub_compiler.temp_start = sub_compiler.next_index as u16;
+        sub_compiler.reg_top = sub_compiler.temp_start;
+        sub_compiler.max_reg = sub_compiler.reg_top;
+
+        for stmt in body {
+            sub_compiler.compile_statement(stmt);
+        }
+        sub_compiler.instructions.push(OpCode::ReturnVoid);
+        
+        self.signatures.insert(name.clone(), param_ownership.clone());
+
+        Function {
+            name,
+            instructions: Arc::new(sub_compiler.instructions),
+            constants: Arc::new(sub_compiler.constants),
+            param_count: param_ownership.len(),
+            param_ownership,
+            reg_count: sub_compiler.max_reg as usize,
+        }
     }
 }

@@ -75,7 +75,7 @@ impl Fiber {
         self.stack[target_idx] = val;
     }
 
-    pub fn run_step(&mut self, globals: &mut Vec<Value>) -> FiberStatus {
+    pub fn run_step(&mut self, globals: &mut Vec<Value>, custom_methods: &Arc<Mutex<std::collections::HashMap<String, std::collections::HashMap<String, Value>>>>) -> FiberStatus {
         if self.ip >= self.instructions.len() {
             if let Some(chan) = &self.completion_channel {
                 chan.buffer.lock().unwrap().push_back(Value::Void);
@@ -659,6 +659,29 @@ impl Fiber {
                     panic!("Runtime Error: Invalid method name constant");
                 };
                 
+                // Check custom methods from 'extend'
+                let type_name = obj.type_name();
+                let mut custom_method = None;
+                {
+                    let methods_map = custom_methods.lock().unwrap();
+                    if let Some(target_methods) = methods_map.get(type_name) {
+                        if let Some(m) = target_methods.get(&method_name) {
+                            custom_method = Some(m.clone());
+                        }
+                    }
+                }
+
+                if let Some(Value::Closure(closure)) = custom_method {
+                    let new_arg_start = (self.stack.len() - self.fp) as u16;
+                    self.stack.push(obj);
+                    for i in 0..arg_count {
+                        self.stack.push(self.get_reg_at(arg_start + i as u16));
+                    }
+                    let func = closure.function.clone();
+                    self.invoke_function(&func, Some(closure), Some(dest), new_arg_start, arg_count + 1);
+                    return FiberStatus::Running;
+                }
+
                 // Collect arguments
                 let mut args = Vec::new();
                 for i in 0..arg_count {
@@ -676,6 +699,31 @@ impl Fiber {
                 } else {
                     panic!("Runtime Error: Invalid method name constant");
                 };
+
+                // Check custom methods (can also be used for mutating calls)
+                let type_name = obj.type_name();
+                let mut custom_method = None;
+                {
+                    let methods_map = custom_methods.lock().unwrap();
+                    if let Some(target_methods) = methods_map.get(type_name) {
+                        if let Some(m) = target_methods.get(&method_name) {
+                            custom_method = Some(m.clone());
+                        }
+                    }
+                }
+
+                if let Some(Value::Closure(closure)) = custom_method {
+                    let new_arg_start = (self.stack.len() - self.fp) as u16;
+                    self.stack.push(obj);
+                    for i in 0..arg_count {
+                        self.stack.push(self.get_reg_at(arg_start + i as u16));
+                    }
+                    let func = closure.function.clone();
+                    // We might need to write back the object if it's 'this' that changed
+                    // but ngn is generally immutable except for field assignments which use SetField.
+                    self.invoke_function(&func, Some(closure), Some(dest), new_arg_start, arg_count + 1);
+                    return FiberStatus::Running;
+                }
                 
                 // Collect arguments
                 let mut args = Vec::new();
@@ -687,6 +735,49 @@ impl Fiber {
                 let (result, new_obj) = self.call_builtin_method_mut(obj, &method_name, args);
                 self.set_reg_at(dest, result);
                 self.set_reg_at(obj_reg, new_obj);
+            }
+            OpCode::CreateObject(dest, model_idx, fields_idx, start, count) => {
+                let model_name = if let Value::String(s) = &self.constants[model_idx] { s.clone() } else { panic!("..."); };
+                let field_names = if let Value::Tuple(v) = &self.constants[fields_idx] { v } else { panic!("..."); };
+                let mut fields = std::collections::HashMap::new();
+                for i in 0..count {
+                    let field_name = if let Value::String(s) = &field_names[i as usize] { s.clone() } else { panic!("..."); };
+                    fields.insert(field_name, self.get_reg_at(start + i as u16));
+                }
+                self.set_reg_at(dest, Value::Object { model_name, fields });
+            }
+            OpCode::GetField(dest, obj_reg, field_idx) => {
+                let obj = self.get_reg_at(obj_reg);
+                let field_name = if let Value::String(s) = &self.constants[field_idx] { s } else { panic!("..."); };
+                if let Value::Object { fields, .. } = obj {
+                    if let Some(val) = fields.get(field_name) {
+                        self.set_reg_at(dest, val.clone());
+                    } else {
+                        panic!("Runtime Error: Field '{}' not found in object", field_name);
+                    }
+                } else {
+                    panic!("Runtime Error: GetField on non-object");
+                }
+            }
+            OpCode::SetField(obj_reg, field_idx, src_reg) => {
+                let mut obj = self.get_reg_at(obj_reg);
+                let field_name = if let Value::String(s) = &self.constants[field_idx] { s.clone() } else { panic!("..."); };
+                let val = self.get_reg_at(src_reg);
+                if let Value::Object { ref mut fields, .. } = obj {
+                    fields.insert(field_name, val);
+                    self.set_reg_at(obj_reg, obj); 
+                } else {
+                    panic!("Runtime Error: SetField on non-object");
+                }
+            }
+            OpCode::DefMethod(target_idx, name_idx, closure_reg) => {
+                let target_type = if let Value::String(s) = &self.constants[target_idx] { s.clone() } else { panic!("..."); };
+                let method_name = if let Value::String(s) = &self.constants[name_idx] { s.clone() } else { panic!("..."); };
+                let closure = self.get_reg_at(closure_reg);
+                
+                let mut methods = custom_methods.lock().unwrap();
+                let target_methods = methods.entry(target_type).or_insert_with(std::collections::HashMap::new);
+                target_methods.insert(method_name, closure);
             }
             OpCode::Halt => {
                 self.status = FiberStatus::Finished;
@@ -962,6 +1053,7 @@ pub struct VM {
     pub globals: Vec<Value>,
     pub fibers: VecDeque<Fiber>,
     pub current_fiber: Option<Fiber>,
+    pub custom_methods: Arc<Mutex<std::collections::HashMap<String, std::collections::HashMap<String, Value>>>>,
 }
 
 impl VM {
@@ -983,12 +1075,13 @@ impl VM {
             globals,
             fibers: VecDeque::new(),
             current_fiber: Some(main_fiber),
+            custom_methods: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
     }
 
     pub fn run(&mut self) {
         while let Some(mut fiber) = self.current_fiber.take() {
-            let status = fiber.run_step(&mut self.globals);
+            let status = fiber.run_step(&mut self.globals, &self.custom_methods);
             match status {
                 FiberStatus::Running => {
                     self.current_fiber = Some(fiber);

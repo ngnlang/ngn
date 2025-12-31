@@ -1,6 +1,6 @@
 use crate::lexer::{Lexer, Token};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     I64, I32, I16, I8,
     U64, U32, U16, U8,
@@ -18,6 +18,8 @@ pub enum Type {
     Enum(String),
     Channel(Box<Type>),
     State(Box<Type>),
+    Model(String),
+    Role(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -103,6 +105,27 @@ pub enum Statement {
     Break,
     Return(Option<Expr>),
     Enum(EnumDef),
+    Model(ModelDef),
+    Role(RoleDef),
+    Extend {
+        target: Type,
+        role: Option<String>,
+        methods: Vec<Statement>, // These should be Statement::Function
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelDef {
+    pub name: String,
+    pub fields: Vec<(String, Type)>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoleDef {
+    pub name: String,
+    pub methods: Vec<Statement>, // These should be Statement::Function with empty bodies if it's just a signature?
+                                 // Or maybe a separate MethodSignature struct.
+                                 // V1 uses FnDef which has Option<Vec<Stmt>> for body.
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -145,6 +168,9 @@ pub enum Expr {
         op: Token,
         right: Box<Expr>,
     },
+    ModelInstance { name: String, fields: Vec<(String, Expr)> },
+    FieldAccess { object: Box<Expr>, field: String },
+    This,
 }
 
 pub struct Parser {
@@ -243,6 +269,9 @@ impl Parser {
         
         let body = if self.current_token == Token::LBrace {
             self.parse_block()
+        } else if self.current_token == Token::Newline || self.current_token == Token::RBrace {
+            // Empty body (signature)
+            vec![]
         } else {
             // Implicit return
             vec![Statement::Return(Some(self.parse_expression()))]
@@ -301,6 +330,9 @@ impl Parser {
             }
             Token::Import => self.parse_import_statement(),
             Token::Enum => self.parse_enum_stmt(),
+            Token::Model => self.parse_model_stmt(),
+            Token::Role => self.parse_role_stmt(),
+            Token::Extend => self.parse_extend_stmt(),
             Token::Print => {
                 self.advance();
                 self.expect(Token::LParen);
@@ -454,10 +486,10 @@ impl Parser {
                             Type::Tuple(vec![])
                         }
                     }
-                    _ => { // assume enum
+                    _ => { // assume model
                         let n = name.clone();
                         self.advance();
-                        Type::Enum(n)
+                        Type::Model(n)
                     }
                 }
             }
@@ -821,6 +853,10 @@ impl Parser {
                 self.expect(Token::RParen);
                 Expr::State(Box::new(initial))
             }
+            Token::This => {
+                self.advance();
+                Expr::This
+            }
             _ => panic!("Expected expression, found {:?}", self.current_token),
         };
 
@@ -845,7 +881,7 @@ impl Parser {
                 }
                 Token::Period => {
                     self.advance(); // consume '.'
-                    let method_name = self.expect_identifier();
+                    let name = self.expect_identifier();
                     
                     // Check for method call: .method(args)
                     if self.current_token == Token::LParen {
@@ -856,9 +892,29 @@ impl Parser {
                             if self.current_token == Token::Comma { self.advance(); }
                         }
                         self.expect(Token::RParen);
-                        expr = Expr::MethodCall(Box::new(expr), method_name, args);
+                        expr = Expr::MethodCall(Box::new(expr), name, args);
                     } else {
-                        panic!("Field access not implemented yet, expected '(' for method call after '.'");
+                        // Field access: .field
+                        expr = Expr::FieldAccess { object: Box::new(expr), field: name };
+                    }
+                }
+                Token::LBrace => {
+                    if let Expr::Variable(name) = expr {
+                        self.advance(); // consume '{'
+                        self.consume_newlines();
+                        let mut fields = Vec::new();
+                        while self.current_token != Token::RBrace && self.current_token != Token::EOF {
+                            let field_name = self.expect_identifier();
+                            self.expect(Token::Colon);
+                            let value = self.parse_expression();
+                            fields.push((field_name, value));
+                            if self.current_token == Token::Comma { self.advance(); }
+                            self.consume_newlines();
+                        }
+                        self.expect(Token::RBrace);
+                        expr = Expr::ModelInstance { name, fields };
+                    } else {
+                        break;
                     }
                 }
                 Token::LBracket => {
@@ -1397,5 +1453,75 @@ impl Parser {
         self.expect(Token::RBrace);
         
         Statement::Enum(EnumDef { name, variants })
+    }
+    fn parse_model_stmt(&mut self) -> Statement {
+        if self.in_function {
+            panic!("Syntax Error: 'model' can only be declared in global scope");
+        }
+        self.advance(); // consume 'model'
+        let name = self.expect_identifier();
+        self.expect(Token::LBrace);
+        self.consume_newlines();
+        
+        let mut fields = Vec::new();
+        while self.current_token != Token::RBrace && self.current_token != Token::EOF {
+            let field_name = self.expect_identifier();
+            self.expect(Token::Colon);
+            let field_type = self.parse_type();
+            fields.push((field_name, field_type));
+            
+            if self.current_token == Token::Comma {
+                self.advance();
+            }
+            self.consume_newlines();
+        }
+        self.expect(Token::RBrace);
+        Statement::Model(ModelDef { name, fields })
+    }
+
+    fn parse_role_stmt(&mut self) -> Statement {
+        if self.in_function {
+            panic!("Syntax Error: 'role' can only be declared in global scope");
+        }
+        self.advance(); // consume 'role'
+        let name = self.expect_identifier();
+        self.expect(Token::LBrace);
+        self.consume_newlines();
+        
+        let mut methods = Vec::new();
+        while self.current_token != Token::RBrace && self.current_token != Token::EOF {
+             let method = self.parse_function();
+             methods.push(method);
+             self.consume_newlines();
+        }
+        self.expect(Token::RBrace);
+        Statement::Role(RoleDef { name, methods })
+    }
+
+    fn parse_extend_stmt(&mut self) -> Statement {
+        self.advance(); // consume 'extend'
+        
+        let target = self.parse_type();
+        
+        let mut role = None;
+        if self.current_token == Token::With {
+            self.advance();
+            if self.current_token != Token::LBrace {
+                role = Some(self.expect_identifier());
+            }
+        }
+        
+        self.expect(Token::LBrace);
+        self.consume_newlines();
+        
+        let mut methods = Vec::new();
+        while self.current_token != Token::RBrace && self.current_token != Token::EOF {
+             let method = self.parse_function();
+             methods.push(method);
+             self.consume_newlines();
+        }
+        self.expect(Token::RBrace);
+        
+        Statement::Extend { target, role, methods }
     }
 }
