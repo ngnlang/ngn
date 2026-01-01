@@ -419,16 +419,39 @@ pub struct Function {
     pub reg_count: usize,
 }
 
-#[derive(Debug, Clone)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Closure {
     pub function: Box<Function>,
     pub upvalues: Vec<Value>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EnumData {
+    pub enum_name: String,
+    pub variant_name: String,
+    pub data: Option<Box<Value>>,
+}
+
+impl EnumData {
+    pub fn into_value(enum_name: String, variant_name: String, data: Option<Box<Value>>) -> Value {
+        Value::Enum(Box::new(Self { enum_name, variant_name, data }))
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ObjectData {
+    pub model_name: String,
+    pub fields: std::collections::HashMap<String, Value>,
+}
+
+impl ObjectData {
+    pub fn into_value(model_name: String, fields: std::collections::HashMap<String, Value>) -> Value {
+        Value::Object(Box::new(Self { model_name, fields }))
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[allow(dead_code)]
-#[derive(serde::Serialize, serde::Deserialize)]
 pub enum Value {
     Bool(bool),
     Function(Box<Function>),
@@ -440,16 +463,9 @@ pub enum Value {
     Array(Vec<Value>),
     Tuple(Vec<Value>),
     Channel(Channel),
-    Enum {
-        enum_name: String,
-        variant_name: String,
-        data: Option<Box<Value>>,
-    },
+    Enum(Box<EnumData>),
     State(Arc<Mutex<Value>>),
-    Object {
-        model_name: String,
-        fields: std::collections::HashMap<String, Value>,
-    },
+    Object(Box<ObjectData>),
     Void,
     Regex(String),
 }
@@ -560,20 +576,23 @@ impl Value {
                 }
                 true
             }
-            (Value::Enum { enum_name: e1, variant_name: v1, data: d1 }, Value::Enum { enum_name: e2, variant_name: v2, data: d2 }) => {
-                // Two enums are equal if they belong to the same Enum type,
-                // have the same variant name, and their associated data matches.
-                if v1 != v2 || e1 != e2 { 
+            (Value::Enum(e1), Value::Enum(e2)) => {
+                if e1.variant_name != e2.variant_name || e1.enum_name != e2.enum_name { 
                     return false; 
                 }
 
-                match (d1, d2) {
+                match (&e1.data, &e2.data) {
                     (Some(a), Some(b)) => a.is_equal(b),
                     (None, None) => true,
                     _ => false,
                 }
             }
-            (Value::Object { model_name: m1, fields: f1 }, Value::Object { model_name: m2, fields: f2 }) => {
+            (Value::Object(o1), Value::Object(o2)) => {
+                let m1 = &o1.model_name;
+                let f1 = &o1.fields;
+                let m2 = &o2.model_name;
+                let f2 = &o2.fields;
+
                 if m1 != m2 || f1.len() != f2.len() { return false; }
                 for (k, v1) in f1 {
                     if let Some(v2) = f2.get(k) {
@@ -600,10 +619,10 @@ impl Value {
             Value::Array(_) => "array",
             Value::Tuple(_) => "tuple",
             Value::Regex(_) => "regex",
-            Value::Object { model_name, .. } => model_name,
+            Value::Object(o) => &o.model_name,
             Value::Channel(_) => "channel",
             Value::State(_) => "state",
-            Value::Enum { enum_name, .. } => enum_name,
+            Value::Enum(e) => &e.enum_name,
             Value::Function(_) | Value::Closure(_) | Value::NativeFunction(_) => "function",
             Value::Void => "void",
             Value::Reference(_, _) => "reference",
@@ -636,11 +655,11 @@ impl fmt::Display for Value {
                 }
                 write!(f, ")")
             }
-            Value::Enum { enum_name, variant_name, data } => {
-                if let Some(d) = data {
-                    write!(f, "{}::{} ({})", enum_name, variant_name, d)
+            Value::Enum(e) => {
+                if let Some(d) = &e.data {
+                    write!(f, "{}::{} ({})", e.enum_name, e.variant_name, d)
                 } else {
-                    write!(f, "{}::{}", enum_name, variant_name)
+                    write!(f, "{}::{}", e.enum_name, e.variant_name)
                 }
             }
             Value::Closure(_) => write!(f, "<closure>"),
@@ -649,10 +668,10 @@ impl fmt::Display for Value {
                 let val = s.lock().unwrap();
                 write!(f, "{}", *val)
             }
-            Value::Object { model_name, fields } => {
-                write!(f, "{} {{", model_name)?;
+            Value::Object(o) => {
+                write!(f, "{} {{", o.model_name)?;
                 let mut first = true;
-                for (name, val) in fields {
+                for (name, val) in &o.fields {
                     if !first { write!(f, ", ")?; }
                     write!(f, "{}: {}", name, val)?;
                     first = false;

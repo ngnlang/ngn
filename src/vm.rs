@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::io::Write;
-use crate::value::{Value, Channel, Closure, Function};
+use crate::value::{Value, Channel, Closure, Function, EnumData, ObjectData};
 use crate::bytecode::OpCode;
 use regex::Regex as RegexLib;
 
@@ -74,6 +74,22 @@ impl Fiber {
             self.stack.resize(target_idx + 1, Value::Void);
         }
         self.stack[target_idx] = val;
+    }
+
+    /// Extract a String constant from the constant pool, panicking if the type is wrong.
+    pub fn expect_string_const(&self, idx: usize) -> String {
+        match &self.constants[idx] {
+            Value::String(s) => s.clone(),
+            other => panic!("Internal Error: Expected String constant at index {}, found {}", idx, other.type_name()),
+        }
+    }
+
+    /// Extract a Tuple constant from the constant pool, panicking if the type is wrong.
+    pub fn expect_tuple_const(&self, idx: usize) -> &Vec<Value> {
+        match &self.constants[idx] {
+            Value::Tuple(t) => t,
+            other => panic!("Internal Error: Expected Tuple constant at index {}, found {}", idx, other.type_name()),
+        }
     }
 
     pub fn run_step(&mut self, globals: &mut Vec<Value>, custom_methods: &Arc<Mutex<std::collections::HashMap<String, std::collections::HashMap<String, Value>>>>) -> FiberStatus {
@@ -434,19 +450,19 @@ impl Fiber {
                     None
                 };
                 
-                self.set_reg_at(dest, Value::Enum { enum_name, variant_name, data });
+                self.set_reg_at(dest, EnumData::into_value(enum_name, variant_name, data));
             }
             OpCode::IsVariant(dest, src, enum_idx, variant_idx) => {
                 let val = self.get_reg_at(src);
-                let target_enum = if let Value::String(s) = &self.constants[enum_idx] { s } else { panic!("..."); };
-                let target_variant = if let Value::String(s) = &self.constants[variant_idx] { s } else { panic!("..."); };
+                let target_enum = self.expect_string_const(enum_idx);
+                let target_variant = self.expect_string_const(variant_idx);
                 
-                if let Value::Enum { enum_name, variant_name, .. } = val {
+                if let Value::Enum(e) = val {
                     // If target_enum is empty, only match on variant name (shorthand syntax)
                     let matches = if target_enum.is_empty() {
-                        &variant_name == target_variant
+                        e.variant_name == target_variant
                     } else {
-                        &enum_name == target_enum && &variant_name == target_variant
+                        e.enum_name == target_enum && e.variant_name == target_variant
                     };
                     self.set_reg_at(dest, Value::Bool(matches));
                 } else {
@@ -455,8 +471,8 @@ impl Fiber {
             }
             OpCode::GetVariantData(dest, src) => {
                 let val = self.get_reg_at(src);
-                if let Value::Enum { data, .. } = val {
-                    if let Some(d) = data {
+                if let Value::Enum(e) = val {
+                    if let Some(d) = e.data {
                         self.set_reg_at(dest, *d);
                     } else {
                         panic!("Runtime Error: Accessing data of variant without payload");
@@ -636,17 +652,17 @@ impl Fiber {
                 if let Value::Channel(chan) = chan_val {
                     let mut buffer = chan.buffer.lock().unwrap();
                     if let Some(val) = buffer.pop_front() {
-                        self.set_reg_at(dest, Value::Enum {
-                            enum_name: "Maybe".to_string(),
-                            variant_name: "Value".to_string(),
-                            data: Some(Box::new(val)),
-                        });
+                        self.set_reg_at(dest, EnumData::into_value(
+                            "Maybe".to_string(),
+                            "Value".to_string(),
+                            Some(Box::new(val)),
+                        ));
                     } else {
-                         self.set_reg_at(dest, Value::Enum {
-                            enum_name: "Maybe".to_string(),
-                            variant_name: "Null".to_string(),
-                            data: None,
-                        });
+                         self.set_reg_at(dest, EnumData::into_value(
+                            "Maybe".to_string(),
+                            "Null".to_string(),
+                            None,
+                        ));
                     }
                 } else {
                     panic!("Runtime Error: ReceiveMaybe on non-channel");
@@ -662,11 +678,7 @@ impl Fiber {
             }
             OpCode::CallMethod(dest, obj_reg, method_idx, arg_start, arg_count) => {
                 let obj = self.get_reg_at(obj_reg);
-                let method_name = if let Value::String(s) = &self.constants[method_idx] {
-                    s.clone()
-                } else {
-                    panic!("Runtime Error: Invalid method name constant");
-                };
+                let method_name = self.expect_string_const(method_idx);
                 
                 // Check custom methods from 'extend'
                 let type_name = obj.type_name();
@@ -703,11 +715,7 @@ impl Fiber {
             }
             OpCode::CallMethodMut(dest, obj_reg, method_idx, arg_start, arg_count) => {
                 let obj = self.get_reg_at(obj_reg);
-                let method_name = if let Value::String(s) = &self.constants[method_idx] {
-                    s.clone()
-                } else {
-                    panic!("Runtime Error: Invalid method name constant");
-                };
+                let method_name = self.expect_string_const(method_idx);
 
                 // Check custom methods (can also be used for mutating calls)
                 let type_name = obj.type_name();
@@ -746,20 +754,20 @@ impl Fiber {
                 self.set_reg_at(obj_reg, new_obj);
             }
             OpCode::CreateObject(dest, model_idx, fields_idx, start, count) => {
-                let model_name = if let Value::String(s) = &self.constants[model_idx] { s.clone() } else { panic!("..."); };
-                let field_names = if let Value::Tuple(v) = &self.constants[fields_idx] { v } else { panic!("..."); };
+                let model_name = self.expect_string_const(model_idx);
+                let field_names = self.expect_tuple_const(fields_idx);
                 let mut fields = std::collections::HashMap::new();
                 for i in 0..count {
                     let field_name = if let Value::String(s) = &field_names[i as usize] { s.clone() } else { panic!("..."); };
                     fields.insert(field_name, self.get_reg_at(start + i as u16));
                 }
-                self.set_reg_at(dest, Value::Object { model_name, fields });
+                self.set_reg_at(dest, ObjectData::into_value(model_name, fields));
             }
             OpCode::GetField(dest, obj_reg, field_idx) => {
                 let obj = self.get_reg_at(obj_reg);
-                let field_name = if let Value::String(s) = &self.constants[field_idx] { s } else { panic!("..."); };
-                if let Value::Object { fields, .. } = obj {
-                    if let Some(val) = fields.get(field_name) {
+                let field_name = self.expect_string_const(field_idx);
+                if let Value::Object(o) = obj {
+                    if let Some(val) = o.fields.get(&field_name) {
                         self.set_reg_at(dest, val.clone());
                     } else {
                         panic!("Runtime Error: Field '{}' not found in object", field_name);
@@ -770,18 +778,18 @@ impl Fiber {
             }
             OpCode::SetField(obj_reg, field_idx, src_reg) => {
                 let mut obj = self.get_reg_at(obj_reg);
-                let field_name = if let Value::String(s) = &self.constants[field_idx] { s.clone() } else { panic!("..."); };
+                let field_name = self.expect_string_const(field_idx);
                 let val = self.get_reg_at(src_reg);
-                if let Value::Object { ref mut fields, .. } = obj {
-                    fields.insert(field_name, val);
+                if let Value::Object(ref mut o) = obj {
+                    o.fields.insert(field_name, val);
                     self.set_reg_at(obj_reg, obj); 
                 } else {
                     panic!("Runtime Error: SetField on non-object");
                 }
             }
             OpCode::DefMethod(target_idx, name_idx, closure_reg) => {
-                let target_type = if let Value::String(s) = &self.constants[target_idx] { s.clone() } else { panic!("..."); };
-                let method_name = if let Value::String(s) = &self.constants[name_idx] { s.clone() } else { panic!("..."); };
+                let target_type = self.expect_string_const(target_idx);
+                let method_name = self.expect_string_const(name_idx);
                 let closure = self.get_reg_at(closure_reg);
                 
                 let mut methods = custom_methods.lock().unwrap();
@@ -1076,7 +1084,7 @@ impl Fiber {
             (Value::Bool(_), Value::Bool(_)) => true,
             (Value::Array(_), Value::Array(_)) => true, // Could be stricter but for now variants match
             (Value::Tuple(_), Value::Tuple(_)) => true,
-            (Value::Enum { enum_name: e1, variant_name: vr1, .. }, Value::Enum { enum_name: e2, variant_name: vr2, .. }) => e1 == e2 && vr1 == vr2,
+            (Value::Enum(e1), Value::Enum(e2)) => e1.enum_name == e2.enum_name && e1.variant_name == e2.variant_name,
             (Value::Void, Value::Void) => true,
             _ => false,
         }
