@@ -335,32 +335,12 @@ impl Analyzer {
             Statement::Extend { target, role, methods } => {
                 // If role is provided, verify it exists and methods match
                 if let Some(role_name) = role {
-                    if let Some(role_def) = self.roles.get(role_name).cloned() {
-                        for rm in &role_def.methods {
-                            if let Statement::Function { name: rm_name, params: rm_params, return_type: rm_ret, .. } = rm {
-                                if let Some(m) = methods.iter().find(|m| {
-                                    if let Statement::Function { name: m_name, .. } = m {
-                                         m_name == rm_name
-                                    } else { false }
-                                }) {
-                                     if let Statement::Function { params: m_params, return_type: m_ret, .. } = m {
-                                         if m_params.len() != rm_params.len() {
-                                             self.errors.push(format!("Type Error: Method '{}' in extend of '{:?}' with role '{}' has wrong number of parameters", rm_name, target, role_name));
-                                         }
-                                     }
-                                } else {
-                                    self.errors.push(format!("Type Error: Target '{:?}' does not implement method '{}' required by role '{}'", target, rm_name, role_name));
-                                }
-                            }
-                        }
-                    } else {
-                        self.errors.push(format!("Type Error: Cannot use unknown role '{}' in extend", role_name));
-                    }
+                    self.validate_role_impl(target, role_name, methods);
                 }
 
                 // Check method bodies
                 for method in methods {
-                    if let Statement::Function { name, params, body, return_type, .. } = method {
+                    if let Statement::Function { params, body, return_type, .. } = method {
                         let actual_return_type = return_type.clone().unwrap_or(Type::Void);
                         let prev_return = self.current_return_type.clone();
                         self.current_return_type = Some(actual_return_type);
@@ -1147,6 +1127,65 @@ impl Analyzer {
 
     fn is_numeric(&self, ty: &Type) -> bool {
         matches!(ty, Type::I64 | Type::I32 | Type::I16 | Type::I8 | Type::U64 | Type::U32 | Type::U16 | Type::U8 | Type::F64 | Type::F32 | Type::Any)
+    }
+
+    fn validate_role_impl(&mut self, target: &Type, role_name: &str, methods: &[Statement]) {
+        let role_def = match self.roles.get(role_name).cloned() {
+            Some(def) => def,
+            None => {
+                self.errors.push(format!("Type Error: Cannot use unknown role '{}' in extend", role_name));
+                return;
+            }
+        };
+
+        for rm in &role_def.methods {
+            let (rm_name, rm_params, rm_ret) = if let Statement::Function { name, params, return_type, .. } = rm {
+                (name, params, return_type)
+            } else {
+                continue;
+            };
+
+            let impl_method = methods.iter().find(|m| {
+                if let Statement::Function { name, .. } = m {
+                    name == rm_name
+                } else {
+                    false
+                }
+            });
+
+            let m = match impl_method {
+                Some(m) => m,
+                None => {
+                    self.errors.push(format!("Type Error: Target '{:?}' does not implement method '{}' required by role '{}'", target, rm_name, role_name));
+                    continue;
+                }
+            };
+
+            let (m_params, m_ret) = if let Statement::Function { params, return_type, .. } = m {
+                (params, return_type)
+            } else {
+                continue;
+            };
+
+            if m_params.len() != rm_params.len() {
+                self.errors.push(format!("Type Error: Method '{}' in extend of '{:?}' with role '{}' has wrong number of parameters", rm_name, target, role_name));
+                continue;
+            } 
+            
+            for (i, (mp, rmp)) in m_params.iter().zip(rm_params.iter()).enumerate() {
+                let m_ty = mp.ty.clone().unwrap_or(Type::Any);
+                let rm_ty = rmp.ty.clone().unwrap_or(Type::Any);
+                if !self.types_compatible(&rm_ty, &m_ty) {
+                    self.errors.push(format!("Type Error: Method '{}' parameter {} type mismatch. Expected {:?}, got {:?}", rm_name, i + 1, rm_ty, m_ty));
+                }
+            }
+
+            let m_ret_ty = m_ret.clone().unwrap_or(Type::Void);
+            let rm_ret_ty = rm_ret.clone().unwrap_or(Type::Void);
+            if !self.types_compatible(&rm_ret_ty, &m_ret_ty) {
+                    self.errors.push(format!("Type Error: Method '{}' return type mismatch. Expected {:?}, got {:?}", rm_name, rm_ret_ty, m_ret_ty));
+            }
+        }
     }
 
     fn normalize_type(&self, ty: Type) -> Type {
