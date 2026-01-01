@@ -741,6 +741,17 @@ impl Analyzer {
                 }
             }
             Expr::MethodCall(obj_expr, method, args) => {
+                // Check for immutability
+                if matches!(method.as_str(), "push" | "pull" | "slice" | "splice") {
+                    if let Expr::Variable(name) = &**obj_expr {
+                        if let Some(sym) = self.lookup(name) {
+                            if !sym.is_mutable {
+                                self.errors.push(format!("Type Error: Cannot call mutating method '{}' on immutable variable '{}'", method, name));
+                            }
+                        }
+                    }
+                }
+
                 let obj_ty = self.check_expression(obj_expr);
                 let obj_ty = self.normalize_type(obj_ty);
                 
