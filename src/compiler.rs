@@ -15,6 +15,7 @@ pub struct Compiler {
     pub enclosing: *mut Compiler,
     pub symbol_table: HashMap<String, usize>,
     pub global_table: HashMap<String, usize>,
+    pub static_values: HashMap<String, Value>, // For inlining small static constants
     pub next_index: usize,
     pub reg_top: u16,      // Current top of register "stack"
     pub max_reg: u16,      // Peak register usage
@@ -41,6 +42,7 @@ impl Compiler {
             enclosing,
             symbol_table: HashMap::new(),
             global_table: HashMap::new(),
+            static_values: HashMap::new(),
             next_index: 0,
             reg_top: 0,
             max_reg: 0,
@@ -258,7 +260,14 @@ impl Compiler {
                 if self.moved_locals.contains(name) {
                     panic!("Compiler Error: Use of moved variable '{}'", name);
                 }
-                if let Some(&idx) = self.symbol_table.get(name) {
+                if self.static_values.contains_key(name) {
+                    let val = self.static_values.get(name).unwrap().clone();
+                    // Inline small static value
+                    let dest = self.alloc_reg();
+                    let idx = self.add_constant(val);
+                    self.instructions.push(OpCode::LoadConst(dest, idx));
+                    dest
+                } else if let Some(&idx) = self.symbol_table.get(name) {
                     idx as u16
                 } else if let Some(up_idx) = self.resolve_upvalue(name) {
                      let dest = self.alloc_reg();
@@ -282,12 +291,14 @@ impl Compiler {
             Expr::Closure { params, body, return_type: _ } => {
                  let (func, upvalues) = {
                     let global_table = self.global_table.clone(); 
+                    let static_values = self.static_values.clone();
                     let enums = self.enums.clone();
                     let signatures = self.signatures.clone();
 
                     let mut sub_compiler = Compiler::new(Some(self));
                     sub_compiler.is_global = false;
                     sub_compiler.global_table = global_table;
+                    sub_compiler.static_values = static_values;
                     sub_compiler.enums = enums;
                     sub_compiler.signatures = signatures;
                     sub_compiler.next_index = 0;
@@ -553,6 +564,38 @@ impl Compiler {
         }
     }
 
+    fn extract_constant_literal(&self, expr: &Expr) -> Option<Value> {
+        match expr {
+            Expr::Number(n) => Some(Value::Numeric(Number::I64(*n))),
+            Expr::Float(n) => Some(Value::Numeric(Number::F64(*n))),
+            Expr::Bool(b) => Some(Value::Bool(*b)),
+            Expr::String(s) if s.len() <= 64 => Some(Value::String(s.clone())),
+            Expr::Array(elements) if elements.len() < 10 => {
+                let mut values = Vec::new();
+                for el in elements {
+                    if let Some(v) = self.extract_constant_literal(el) {
+                        values.push(v);
+                    } else {
+                        return None;
+                    }
+                }
+                Some(Value::Array(values))
+            }
+            Expr::Tuple(elements) if elements.len() < 10 => {
+                let mut values = Vec::new();
+                for el in elements {
+                    if let Some(v) = self.extract_constant_literal(el) {
+                        values.push(v);
+                    } else {
+                        return None;
+                    }
+                }
+                Some(Value::Tuple(values))
+            }
+            _ => None,
+        }
+    }
+
     pub fn compile_statement(&mut self, stmt: Statement) {
         match stmt {
             Statement::Enum(enum_def) => {
@@ -561,6 +604,21 @@ impl Compiler {
             Statement::Declaration { name, is_mutable, is_static, value, declared_type: _ } => {
                 let var_idx = self.next_index;
                 
+                if is_static {
+                    // Check if value is a "small" constant for inlining
+                    // Primitives: Number, Float, Bool, Void, Null
+                    // Strings: length <= 64
+                    // Arrays: size < 10
+                    // Tuples: size < 10
+                    let inline_val = self.extract_constant_literal(&value);
+
+                    if let Some(val) = inline_val {
+                        self.static_values.insert(name.clone(), val);
+                        // Optimization: If inlined, we don't need to generate a runtime global slot at all.
+                        return;
+                    }
+                }
+
                 if is_static || self.is_global {
                     // For global/static, compile expression and move result to global slot
                     let res_reg = self.compile_expr(&value);
@@ -1139,6 +1197,7 @@ impl Compiler {
             sub_compiler.global_table.insert(n.clone(), idx);
         }
         sub_compiler.enums = self.enums.clone();
+        sub_compiler.static_values = self.static_values.clone();
         sub_compiler.signatures = self.signatures.clone();
 
         sub_compiler.next_index = 0;
