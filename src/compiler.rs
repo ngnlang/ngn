@@ -794,7 +794,7 @@ impl Compiler {
             } => self.compile_while(condition, body, is_once),
             Statement::Loop(body) => self.compile_loop(body),
             Statement::For { binding, index_binding, iterable, body } => self.compile_for(binding, index_binding, iterable, body),
-            Statement::Match { condition, arms, is_any } => self.compile_match(condition, arms, is_any),
+            Statement::Match { condition, arms } => self.compile_match(condition, arms),
             Statement::Next => self.compile_next(),
             Statement::Break => self.compile_break(),
         }
@@ -967,7 +967,7 @@ impl Compiler {
         self.reg_top = iter_reg; // Frees iter_reg, idx_temp, and val_reg
     }
 
-    fn compile_match(&mut self, condition: Expr, arms: Vec<crate::parser::MatchArm>, is_any: bool) {
+    fn compile_match(&mut self, condition: Expr, arms: Vec<crate::parser::MatchArm>) {
         let match_reg = self.compile_expr(&condition);
         
         // Sync next_index to preserve match_reg if it used temp regs
@@ -982,16 +982,14 @@ impl Compiler {
         // Update temp_start to PROTECT state_var from being overwritten by temps
         self.temp_start = self.next_index as u16;
         
-        // Define state var and initialize it
+        // Define state var and initialize it to 1 (active)
         self.instructions.push(OpCode::DefVar(state_var, true));
-        let initial_state = if is_any { 2 } else { 1 };
-        let const_state_idx = self.add_constant(Value::Numeric(Number::I64(initial_state)));
+        let const_state_idx = self.add_constant(Value::Numeric(Number::I64(1)));
         let temp_reg = self.alloc_reg();
         self.instructions.push(OpCode::LoadConst(temp_reg, const_state_idx));
         self.instructions.push(OpCode::AssignVar(state_var as u16, temp_reg));
         self.reg_top = self.temp_start;
 
-        self.break_patches.push(Vec::new());
         self.next_body_patches.push(Vec::new());
 
         for arm in arms {
@@ -1049,23 +1047,12 @@ impl Compiler {
                 self.patch_jump(patch);
             }
 
-            // Transition state to 0 if not 2 (Any)
-            let state_reg = self.alloc_reg();
-            self.instructions.push(OpCode::GetVar(state_reg, state_var));
-            let two_idx_const = self.add_constant(Value::Numeric(Number::I64(2)));
-            let two_reg = self.alloc_reg();
-            self.instructions.push(OpCode::LoadConst(two_reg, two_idx_const));
-            
-            let is_any_reg = self.alloc_reg();
-            self.instructions.push(OpCode::Equal(is_any_reg, state_reg, two_reg));
-            let is_any_jump = self.emit(OpCode::JumpIfTrue(is_any_reg, 0));
-            
+            // Set state to 0 after successful match (exit match)
             let zero_reg = self.alloc_reg();
             let zero_val_idx_2 = self.add_constant(Value::Numeric(Number::I64(0)));
             self.instructions.push(OpCode::LoadConst(zero_reg, zero_val_idx_2));
             self.instructions.push(OpCode::AssignVar(state_var as u16, zero_reg));
             self.reg_top = self.temp_start;
-            self.patch_jump(is_any_jump);
 
             self.compile_statement(*arm.body.clone());
 
@@ -1084,11 +1071,6 @@ impl Compiler {
         
         // Final Cleanup
         self.next_body_patches.pop();
-        let breaks = self.break_patches.pop().unwrap();
-        for patch in breaks {
-            self.patch_jump(patch);
-        }
-        
         self.match_state_vars.pop();
         // Condition was in match_reg, which will be freed when compile_match finishes
         self.reg_top = match_reg;

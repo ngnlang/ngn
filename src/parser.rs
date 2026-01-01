@@ -100,7 +100,6 @@ pub enum Statement {
     Match {
         condition: Expr,
         arms: Vec<MatchArm>,
-        is_any: bool,
     },
     Next,
     Break,
@@ -1254,14 +1253,7 @@ impl Parser {
 
     fn parse_match_stmt(&mut self) -> Statement {
         self.advance(); // consume 'match'
-        
-        let is_any = if self.current_token == Token::Any {
-            self.advance();
-            true
-        } else {
-            false
-        };
-        
+
         self.expect(Token::LParen);
         let condition = self.parse_expression();
         self.expect(Token::RParen);
@@ -1313,7 +1305,6 @@ impl Parser {
         Statement::Match {
             condition,
             arms,
-            is_any,
         }
     }
 
