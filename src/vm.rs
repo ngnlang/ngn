@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::io::Write;
 use crate::value::{Value, Channel, Closure, Function};
 use crate::bytecode::OpCode;
+use regex::Regex as RegexLib;
 
 pub struct CallFrame {
     pub instructions: Arc<Vec<OpCode>>,
@@ -95,6 +96,14 @@ impl Fiber {
             OpCode::Move(dest, src) => {
                 let val = self.get_reg_at(src);
                 self.set_reg_at(dest, val);
+            }
+            OpCode::MakeRegex(dest, idx) => {
+                 let val = self.constants[idx].clone();
+                 if let Value::String(pattern) = val {
+                     self.set_reg_at(dest, Value::Regex(pattern));
+                 } else {
+                     panic!("Runtime Error: MakeRegex expects string constant");
+                 }
             }
             OpCode::AssignVar(dest, src) => {
                 let val = self.get_reg_at(src);
@@ -937,9 +946,44 @@ impl Fiber {
             }
             "replace" => {
                 if args.len() < 2 { panic!("replace() requires search and replacement patterns"); }
-                let search = if let Value::String(s) = &args[0] { s } else { panic!("replace() expects string search pattern") };
-                let repl = if let Value::String(s) = &args[1] { s } else { panic!("replace() expects string replacement") };
-                Value::String(s.replacen(search.as_str(), repl.as_str(), 1))
+                let replacement = if let Value::String(s) = &args[1] { s } else { panic!("replace() expects string replacement") };
+
+                match &args[0] {
+                    Value::String(search) => Value::String(s.replacen(search.as_str(), replacement.as_str(), 1)),
+                    Value::Regex(pattern_str) => {
+                         let (pattern, flags) = if pattern_str.starts_with("(?") {
+                             let end = pattern_str.find(')').expect("Invalid regex format");
+                             let flags = &pattern_str[2..end];
+                             let rest = &pattern_str[end+1..];
+                             (rest, flags)
+                        } else {
+                             (pattern_str.as_str(), "")
+                        };
+                        
+                        let is_global = flags.contains('g');
+                        
+                        // Reconstruct pattern with standard flags (excluding 'g')
+                        let standard_flags: String = flags.chars().filter(|&c| c != 'g').collect();
+                        let final_pattern = if standard_flags.is_empty() {
+                            pattern.to_string()
+                        } else {
+                            format!("(?{}){}", standard_flags, pattern)
+                        };
+
+                        match RegexLib::new(&final_pattern) {
+                             Ok(re) => {
+                                 let result = if is_global {
+                                     re.replace_all(s, replacement.as_str())
+                                 } else {
+                                     re.replace(s, replacement.as_str())
+                                 };
+                                 Value::String(result.to_string())
+                             },
+                             Err(e) => panic!("Invalid regex '{}': {}", final_pattern, e),
+                        }
+                    },
+                    _ => panic!("replace() expects string or regex search pattern"),
+                }
             }
             "copy" => {
                 let start = if !args.is_empty() { self.to_usize(&args[0]).unwrap_or(0) } else { 0 };

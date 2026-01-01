@@ -23,6 +23,7 @@ pub enum OpCode {
     // Data Movement
     LoadConst(u16, usize),   // (DestReg, ConstantIndex)
     Move(u16, u16),          // (DestReg, SrcReg)
+    MakeRegex(u16, usize),   // (DestReg, PatternConstIdx)
     
     // Variables
     GetVar(u16, usize),      // (DestReg, EnvIndex) - for closure support/non-locals? 

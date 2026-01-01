@@ -20,6 +20,7 @@ pub enum Type {
     State(Box<Type>),
     Model(String),
     Role(String),
+    Regex,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -132,6 +133,7 @@ pub struct RoleDef {
 pub enum Expr {
     Assign { name: String, value: Box<Expr> },
     Bool(bool),
+    Regex(String),
     Call { name: String, args: Vec<Expr> },
     Number(i64),
     Float(f64),
@@ -783,6 +785,10 @@ impl Parser {
             Token::Float(n) => {
                 self.advance();
                 Expr::Float(n)
+            }
+            Token::Regex(pattern) => {
+                self.advance();
+                Expr::Regex(pattern)
             }
             Token::StringStart => self.parse_interpolated_string(),
             Token::Identifier(name) => {

@@ -18,6 +18,7 @@ pub enum Token {
     StringPart(String),
     InterpolationStart,
     InterpolationEnd,
+    Regex(String),
 	Bool(bool),
     
     // Symbols
@@ -45,6 +46,7 @@ pub struct Lexer {
     cursor: usize,
     mode_stack: Vec<LexMode>,
     brace_stack: Vec<usize>,
+    last_token: Option<Token>,
 }
 
 impl Lexer {
@@ -54,10 +56,26 @@ impl Lexer {
             cursor: 0,
             mode_stack: vec![LexMode::Normal],
             brace_stack: vec![0],
+            last_token: None,
         }
     }
 
     pub fn next_token(&mut self) -> Token {
+        let token = self.next_token_inner();
+        // Don't track Newline, comments (not tokens here), or EOF as meaningful "last tokens" for division check?
+        // Actually, Newline IS meaningful (term ends). 
+        // But for regex check " / " -> division.
+        // If we have "a / b", prev is generic Identifier.
+        // If "return /a/" prev is Return.
+        // If "match /a/" prev is Match.
+        // EOF doesn't matter.
+        if token != Token::EOF {
+             self.last_token = Some(token.clone());
+        }
+        token
+    }
+
+    fn next_token_inner(&mut self) -> Token {
         let current_mode = *self.mode_stack.last().unwrap_or(&LexMode::Normal);
 
         if current_mode == LexMode::String {
@@ -148,7 +166,7 @@ impl Lexer {
                     Token::Percent
                 }
             }
-			'/' => {
+            '/' => {
                 let next_char = self.peek_current();
                 if next_char == '/' {
                     // Single line comment
@@ -156,7 +174,7 @@ impl Lexer {
                         self.cursor += 1;
                     }
                     // Recursively get next token after comment
-                    self.next_token()
+                    self.next_token_inner()
                 } else if next_char == '*' {
                     // Multi line comment
                     self.cursor += 2; // skip /*
@@ -168,12 +186,17 @@ impl Lexer {
                         self.cursor += 1;
                     }
                      // Recursively get next token after comment
-                    self.next_token()
+                    self.next_token_inner()
                 } else if next_char == '=' {
                     self.cursor += 1;
                     Token::SlashEqual
                 } else {
-                    Token::Slash
+                    // Check for Regex vs Division
+                    if self.is_division_start() {
+                        Token::Slash
+                    } else {
+                        self.read_regex()
+                    }
                 }
             }
             '(' => Token::LParen,
@@ -397,5 +420,62 @@ impl Lexer {
         } else {
              Token::EOF
         }
+    }
+
+    fn is_division_start(&self) -> bool {
+        match &self.last_token {
+            Some(t) => matches!(t,
+                Token::Identifier(_) | Token::Number(_) | Token::Float(_) |
+                Token::StringEnd | Token::InterpolationEnd |
+                Token::Bool(_) | Token::Regex(_) |
+                Token::RParen | Token::RBracket | Token::RBrace | 
+                Token::This
+            ),
+            None => false
+        }
+    }
+
+    fn read_regex(&mut self) -> Token {
+        let mut pattern = String::new();
+        let mut escaped = false;
+
+        while self.cursor < self.source.len() {
+            let ch = self.source[self.cursor];
+            
+            if escaped {
+                pattern.push(ch);
+                escaped = false;
+                self.cursor += 1;
+            } else if ch == '\\' {
+                pattern.push(ch);
+                escaped = true;
+                self.cursor += 1;
+            } else if ch == '/' {
+                self.cursor += 1; // Consume closing '/'
+                
+                // Parse optional flags
+                let mut flags = String::new();
+                while self.cursor < self.source.len() {
+                    let next = self.source[self.cursor];
+                     if next.is_alphabetic() {
+                        flags.push(next);
+                        self.cursor += 1;
+                    } else {
+                        break;
+                    }
+                }
+                
+                let full_pattern = if flags.is_empty() {
+                    pattern
+                } else {
+                    format!("(?{}){}", flags, pattern)
+                };
+                return Token::Regex(full_pattern);
+            } else {
+                pattern.push(ch);
+                self.cursor += 1;
+            }
+        }
+        panic!("Unterminated regex literal");
     }
 }

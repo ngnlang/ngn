@@ -451,6 +451,7 @@ pub enum Value {
         fields: std::collections::HashMap<String, Value>,
     },
     Void,
+    Regex(String),
 }
 
 impl Value {
@@ -582,6 +583,7 @@ impl Value {
                 true
             }
             (Value::Void, Value::Void) => true,
+            (Value::Regex(a), Value::Regex(b)) => a == b,
             _ => false,
         }
     }
@@ -597,6 +599,7 @@ impl Value {
             Value::Bool(_) => "bool",
             Value::Array(_) => "array",
             Value::Tuple(_) => "tuple",
+            Value::Regex(_) => "regex",
             Value::Object { model_name, .. } => model_name,
             Value::Channel(_) => "channel",
             Value::State(_) => "state",
@@ -657,6 +660,7 @@ impl fmt::Display for Value {
                 write!(f, "}}")
             }
             Value::Void => write!(f, "void"),
+            Value::Regex(r) => write!(f, "/{}/", r),
         }
     }
 }

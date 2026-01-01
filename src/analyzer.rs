@@ -437,6 +437,7 @@ impl Analyzer {
             Expr::Number(_) => Type::I64,
             Expr::Float(_) => Type::F64,
             Expr::String(_) => Type::String,
+            Expr::Regex(_) => Type::Regex,
             Expr::InterpolatedString(parts) => {
                 for part in parts {
                     self.check_expression(part);
@@ -937,10 +938,16 @@ impl Analyzer {
                             }
                             "replace" => {
                                 if args.len() != 2 { self.errors.push("Type Error: .replace() takes 2 arguments".to_string()); }
-                                for arg in args {
-                                    let arg_ty = self.check_expression(arg);
-                                    if !self.types_compatible(&Type::String, &arg_ty) {
-                                        self.errors.push(format!("Type Error: replace() arguments must be strings, got {:?}", arg_ty));
+                                if args.len() >= 1 {
+                                    let search_ty = self.check_expression(&args[0]);
+                                    if !matches!(search_ty, Type::String | Type::Regex) {
+                                         self.errors.push(format!("Type Error: replace() search pattern must be String or Regex, got {:?}", search_ty));
+                                    }
+                                }
+                                if args.len() >= 2 {
+                                    let repl_ty = self.check_expression(&args[1]);
+                                    if !self.types_compatible(&Type::String, &repl_ty) {
+                                         self.errors.push(format!("Type Error: replace() replacement must be String, got {:?}", repl_ty));
                                     }
                                 }
                                 Type::String

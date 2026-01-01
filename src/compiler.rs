@@ -249,6 +249,12 @@ impl Compiler {
                 self.instructions.push(OpCode::LoadConst(dest, idx));
                 dest
             }
+            Expr::Regex(pattern) => {
+                let dest = self.alloc_reg();
+                let idx = self.add_constant(Value::String(pattern.clone()));
+                self.instructions.push(OpCode::MakeRegex(dest, idx));
+                dest
+            }
             Expr::InterpolatedString(parts) => {
                 let start_reg = self.compile_args(parts);
                 let dest = self.alloc_reg();
