@@ -84,6 +84,12 @@ impl Analyzer {
 
         analyzer
     }
+    
+    pub fn define_global(&mut self, name: String, sym: Symbol) {
+        if let Some(scope) = self.scopes.first_mut() {
+            scope.insert(name, sym);
+        }
+    }
 
     pub fn analyze(&mut self, statements: &[Statement]) -> Result<(), Vec<String>> {
         // Pass 1a: Collect all top-level types (Enums, Models, Roles)
@@ -403,7 +409,7 @@ impl Analyzer {
                 // Handle toolbox imports by registering functions in scope
                 if source.starts_with("tbx::") {
                     let module = source.strip_prefix("tbx::").unwrap();
-                    for name in names {
+                    for (name, alias) in names {
                         // Determine the function type based on known toolbox functions
                         let fn_type = match (module, name.as_str()) {
                             ("test", "assert") => Type::Function {
@@ -423,7 +429,8 @@ impl Analyzer {
                                 return_type: Box::new(Type::Any),
                             },
                         };
-                        self.define(name, fn_type, false);
+                        let bind_name = alias.as_ref().unwrap_or(name);
+                        self.define(bind_name, fn_type, false);
                     }
                 }
                 Type::Void
@@ -1223,6 +1230,15 @@ impl Analyzer {
                 params: params.into_iter().map(|p| self.normalize_type(p)).collect(),
                 return_type: Box::new(self.normalize_type(*return_type)),
             },
+            Type::Generic(name, args) => {
+                if self.enums.contains_key(&name) {
+                    Type::Enum(name)
+                } else if self.roles.contains_key(&name) {
+                    Type::Role(name)
+                } else {
+                    Type::Generic(name, args.into_iter().map(|a| self.normalize_type(a)).collect())
+                }
+            }
             _ => ty,
         }
     }

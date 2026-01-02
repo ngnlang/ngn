@@ -20,6 +20,7 @@ pub enum Type {
     State(Box<Type>),
     Model(String),
     Role(String),
+    Generic(String, Vec<Type>),
     Regex,
 }
 
@@ -74,8 +75,24 @@ pub enum Statement {
         params: Vec<Parameter>,
         body: Vec<Statement>,
         return_type: Option<Type>,
+        is_exported: bool,
     },
-    Import { names: Vec<String>, source: String },
+    // import { a, b as c } from "..."
+    Import { 
+        names: Vec<(String, Option<String>)>, // (name, alias)
+        source: String 
+    },
+    // import x from "..."
+    ImportDefault {
+        name: String,
+        source: String,
+    },
+    // import * as X from "..."
+    ImportModule {
+        alias: String,
+        source: String
+    },
+    ExportDefault(Expr),
     Print(Expr),
     Echo(Expr),
     Sleep(Expr),
@@ -123,9 +140,7 @@ pub struct ModelDef {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoleDef {
     pub name: String,
-    pub methods: Vec<Statement>, // These should be Statement::Function with empty bodies if it's just a signature?
-                                 // Or maybe a separate MethodSignature struct.
-                                 // V1 uses FnDef which has Option<Vec<Stmt>> for body.
+    pub methods: Vec<Statement>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -227,6 +242,10 @@ impl Parser {
     }
 
     fn parse_function(&mut self) -> Statement {
+        self.parse_function_with_export(false)
+    }
+
+    fn parse_function_with_export(&mut self, is_exported: bool) -> Statement {
         self.advance();
 
         let name = self.expect_identifier();
@@ -280,26 +299,50 @@ impl Parser {
         
         self.in_function = old_in_function;
 
-        Statement::Function { name, params, body, return_type }
+        Statement::Function { name, params, body, return_type, is_exported }
     }
 
     fn parse_import_statement(&mut self) -> Statement {
         self.advance(); // consume 'import'
-        self.expect(Token::LBrace);
         
-        let mut names = Vec::new();
-        while self.current_token != Token::RBrace {
-            let name = self.expect_identifier();
-            names.push(name);
-            if self.current_token == Token::Comma { self.advance(); }
+        // 1. Module Import: import * as Name from "..."
+        if self.current_token == Token::Star {
+            self.advance(); // consume '*'
+            self.expect(Token::As);
+            let alias = self.expect_identifier();
+            self.expect(Token::From);
+            
+            let source = self.parse_literal_string();
+            return Statement::ImportModule { alias, source };
         }
-        self.expect(Token::RBrace);
+
+        // 2. Named Imports: import { a, b as c } from "..."
+        if self.current_token == Token::LBrace {
+            self.advance(); // consume '{'
+            let mut names = Vec::new();
+            while self.current_token != Token::RBrace {
+                let name = self.expect_identifier();
+                let mut alias = None;
+                if self.current_token == Token::As {
+                    self.advance(); // consume 'as'
+                    alias = Some(self.expect_identifier());
+                }
+                names.push((name, alias));
+                if self.current_token == Token::Comma { self.advance(); }
+            }
+            self.expect(Token::RBrace);
+            self.expect(Token::From);
+            
+            let source = self.parse_literal_string();
+            return Statement::Import { names, source };
+        }
+
+        // 3. Default Import: import Name from "..."
+        let name = self.expect_identifier();
         self.expect(Token::From);
         
-        // This will be "tbx::test" or "math"
         let source = self.parse_literal_string();
-
-        Statement::Import { names, source }
+        Statement::ImportDefault { name, source }
     }
 
     pub fn parse_statement(&mut self) -> Statement {
@@ -325,6 +368,19 @@ impl Parser {
                 self.parse_declaration()
             }
             Token::Fn => self.parse_function(),
+            Token::Export => {
+                self.advance(); // consume 'export'
+                if self.current_token == Token::Default {
+                    self.advance(); // consume 'default'
+                    // Expect an expression for now (typically an identifier)
+                    let expr = self.parse_expression();
+                    Statement::ExportDefault(expr)
+                } else if self.current_token == Token::Fn {
+                    self.parse_function_with_export(true)
+                } else {
+                    panic!("Syntax Error: 'export' must be followed by 'fn' or 'default'");
+                }
+            }
             Token::Identifier(_) => {
                 let expr = self.parse_expression();
                 Statement::Expression(expr)
@@ -487,10 +543,25 @@ impl Parser {
                             Type::Tuple(vec![])
                         }
                     }
-                    _ => { // assume model
+                    _ => { // assume model or generic
                         let n = name.clone();
                         self.advance();
-                        Type::Model(n)
+                        
+                        // Check for generics <T, U>
+                        if self.current_token == Token::LessThan {
+                             self.advance(); // consume <
+                             let mut args = Vec::new();
+                             while self.current_token != Token::GreaterThan {
+                                 args.push(self.parse_type());
+                                 if self.current_token == Token::Comma {
+                                     self.advance();
+                                 }
+                             }
+                             self.expect(Token::GreaterThan);
+                             Type::Generic(n, args)
+                        } else {
+                             Type::Model(n)
+                        }
                     }
                 }
             }

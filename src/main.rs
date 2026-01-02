@@ -1,14 +1,23 @@
 use ngn::compiler::Compiler;
 use ngn::vm::VM;
-use ngn::analyzer::Analyzer;
+use ngn::analyzer::{Analyzer, Symbol};
 use ngn::lexer::{Lexer, Token};
-use ngn::parser::Parser;
-use ngn::parser::Statement;
+use ngn::parser::{Parser, Type, Expr, Statement};
 use ngn::bytecode::OpCode;
-use ngn::value::Value;
+use ngn::value::{Value};
 use std::env;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
+use std::path::PathBuf;
+use std::collections::HashMap;
+use std::time::SystemTime;
+use std::sync::Arc;
+
+// Cached compiled exports from a module (with module's globals Arc for home_globals)
+type ModuleExports = HashMap<String, Value>;
+type ModuleGlobals = Arc<Vec<Value>>;
+type ModuleCacheEntry = (ModuleExports, ModuleGlobals);
+type ModuleCache = HashMap<PathBuf, (ModuleCacheEntry, SystemTime)>;
 
 fn main() {
     // Check for "Self-Running" mode
@@ -88,16 +97,147 @@ fn main() {
         statements.push(parser.parse_statement());
     }
     
-    // 2. Semantic Analysis (Static Type Checking)
+    // 2. Process file imports first (so Analyzer knows about them)
     let mut analyzer = Analyzer::new();
+    let base_path = PathBuf::from(filename);
+    let mut module_cache: ModuleCache = HashMap::new();
+    
+    for stmt in &statements {
+        if let Statement::Import { names, source } = stmt {
+            // Skip toolbox imports (handled by compiler)
+            if source.starts_with("tbx::") {
+                continue;
+            }
+            
+            // Load the module
+            let exports = load_module(source, &base_path, &mut module_cache);
+            
+            // Inject each requested export into the compiler
+            for (name, alias) in names {
+                if let Some(val) = exports.get(name) {
+                    // Add the exported Value to constants pool directly
+                    // It's already a runtime Value (Closure, String, etc.)
+                    let const_idx = compiler.add_constant(val.clone());
+                    
+                    // Register in global table
+                    let var_idx = compiler.next_index;
+                    let bind_name = alias.as_ref().unwrap_or(name);
+                    compiler.global_table.insert(bind_name.clone(), var_idx);
+                    compiler.next_index += 1;
+                    
+                    // If it's a Closure/Function, we should register signatures for call checks if possible
+                    if let Value::Function(f) = val {
+                         let ownership: Vec<bool> = f.param_ownership.iter().cloned().collect();
+                         compiler.signatures.insert(bind_name.clone(), ownership);
+                    } else if let Value::Closure(c) = val {
+                         let ownership: Vec<bool> = c.function.param_ownership.iter().cloned().collect();
+                         compiler.signatures.insert(bind_name.clone(), ownership);
+                    }
+                    
+                    // Emit load and assign at global scope
+                    let reg = compiler.alloc_reg();
+                    compiler.instructions.push(OpCode::LoadConst(reg, const_idx));
+                    compiler.instructions.push(OpCode::DefGlobal(var_idx, false));
+                    compiler.instructions.push(OpCode::AssignGlobal(var_idx, reg));
+                    compiler.reg_top = compiler.temp_start;
+                    
+                    // Register with Semantic Analyzer
+                    // We need to reconstruct a basic Symbol from the Value
+                    let symbol = if let Value::Function(f) = &val {
+                         let params = f.param_ownership.iter().map(|_| Type::Any).collect();
+                         Symbol { 
+                             ty: Type::Function {
+                                 params, 
+                                 return_type: Box::new(Type::Void), // Unknown
+                             }, 
+                             is_mutable: false,
+                         }
+                    } else if let Value::Closure(c) = &val {
+                         let params = c.function.param_ownership.iter().map(|_| Type::Any).collect();
+                         Symbol { 
+                             ty: Type::Function {
+                                 params, 
+                                 return_type: Box::new(Type::Void), // Unknown
+                             }, 
+                             is_mutable: false,
+                         }
+                    } else {
+                         Symbol { 
+                             is_mutable: false,
+                             ty: Type::Void, // Unknown
+                         }
+                    };
+                    analyzer.define_global(bind_name.clone(), symbol);
+                    // For now, analyzer might be blind to types unless we return them too.
+                    // This task focuses on Runtime Correctness (Global Collision).
+                } else {
+                    panic!("Import Error: '{}' is not exported from '{}'", name, source);
+                }
+            }
+        } else if let Statement::ImportDefault { name, source } = stmt {
+             // Load the module
+            let exports = load_module(source, &base_path, &mut module_cache);
+            println!("DEBUG: Importing default from {} as {}. Exports keys: {:?}", source, name, exports.keys());
+            
+            if let Some(val) = exports.get("default") {
+                let const_idx = compiler.add_constant(val.clone());
+                let var_idx = compiler.next_index;
+                compiler.global_table.insert(name.clone(), var_idx);
+                compiler.next_index += 1;
+                
+                // Register signature
+                if let Value::Function(f) = val {
+                     let ownership: Vec<bool> = f.param_ownership.iter().cloned().collect();
+                     compiler.signatures.insert(name.clone(), ownership);
+                } else if let Value::Closure(c) = val {
+                     let ownership: Vec<bool> = c.function.param_ownership.iter().cloned().collect();
+                     compiler.signatures.insert(name.clone(), ownership);
+                }
+                
+                let reg = compiler.alloc_reg();
+                compiler.instructions.push(OpCode::LoadConst(reg, const_idx));
+                compiler.instructions.push(OpCode::DefGlobal(var_idx, false));
+                compiler.instructions.push(OpCode::AssignGlobal(var_idx, reg));
+                compiler.reg_top = compiler.temp_start;
+
+                let symbol = if let Value::Function(f) = &val {
+                     let params = f.param_ownership.iter().map(|_| Type::Any).collect();
+                     Symbol { 
+                         ty: Type::Function { params, return_type: Box::new(Type::Void) }, 
+                         is_mutable: false,
+                     }
+                } else if let Value::Closure(c) = &val {
+                     let params = c.function.param_ownership.iter().map(|_| Type::Any).collect();
+                     Symbol { 
+                         ty: Type::Function { params, return_type: Box::new(Type::Void) }, 
+                         is_mutable: false,
+                     }
+                } else {
+                     Symbol { 
+                         is_mutable: false,
+                         ty: Type::Void, 
+                     }
+                };
+                analyzer.define_global(name.clone(), symbol);
+            } else {
+                panic!("Import Error: Module '{}' has no default export", source);
+            }
+        } else if let Statement::ImportModule { alias, source } = stmt {
+            // import * as alias from "source"
+            eprintln!("Warning: Module imports ('import * as {} from \"{}\"') are not fully supported yet.", alias, source);
+        }
+    }
+
+    // 3. Semantic Analysis (Static Type Checking)
     if let Err(errors) = analyzer.analyze(&statements) {
         for err in errors {
             eprintln!("{}", err);
         }
         std::process::exit(1);
     }
+    
 
-    // 2. PASS ONE: Register all function names in the symbol table
+    // 3. PASS ONE: Register all function names in the symbol table
     // (We don't compile them yet, just reserve their slots)
     for stmt in &statements {
         if let Statement::Function { name, params, .. } = stmt {
@@ -115,7 +255,7 @@ fn main() {
     // 3. PASS TWO: Now compile the actual code
     // The compiler will now find 'greet' in the table even if it's called in 'main'
     for stmt in statements {
-        compiler.compile_statement(stmt);
+         compiler.compile_statement(stmt);
     }
 
     // 3. Command Logic
@@ -202,4 +342,123 @@ fn check_for_embedded_bytecode() -> Option<(Vec<OpCode>, Vec<Value>)> {
     file.read_exact(&mut buffer).ok()?;
 
     bincode::deserialize(&buffer).ok()
+}
+
+/// Load and compile a module, returning its exported functions (with home_globals injected)
+fn load_module(
+    module_path: &str,
+    base_path: &PathBuf,
+    cache: &mut ModuleCache,
+) -> ModuleExports {
+    // Resolve relative path
+    let resolved_path = if module_path.starts_with("./") || module_path.starts_with("../") {
+        let parent = base_path.parent().unwrap_or(base_path);
+        parent.join(module_path)
+    } else {
+        PathBuf::from(module_path)
+    };
+    
+    // Check cache
+    if let Some(entry) = cache.get(&resolved_path) {
+        return entry.0.0.clone();  // Return cached exports
+    }
+    
+    // Load source
+    let source = fs::read_to_string(&resolved_path)
+        .unwrap_or_else(|_| panic!("Could not read module: {}", resolved_path.display()));
+    
+    // Parse
+    let lexer = Lexer::new(&source);
+    let mut parser = Parser::new(lexer);
+    let mut statements = Vec::new();
+    while parser.current_token != Token::EOF {
+        if parser.current_token == Token::Newline {
+            parser.advance();
+            continue;
+        }
+        statements.push(parser.parse_statement());
+    }
+
+    // 1. Identify exports and handle ExportDefault
+    let mut export_names: Vec<String> = Vec::new();
+    let mut default_export_expr: Option<Expr> = None;
+    
+    for stmt in &statements {
+        match stmt {
+            Statement::Function { name, is_exported: true, .. } => {
+                export_names.push(name.clone());
+            }
+            Statement::ExportDefault(expr) => {
+                default_export_expr = Some(expr.clone());
+            }
+            _ => {}
+        }
+    }
+    
+    // 2. Transform statements: remove ExportDefault, add __default__ declaration if needed
+    let mut processed_statements: Vec<Statement> = statements.into_iter()
+        .filter(|s| !matches!(s, Statement::ExportDefault(_)))
+        .collect();
+    
+    if let Some(expr) = default_export_expr {
+        processed_statements.push(Statement::Declaration {
+            name: "__default__".to_string(),
+            is_mutable: false,
+            is_static: true,  // Global scope
+            value: expr,
+            declared_type: None,
+        });
+        export_names.push("__default__".to_string());
+    }
+    
+    // 3. Compile at global scope (like main entrypoint)
+    let mut module_compiler = Compiler::new(None);
+    module_compiler.inject_builtins();
+    
+    for stmt in processed_statements {
+        module_compiler.compile_statement(stmt);
+    }
+    
+    // Add Halt to end execution cleanly
+    module_compiler.instructions.push(OpCode::Halt);
+    
+    // 4. Execute module in isolated VM
+    let mut vm = VM::new(
+        module_compiler.instructions.clone(),
+        module_compiler.constants.clone(),
+        module_compiler.max_reg as usize,
+    );
+    vm.run();
+    
+    // 5. Create Arc for module's globals (to be shared by all functions from this module)
+    let module_globals: ModuleGlobals = Arc::new(vm.globals.clone());
+    
+    // 6. Extract exports from VM globals and inject home_globals
+    let mut exports: ModuleExports = HashMap::new();
+    
+    for name in &export_names {
+        let export_key = if name == "__default__" { "default".to_string() } else { name.clone() };
+        
+        if let Some(&idx) = module_compiler.global_table.get(name) {
+            let value = vm.globals[idx].clone();
+            
+            // Inject home_globals into Function/Closure values
+            let value = match value {
+                Value::Function(mut func) => {
+                    func.home_globals = Some(module_globals.clone());
+                    Value::Function(func)
+                }
+                Value::Closure(mut closure) => {
+                    closure.function.home_globals = Some(module_globals.clone());
+                    Value::Closure(closure)
+                }
+                other => other
+            };
+            
+            exports.insert(export_key, value);
+        }
+    }
+
+    cache.insert(resolved_path.clone(), ((exports.clone(), module_globals), SystemTime::now()));
+    exports
 }

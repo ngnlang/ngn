@@ -3,7 +3,7 @@ pub enum Token {
     // Keywords
     Var, Const, Static, Fn, Return,
     If, While, Until, Loop, For, In, Match, Next, Break, Once,
-    Import, From, As, Enum,
+    Import, From, As, Enum, Export, Default,
     Model, Role, Extend, With, This,
 
 	// Built-ins
@@ -324,6 +324,8 @@ impl Lexer {
             "echo" => Token::Echo,
             "sleep" => Token::Sleep,
 			"import" => Token::Import,
+			"export" => Token::Export,
+			"default" => Token::Default,
 			"from" => Token::From,
 			"as" => Token::As,
             "thread" => Token::Thread,

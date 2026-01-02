@@ -411,12 +411,14 @@ pub struct Function {
     pub name: String,
     pub instructions: Arc<Vec<OpCode>>,
     pub constants: Arc<Vec<Value>>,
+    #[serde(skip)]
+    pub home_globals: Option<Arc<Vec<Value>>>,  // Reference to module's globals (None for main module functions)
     pub param_count: usize,
-    // Index of the param in this list matches the index in the function's local env
     // Index of the param in this list matches the index in the function's local env
     // bool = true if it's an owned parameter (<)
     pub param_ownership: Vec<bool>,
     pub reg_count: usize,
+    pub upvalues: Vec<crate::compiler::Upvalue>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

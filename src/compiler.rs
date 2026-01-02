@@ -5,7 +5,7 @@ use crate::lexer::Token;
 use crate::parser::{Expr, Statement, Pattern, EnumDef};
 use crate::value::{Function, Number, Value};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Upvalue {
     pub index: u16,
     pub is_local: bool,
@@ -13,6 +13,7 @@ pub struct Upvalue {
 
 pub struct Compiler {
     pub enclosing: *mut Compiler,
+    pub module_id: usize,  // Which module this compiler is for
     pub symbol_table: HashMap<String, usize>,
     pub global_table: HashMap<String, usize>,
     pub static_values: HashMap<String, Value>, // For inlining small static constants
@@ -34,14 +35,22 @@ pub struct Compiler {
 
 impl Compiler {
     pub fn new(enclosing_opt: Option<&mut Compiler>) -> Self {
+        let global_table = if let Some(parent) = &enclosing_opt {
+             parent.global_table.clone()
+        } else {
+             HashMap::new()
+        };
+
         let enclosing = match enclosing_opt {
              Some(c) => c as *mut Compiler,
              None => std::ptr::null_mut(),
         };
+        
         Self {
             enclosing,
+            module_id: 0,  // Will be set by caller for non-main modules
             symbol_table: HashMap::new(),
-            global_table: HashMap::new(),
+            global_table,
             static_values: HashMap::new(),
             next_index: 0,
             reg_top: 0,
@@ -60,7 +69,7 @@ impl Compiler {
         }
     }
 
-    fn alloc_reg(&mut self) -> u16 {
+    pub fn alloc_reg(&mut self) -> u16 {
         let reg = self.reg_top;
         self.reg_top += 1;
         if self.reg_top > self.max_reg {
@@ -127,7 +136,7 @@ impl Compiler {
     }
 
     // Helper to add a constant and return its index
-    fn add_constant(&mut self, val: Value) -> usize {
+    pub fn add_constant(&mut self, val: Value) -> usize {
         for (_idx, _existing) in self.constants.iter().enumerate() {
             // TODO - make this faster and less redundant for duplicate constants
             // We'll need to implement PartialEq for Value/Number to do this
@@ -330,9 +339,11 @@ impl Compiler {
                         name: "closure".to_string(),
                         instructions: Arc::new(sub_compiler.instructions),
                         constants: Arc::new(sub_compiler.constants),
+                        home_globals: None,  // Set by VM at load time
                         param_count: params.len(),
                         param_ownership,
                         reg_count: sub_compiler.max_reg as usize,
+                        upvalues: captured_upvalues.clone(),
                     };
                     
                     (func, captured_upvalues)
@@ -692,9 +703,13 @@ impl Compiler {
                 self.compile_expr(&expr);
                 self.reg_top = self.temp_start;
             }
-            Statement::Function { name, params, body, return_type: _ } => {
+            Statement::Function { name, params, body, .. } => {
                 let func = self.compile_function_helper(name.clone(), params, body);
+                
+                // Check if the function captures upvalues
+                let upvalue_count = func.upvalues.len();
                 let const_idx = self.add_constant(Value::Function(Box::new(func)));
+                
                 let var_idx = if let Some(&existing_idx) = self.global_table.get(&name) {
                     existing_idx
                 } else if let Some(&existing_idx) = self.symbol_table.get(&name) {
@@ -710,20 +725,57 @@ impl Compiler {
                     idx
                 };
                 
-                if self.is_global {
-                    // For globals, load and then assign to the global table
-                    let reg = self.alloc_reg();
-                    self.instructions.push(OpCode::LoadConst(reg, const_idx));
-                    self.instructions.push(OpCode::AssignGlobal(var_idx, reg));
+                if upvalue_count > 0 {
+                    // Prepare upvalues in contiguous registers starting at reg_top
+                    let base = self.reg_top;
+                    
+                    // Retrieve upvalue info from the constant we just added
+                    if let Value::Function(f) = &self.constants[const_idx] {
+                        for (i, up) in f.upvalues.iter().enumerate() {
+                            let target = base + i as u16;
+                            self.max_reg = self.max_reg.max(target + 1);
+                            
+                            if up.is_local {
+                                // Captured local from current scope
+                                self.instructions.push(OpCode::Move(target, up.index));
+                            } else {
+                                // Captured upvalue from current scope
+                                self.instructions.push(OpCode::GetUpvalue(target, up.index));
+                            }
+                        }
+                    }
+                    
+                    // The destination for the closure
+                    let dest = if self.is_global {
+                        self.alloc_reg() 
+                    } else {
+                        var_idx as u16
+                    };
+                    
+                    self.instructions.push(OpCode::MakeClosure(dest, const_idx, base, upvalue_count as u8));
+                    
+                    if self.is_global {
+                        self.instructions.push(OpCode::DefGlobal(var_idx, false));
+                        self.instructions.push(OpCode::AssignGlobal(var_idx, dest));
+                    } else {
+                        self.instructions.push(OpCode::DefVar(var_idx, false));
+                        self.instructions.push(OpCode::Move(var_idx as u16, dest));
+                    }
                     
                     self.temp_start = self.next_index as u16;
                     self.reg_top = self.temp_start;
                 } else {
+                    // No upvalues, just load the function constant
                     let reg = self.alloc_reg();
                     self.instructions.push(OpCode::LoadConst(reg, const_idx));
-                    self.instructions.push(OpCode::DefVar(var_idx, false));
-                    self.instructions.push(OpCode::Move(var_idx as u16, reg));
-                    self.temp_start = self.next_index as u16;
+                    
+                    if self.is_global {
+                        self.instructions.push(OpCode::DefGlobal(var_idx, false));
+                        self.instructions.push(OpCode::AssignGlobal(var_idx, reg));
+                    } else {
+                        self.instructions.push(OpCode::DefVar(var_idx, false));
+                        self.instructions.push(OpCode::Move(var_idx as u16, reg));
+                    }
                     self.reg_top = self.temp_start;
                 }
             }
@@ -732,7 +784,7 @@ impl Compiler {
                 if source.starts_with("tbx::") {
                     let module_name = source.strip_prefix("tbx::").unwrap();
                     
-                    for name in names {
+                    for (name, alias) in names {
                         // Map the name to our Native ID registry
                         if let Some(native_id) = crate::toolbox::get_native_id(module_name, &name) {
                             
@@ -742,16 +794,19 @@ impl Compiler {
                             // Reserve a slot in the Symbol Table (Global Index)
                             let var_idx = self.next_index;
                             self.next_index += 1;
+
+                            // bind name
+                            let bind_name = alias.as_ref().unwrap_or(&name);
                             
                             // Tell the VM to put the Native pointer into that slot
                             let reg = self.alloc_reg();
                             self.instructions.push(OpCode::LoadConst(reg, const_idx));
                             if self.is_global {
-                                self.global_table.insert(name.clone(), var_idx);
+                                self.global_table.insert(bind_name.clone(), var_idx);
                                 self.instructions.push(OpCode::DefGlobal(var_idx, false));
                                 self.instructions.push(OpCode::AssignGlobal(var_idx, reg));
                             } else {
-                                self.symbol_table.insert(name.clone(), var_idx);
+                                self.symbol_table.insert(bind_name.clone(), var_idx);
                                 self.instructions.push(OpCode::DefVar(var_idx, false));
                                 self.instructions.push(OpCode::Move(var_idx as u16, reg));
                             }
@@ -797,6 +852,7 @@ impl Compiler {
             Statement::Match { condition, arms } => self.compile_match(condition, arms),
             Statement::Next => self.compile_next(),
             Statement::Break => self.compile_break(),
+            Statement::ImportDefault { .. } | Statement::ImportModule { .. } | Statement::ExportDefault(_) => {}
         }
     }
 
@@ -1213,9 +1269,11 @@ impl Compiler {
             name,
             instructions: Arc::new(sub_compiler.instructions),
             constants: Arc::new(sub_compiler.constants),
+            home_globals: None,  // Set by VM at load time
             param_count: param_ownership.len(),
             param_ownership,
             reg_count: sub_compiler.max_reg as usize,
+            upvalues: sub_compiler.upvalues,
         }
     }
 }

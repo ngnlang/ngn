@@ -1,9 +1,34 @@
 use std::collections::VecDeque;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::io::Write;
 use crate::value::{Value, Channel, Closure, Function, EnumData, ObjectData};
 use crate::bytecode::OpCode;
 use regex::Regex as RegexLib;
+
+/// Stores the globals for a single module
+pub struct ModuleContext {
+    pub globals: Vec<Value>,
+}
+
+/// Registry of all loaded module contexts
+pub struct ModuleRegistry {
+    modules: HashMap<usize, ModuleContext>,
+}
+
+impl ModuleRegistry {
+    pub fn new() -> Self {
+        Self { modules: HashMap::new() }
+    }
+    
+    pub fn register(&mut self, id: usize, globals: Vec<Value>) {
+        self.modules.insert(id, ModuleContext { globals });
+    }
+    
+    pub fn get_globals(&self, id: usize) -> Option<&Vec<Value>> {
+        self.modules.get(&id).map(|m| &m.globals)
+    }
+}
 
 pub struct CallFrame {
     pub instructions: Arc<Vec<OpCode>>,
@@ -13,6 +38,7 @@ pub struct CallFrame {
     pub closure: Option<Box<Closure>>,
     pub dest_reg: Option<u16>,
     pub update_state: Option<Arc<Mutex<Value>>>,
+    pub home_globals: Option<Arc<Vec<Value>>>,  // Saved home globals for restoration on return
 }
 
 pub enum FiberStatus {
@@ -32,6 +58,8 @@ pub struct Fiber {
     pub current_closure: Option<Box<Closure>>,
     pub status: FiberStatus,
     pub completion_channel: Option<Channel>,
+    pub return_value: Option<Value>,
+    pub home_globals: Option<Arc<Vec<Value>>>,  // Current function's home module globals
 }
 
 impl Fiber {
@@ -47,6 +75,8 @@ impl Fiber {
             current_closure: Some(closure),
             status: FiberStatus::Running,
             completion_channel: None,
+            return_value: None,
+            home_globals: func.home_globals.clone(),
         }
     }
 
@@ -61,6 +91,8 @@ impl Fiber {
             current_closure: None,
             status: FiberStatus::Running,
             completion_channel: None,
+            return_value: None,
+            home_globals: func.home_globals.clone(),
         }
     }
 
@@ -230,7 +262,12 @@ impl Fiber {
                 }
             }
             OpCode::GetGlobal(dest, idx) => {
-                let val = globals[idx].clone();
+                // Access globals from the function's home module (or main globals if None)
+                let val = if let Some(ref home_globals) = self.home_globals {
+                    home_globals[idx].clone()
+                } else {
+                    globals[idx].clone()
+                };
                 self.set_reg_at(dest, val);
             }
             OpCode::DefGlobal(_idx, _is_mutable) => {
@@ -377,6 +414,7 @@ impl Fiber {
                     self.ip = frame.ip;
                     self.fp = frame.fp;
                     self.current_closure = frame.closure;
+                    self.home_globals = frame.home_globals;
                     if let Some(dest) = frame.dest_reg {
                         self.set_reg_at(dest, result.clone());
                     }
@@ -386,9 +424,10 @@ impl Fiber {
                     }
                 } else {
                     if let Some(chan) = &self.completion_channel {
-                        chan.buffer.lock().unwrap().push_back(result);
+                        chan.buffer.lock().unwrap().push_back(result.clone());
                     }
                     self.status = FiberStatus::Finished;
+                    self.return_value = Some(result);
                     return FiberStatus::Finished;
                 }
             }
@@ -400,6 +439,7 @@ impl Fiber {
                     self.ip = frame.ip;
                     self.fp = frame.fp;
                     self.current_closure = frame.closure;
+                    self.home_globals = frame.home_globals;  // Restore home globals context
                     if let Some(dest) = frame.dest_reg {
                         self.set_reg_at(dest, Value::Void);
                     }
@@ -815,6 +855,7 @@ impl Fiber {
             closure: self.current_closure.take(),
             dest_reg,
             update_state: None,
+            home_globals: self.home_globals.clone(),
         };
         self.frames.push(frame);
         
@@ -828,6 +869,9 @@ impl Fiber {
         self.constants = func.constants.clone();
         self.ip = 0;
         self.current_closure = closure;
+        
+        // Switch to the function's home globals context
+        self.home_globals = func.home_globals.clone();
     }
     
     /// Dispatch built-in method calls on arrays, strings, tuples, etc.
@@ -1102,10 +1146,11 @@ impl Fiber {
 }
 
 pub struct VM {
-    pub globals: Vec<Value>,
+    pub globals: Vec<Value>,  // Main module globals
     pub fibers: VecDeque<Fiber>,
     pub current_fiber: Option<Fiber>,
     pub custom_methods: Arc<Mutex<std::collections::HashMap<String, std::collections::HashMap<String, Value>>>>,
+    pub last_value: Option<Value>,
 }
 
 impl VM {
@@ -1114,20 +1159,31 @@ impl VM {
             name: "main_wrapper".to_string(),
             instructions: Arc::new(instructions),
             constants: Arc::new(constants),
+            home_globals: None,  // Main module uses VM.globals directly
             param_count: 0,
             param_ownership: Vec::new(),
             reg_count,
+            upvalues: Vec::new(),
         };
         let main_fiber = Fiber::new_main(main_func);
         let globals = vec![Value::Void; 1024];
-        // Standard built-ins handled via OpCode are still mapped in compiler for name resolution
-        // But we can also put NativeFunction wrappers in the global table if we want them to be call-by-reference
         
         Self {
             globals,
             fibers: VecDeque::new(),
             current_fiber: Some(main_fiber),
             custom_methods: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            last_value: None,
+        }
+    }
+
+    pub fn new_from_fiber(fiber: Fiber) -> Self {
+        Self {
+            globals: vec![Value::Void; 1024],
+            fibers: VecDeque::new(),
+            current_fiber: Some(fiber),
+            custom_methods: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            last_value: None,
         }
     }
 
@@ -1143,6 +1199,7 @@ impl VM {
                     self.current_fiber = self.fibers.pop_front();
                 }
                 FiberStatus::Finished => {
+                    self.last_value = fiber.return_value.clone();
                     self.current_fiber = self.fibers.pop_front();
                 }
                 FiberStatus::Spawning(new_fiber) => {
