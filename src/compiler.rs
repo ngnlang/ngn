@@ -151,10 +151,11 @@ impl Compiler {
 
     // Helper to add a constant and return its index
     pub fn add_constant(&mut self, val: Value) -> usize {
-        for (_idx, _existing) in self.constants.iter().enumerate() {
-            // TODO - make this faster and less redundant for duplicate constants
-            // We'll need to implement PartialEq for Value/Number to do this
-            // if existing == &val { return idx; }
+        // Deduplicate constants to reduce bytecode size
+        for (idx, existing) in self.constants.iter().enumerate() {
+            if existing == &val {
+                return idx;
+            }
         }
 
         self.constants.push(val);
