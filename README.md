@@ -1239,5 +1239,5 @@ You can import in different ways:
 - `round`: return the number rounded to the nearest integer `round(4.5) // 5`
 - `sin`: (Trigonometry? If you know, you know.) `sin(0) // 0`
 
-### tbx::testing
+### tbx::test
 - `assert`: assert that a condition is true
