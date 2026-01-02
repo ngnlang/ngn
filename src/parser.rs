@@ -1797,10 +1797,49 @@ impl Parser {
         Statement::Role(RoleDef { name, methods })
     }
 
+    fn parse_extend_target_type(&mut self) -> Type {
+        // Special type parsing for extend statements
+        // Allows `map` and `set` without type parameters to mean "all maps/sets"
+        match &self.current_token {
+            Token::Map => {
+                self.advance();
+                // Check if type params are provided
+                if self.current_token == Token::LessThan {
+                    self.advance();
+                    let key_type = self.parse_type();
+                    self.expect(Token::Comma);
+                    let value_type = self.parse_type();
+                    self.expect(Token::GreaterThan);
+                    Type::Map(Box::new(key_type), Box::new(value_type))
+                } else {
+                    // Generic: extend all maps
+                    Type::Map(Box::new(Type::Any), Box::new(Type::Any))
+                }
+            }
+            Token::Set => {
+                self.advance();
+                // Check if type params are provided
+                if self.current_token == Token::LessThan {
+                    self.advance();
+                    let element_type = self.parse_type();
+                    self.expect(Token::GreaterThan);
+                    Type::Set(Box::new(element_type))
+                } else {
+                    // Generic: extend all sets
+                    Type::Set(Box::new(Type::Any))
+                }
+            }
+            _ => {
+                // For all other types, use normal type parsing
+                self.parse_type()
+            }
+        }
+    }
+
     fn parse_extend_stmt(&mut self) -> Statement {
         self.advance(); // consume 'extend'
 
-        let target = self.parse_type();
+        let target = self.parse_extend_target_type();
 
         let mut role = None;
         if self.current_token == Token::With {
