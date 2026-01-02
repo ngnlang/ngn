@@ -18,11 +18,10 @@ Your entrypoint file must define a `main()` function. It's found and run automat
 |-------|-------|-------|
 | `var z = "world"` | local | mutable |
 | `const status = "go"` | local | immutable |
-| `static DATA = [1..=1000]` | global | immutable |
-
-> The `static` example uses pseudocode to mimic creating an array of numbers from 1 to 1000, inclusively.
+| `static DATA = [1, 2, 3, 4, 5]` | global | immutable |
 
 ### `var`
+Defines a variable who's value can be changed.
 
 ```ngn
 var x = "hello"
@@ -30,25 +29,23 @@ x = "goodbye" ✅
 ```
 
 ### `const`
-You cannot mutate data.
+Defines a constant who's value cannot be changed.
 
 ```ngn
 const x = "hello"
 x = "goodbye" ❌ // value is immutable
-
-const user_input = getUserInput()
 ```
 
 ### `static`
 Used for global declarations, which can only exist at the top-level of a file, not inside functions.
 
 - usually inlined at compile time
-- strings not inlined if longer than 16 bytes
-- arrays and tuples not inlined if longer than 9 items
+- strings not inlined if longer than 32 bytes
+- arrays and tuples not inlined if size is greater than 4 items or if any item is not a primitive type
 
 ```ngn
 static VERSION = "v3" // inlined at compile time
-static DATA = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] // not inlined
+static DATA = [1, 2, 3, 4, 5] // not inlined
 
 fn main() {
   print(VERSION)
@@ -1103,7 +1100,7 @@ fn main() {
 ```
 
 ### Shared, mutable state
-It's safe to sequentially mutate shared data outside of threads or within a single thread. However, if more than one thread can mutate shared data, use `state()` to declare the variable. This gives you safe, atomic operations within your threads by using state variable methods.
+It's safe to sequentially mutate shared data outside of threads or within a single thread. However, if one or more threads might mutate data, use `state()` to declare the variable. This gives you safe, atomic operations for mutating the data by using state variable methods.
 
 You'd also use `state()` if you need to mutate data from within a closure.
 ```ngn
