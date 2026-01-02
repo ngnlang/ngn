@@ -2,7 +2,7 @@
 
 Pronounced "engine".
 
-An expressive and easy to use programming language.
+An expressive and easy to use high-level programming language.
 
 ## Status
 
@@ -14,11 +14,11 @@ Your entrypoint file must define a `main()` function. It's found and run automat
 
 ## Declaring identifiers
 
-| example | scope | binding | value | ownership |
-|-------|-------|-------|-------|-------|
-| `var z = "world"` | local | mutable | mutable | owned |
-| `const status = "go"` | local | immutable | immutable | owned |
-| `static DATA = [1..=1000]` | global | immutable | immutable | borrowed |
+| example | scope | value |
+|-------|-------|-------|
+| `var z = "world"` | local | mutable |
+| `const status = "go"` | local | immutable |
+| `static DATA = [1..=1000]` | global | immutable |
 
 > The `static` example uses pseudocode to mimic creating an array of numbers from 1 to 1000, inclusively.
 
@@ -30,28 +30,29 @@ x = "goodbye" ✅
 ```
 
 ### `const`
-Data could live on the heap, if only known at runtime, or in binary if it's a literal. You cannot mutate the data - even for objects and arrays.
+You cannot mutate data.
 
 ```ngn
-const x = "hello" // owned, even though ngn stores it in the binary (which doesn't need memory cleanup)
+const x = "hello"
 x = "goodbye" ❌ // value is immutable
 
-const user_input = getUserInput() // owned and stored on heap, since we don't know the size of the data at compile time.
+const user_input = getUserInput()
 ```
 
 ### `static`
-
 Used for global declarations, which can only exist at the top-level of a file, not inside functions.
+
+- usually inlined at compile time
+- strings not inlined if longer than 16 bytes
+- arrays and tuples not inlined if longer than 9 items
 
 ```ngn
 static VERSION = "v3" // inlined at compile time
-
-// pseudocode to create an array of numbers from 1 to 1000
-static DATA = [1..=1000] // stored in binary, not inlined, since data is large
+static DATA = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] // not inlined
 
 fn main() {
-  print(VERSION) // v3
-  print(DATA) // (I'll spare you; you get it.)
+  print(VERSION)
+  print(DATA)
 }
 ```
 
@@ -60,19 +61,19 @@ fn main() {
 - `string`
 - `i64`, `i32`, `i16`, `i8`, `u64`, `u32`, `u16`, `u8`, `f64`, `f32`
 - `bool`
-- `array`
 - `array<type>`
 - `void`
 - `map<key_type, value_type>`
 - `set<value_type>`
 - `channel<type>`
+- `fn<...paramN, return_type>`
 
 ### explicit
 ```ngn
 const thing: string = "one"
 var answer: u64 = 42
 var truth: bool = false
-const things: array = [1, 2, 3]
+const things: array<i64> = [1, 2, 3]
 const stuff: array<string> = ["shirt", "hat", "coat"]
 
 fn sideEffects(): void {
@@ -89,10 +90,6 @@ const answer = 42 // inferred as `i64`
 const pi = 3.14 // inferred as `f64`
 
 const result = 3 + 2 // inferred as `i64`
-
-fn add(a: i32, b: i32): i32 {
-  return a + b
-}
 ```
 
 ## `echo`
@@ -357,6 +354,75 @@ things.each(|t, i| {
 })
 ```
 
+## Tuples
+Similar to arrays, but can contain mixed types. However, they are fixed-size and immutable.
+
+```ngn
+const point = (10, 20)
+
+// they can be indexed like arrays
+const x = point[0] // 10
+const y = point[1] // 20
+
+const tup = (10, "hello", true)
+```
+
+### `size()`
+Return the size of the tuple.
+
+### `includes(item)`
+Check if a tuple contains a specific item.
+
+```ngn
+const tup = (10, "hello", true)
+const has_hello = tup.includes("hello")
+
+print(has_hello) // true
+```
+
+### `index(item)`
+Search a tuple for a given item, and return the index number of the first instance found. If no item is found, returns `-1`.
+
+```ngn
+const tup = (10, "hello", true)
+const ind = tup.index("hello") // 1
+```
+
+### `copy(start?, stop?)`
+Copies an entire tuple or a section of it, based on indices. This does not change the tuple you copied from, but returns the copied items as a new tuple.
+
+- If `start` is provided but `stop` is not, it copies everything upto and including the last item.
+- If `stop` is provided (implies `start`), the copy excludes the item at that index.
+- If neither is provided, the entire tuple is copied.
+
+```ngn
+const tup = (10, "hello", true)
+const copied = tup.copy(1)
+
+print(copied) // ("hello", true)
+print(tup) // (10, "hello", true)
+```
+
+### `toArray()`
+Convert a tuple to an array. Items must be of the same type.
+
+```ngn
+const tup = (10, 20, 30)
+const arr = tup.toArray()
+
+print(arr) // [10, 20, 30]
+```
+
+### `join(delimiter)`
+Join a tuple into a string, separated by a given delimiter.
+
+```ngn
+const tup = (10, 20, 30)
+const joined = tup.join(",")
+
+print(joined) // "10,20,30"
+```
+
 ## Enums
 
 ngn provides two built-in enums for common patterns: `Result` and `Maybe`
@@ -467,28 +533,6 @@ while once (condition) {
 }
 ```
 
-## `until`
-Run the statement block until the condition is true. Not guaranteed to run at all.
-```ngn
-until (condition) {
-  statement
-  statement
-}
-```
-
-Can be inlined if only using a single statement.
-```ngn
-until (condition) statement
-```
-
-### `once` variant
-To always run the statement block once, before checking the condition.
-```ngn
-until once (condition) {
-  statement
-}
-```
-
 ## `for`
 Run a statement block for each message in a channel or items in a collection.
 
@@ -507,7 +551,18 @@ for (item in items) {
 ## `if`
 Run a statement based on if a condition is true.
 
-The full syntax is a bit out of the ordinary, but helps reduce boilerplate "else if" and "else" wording, along with the extra braces. This style is required if any of your blocks have multiple statements.
+For blocks with only a single statement, you can use the following syntax:
+```ngn
+if (condtion) statement : (condition) statement : statement
+
+if (condition)
+  statement
+: (condition)
+  statement
+: statement
+```
+
+The below syntax is required if any of your blocks have multiple statements. Note the first brace comes directly after the `if` keyword.
 ```ngn
 if {
   (condition)
@@ -520,70 +575,24 @@ if {
 }
 ```
 
-For single statement blocks, you can drop the braces and go inline; or even go multiline if desired.
-```ngn
-if (condtion) statement : (condition) statement : statement
-
-if (condition)
-  statement
-: (condition)
-  statement
-: statement
-```
-
-### `not` variant
-If you're concerned about code readability in certain situations, you can use the `not` operator in place of `!`.
-
-So, instead of
-```ngn
-if (!browser) print("not browser")
-```
-you can do
-```ngn
-if not (browser) print("not browser")
-
-// or
-
-if {
-  not (browser) print("not browser")
-  : not (thing) print("not it either")
-  : print("something else")
-}
-```
-
 ## `match`
 Match a value against one test case; optionally, provide a default case.
 
 If a match is found:
 - that branch's statement block is run.
-- other cases are skipped, including the default, unless a matched statement block contains the `next` keyword.
+- other cases are skipped, including the default, unless a matched statement block contains the `next` keyword. `next` will only try to match the very next case.
 
 ```
 const value = 3
 match (value) {
   1 => statement,
-  2 | 3 => statement,
+  2 | 3 => statement, // matches 2 or 3
   4 => {
     statement
     statement
     next
-  },
-  => statement
-}
-```
-
-### `any` variant
-Even if a match is found, continue checking cases unless a matched statement block contains the `break` keyword.
-
-```
-match any (value) {
-  test => statement,
-  test1 | test2 => {
-    statement
-    statement
-    break
-  },
-  => statement
+  }, // matches 4, runs both statements, then tries to match the next case
+  _ => statement // matches any other value
 }
 ```
 
@@ -593,11 +602,11 @@ Functions create an isolated environment, meaning it can't access values outside
 - globals (imports, statics, models, enums, functions)
 - sibling functions
 
-You must provide param types and a return type. If passing a function as a param, you can mark the param like `fn<param1_type, param2_type, paramN_type, return_type>`. For brevity and initial clarity, we do not show types in the below examples.
+If passing a function as a param, you can mark the param like `fn<param1_type, param2_type, paramN_type, return_type>`. `return_type` is always last in the list, even if that means it's the only type listed.
 
 ### Traditional block, explicit return
 ```ngn
-fn add(a, b) {
+fn add(a: i64, b: i64): i64 {
   return a + b
 }
 ```
@@ -627,18 +636,16 @@ fn doThing() {
 ### Owned params
 When you mark a function param as owned, here is what happens:
 - the value is mutable within the function, if it was declared with `var`
-- the var or const is no longer accessible outside of the function
 - ownership of the passed data is moved to the function
-- ngn will cleanup any associated heap memory after the function finishes
-
-> Despite `const` data being owned, since its data _could_ live on the heap, remember that it's not mutable.
+- the var or const is no longer accessible outside of the function
+- ngn will cleanup any associated memory after the function finishes
 
 ```ngn
 var x = "hello"
 
 // the `<` means it requires an owned string
-fn createRockMusic(thing: <string) {
-  // do thing: read and/or mutate
+fn createRockMusic(stuff: <string) {
+  // do stuff: read and/or mutate
 }
 
 createRockMusic(x) ✅ // moves ownership of `x` to the function
@@ -714,44 +721,29 @@ s.size() // returns the number of values in the set
 
 ## Closures
 Closures are similar to functions, but have important differences:
-- can assign them with `const`, then call like a function.
-- access to external values, even ones out side its environment
+- assign them with `const` then call like a function
+- access to external values, even ones outside its environment
 - uses pipe syntax to wrap params
+- param ownership transfer is the same as functions
 
-> param ownership transfer is the same as functions.
-
-1. Outside values are kept in sync.
+1. The closure captures outside values at creation.
     ```ngn
     var count = 0
 
-    const incrementBy = |a: i64| count + a
+    const incrementBy = |a: i64| count + a // captures `count` at 0
 
     print(incrementBy(10)) // 10
 
     print(incrementBy(5)) // 5
 
     count = 100
-    print(incrementBy(7)) // 107, not 7
+    print(incrementBy(7)) // still 7
+
+    const incrementCount = |a: i64| count + a // captures `count` at 100
+    print(incrementCount(7)) // 107
     ```
 
-2. A closure can mutate outside values.
-    ```ngn
-    var count = 0
-
-    const incrementBy = |a: i64| count += a // calculate, mutate, return
-
-    incrementBy(10) // we're not capturing the returned value here, but you could
-    print(count) // 10
-
-    incrementBy(5)
-    print(count) // 15
-
-    count = 100
-    incrementBy(7)
-    print(count) // 107
-    ```
-
-3. You can mimic classic "close over" behavior by returning a closure from a function.
+2. You can mimic classic "close over" behavior by returning a closure from a function.
     ```ngn
     fn main() {
       var count = 10
@@ -792,6 +784,7 @@ Closures are similar to functions, but have important differences:
       counter()  // 3
     }
     ```
+To mutate the value of a variable from within a closure, use `state()`.
 
 ## Objects and Composability
 You can create typed objects using models, then create a new instance of a model.
@@ -806,9 +799,8 @@ model Dog {
 }
 ```
 
-You can also extend a model's functionality with direct methods or groups of methods via roles.
 ### `role`
-Declare one or more method signatures and/or method implementations. Group methods into roles in order to implement their functionality for models.
+You can extend a model's functionality with groups of methods via roles. Declare one or more method signatures and/or method implementations. Use this to group methods into roles in order to define their functionality for models.
 
 ```ngn
 role Animal {
@@ -821,7 +813,7 @@ Extend a model's functionality with methods. You can implement custom methods, a
 
 ```ngn
 // extend with custom methods
-extend Dog with {
+extend Dog {
   fn fetch(thing: string): bool {
     return attemptToFetch(thing)
   }
@@ -861,7 +853,7 @@ model User {
   age: u32
 }
 
-extend User with {
+extend User {
   fn new(name: string, age: u32): User {
     return User { name, age }
   }
@@ -881,7 +873,7 @@ model User {
   age: u32
 }
 
-extend User with {
+extend User {
   fn greet(): string {
     print("Hello, I'm {this.name}")
   }
@@ -962,7 +954,7 @@ fn main() {
     // (See next section for details on threads)
     const done = thread(|| {
         print("Worker started")
-        while (true) {
+        loop {
             match (<-? job_queue) {
                 Value(task) => task(42), 
                 Null => break
@@ -1041,7 +1033,7 @@ fn main() {
     // "done" is a channel we can use for signaling
     const done = thread(|| {
         setData(value)
-        return true // returning from a thread sends that data to the created channel
+        return // returning from a thread sends that data to the created channel
     })
 
     // Continue doing other work while the thread runs
@@ -1112,6 +1104,8 @@ fn main() {
 
 ### Shared, mutable state
 It's safe to sequentially mutate shared data outside of threads or within a single thread. However, if more than one thread can mutate shared data, use `state()` to declare the variable. This gives you safe, atomic operations within your threads by using state variable methods.
+
+You'd also use `state()` if you need to mutate data from within a closure.
 ```ngn
 fn main() {
     var counter = state(0)
@@ -1185,18 +1179,14 @@ You can use `export` and `import` to create modules in your project. This is a f
 
 ```ngn
 // math.ngn
-export fn add(a: i64, b: i64): i64 {
-  return a + b
-}
+export fn add(a, b) a + b
 
-export fn subtract(a: i64, b: i64): i64 {
-  return a - b
-}
+export fn subtract(a, b) a - b
 ```
-You don't have to include the .ngn file extension when importing, but you can. Here, we look for an `add` function from a `math.ngn` file within the same directory that your `main.ngn` file is in.
+Here, we look for an `add` function from a `math.ngn` file within the same directory that your `main.ngn` file is in.
 ```ngn
 // main.ngn
-import { add } from "math"
+import { add } from "math.ngn"
 
 fn main() {
   print(add(21, 3)) // 24
@@ -1205,18 +1195,18 @@ fn main() {
 
 ### Relative path imports
 ```ngn
-import { add } from "./lib/math"
+import { add } from "./lib/math.ngn"
 ```
 
 ### Aliased imports
 ```ngn
-import { add as adder } from "math"
+import { add as adder } from "math.ngn"
 ```
 
 ### Module imports
 ```ngn
 // main.ngn
-import * as Math from "math"
+import * as Math from "math.ngn"
 
 print(Math.subtract(10, 2)) // 5
 ```
@@ -1224,18 +1214,14 @@ print(Math.subtract(10, 2)) // 5
 ### Default export
 ```ngn
 // math.ngn
-fn add(a: i64, b: i64): i64 {
-  return a + b
-}
+fn add(a, b) a + b
 
 export default add
 ```
 ```ngn
 // main.ngn
-import add from "math"
+import add from "math.ngn"
 ```
-
-> ngn does not support re-exporting
 
 ## "Standard Library"
 We call this the toolbox.
@@ -1252,3 +1238,6 @@ You can import in different ways:
 - `floor`: return the smallest integer less than or equal to `floor(3.9) // 3`
 - `round`: return the number rounded to the nearest integer `round(4.5) // 5`
 - `sin`: (Trigonometry? If you know, you know.) `sin(0) // 0`
+
+### tbx::testing
+- `assert`: assert that a condition is true
