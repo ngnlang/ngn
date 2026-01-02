@@ -750,7 +750,11 @@ impl Analyzer {
             }
             Expr::MethodCall(obj_expr, method, args) => {
                 // Check for immutability
-                if matches!(method.as_str(), "push" | "pull" | "slice" | "splice") {
+                if matches!(method.as_str(), 
+                    "push" | "pull" | "slice" | "splice" |  // array mutating methods
+                    "set" | "remove" |  // map mutating methods (remove is shared with set)
+                    "add"  // set mutating methods
+                ) {
                     if let Expr::Variable(name) = &**obj_expr {
                         if let Some(sym) = self.lookup(name) {
                             if !sym.is_mutable {
@@ -1102,6 +1106,115 @@ impl Analyzer {
                         }
                     }
                     
+                    // Map methods
+                    Type::Map(key_type, value_type) => {
+                        match method.as_str() {
+                            "size" => {
+                                if !args.is_empty() { self.errors.push("Type Error: .size() takes no arguments".to_string()); }
+                                Type::I64
+                            }
+                            "has" => {
+                                if args.len() != 1 { 
+                                    self.errors.push("Type Error: .has() takes 1 argument".to_string()); 
+                                } else {
+                                    let arg_ty = self.check_expression(&args[0]);
+                                    if !self.types_compatible(&key_type, &arg_ty) {
+                                        self.errors.push(format!("Type Error: .has() expects key type {:?}, got {:?}", *key_type, arg_ty));
+                                    }
+                                }
+                                Type::Bool
+                            }
+                            "get" => {
+                                if args.len() != 1 { 
+                                    self.errors.push("Type Error: .get() takes 1 argument".to_string()); 
+                                } else {
+                                    let arg_ty = self.check_expression(&args[0]);
+                                    if !self.types_compatible(&key_type, &arg_ty) {
+                                        self.errors.push(format!("Type Error: .get() expects key type {:?}, got {:?}", *key_type, arg_ty));
+                                    }
+                                }
+                                *value_type.clone()
+                            }
+                            "set" => {
+                                if args.len() != 2 { 
+                                    self.errors.push("Type Error: .set() takes 2 arguments".to_string()); 
+                                } else {
+                                    let key_ty = self.check_expression(&args[0]);
+                                    let val_ty = self.check_expression(&args[1]);
+                                    if !self.types_compatible(&key_type, &key_ty) {
+                                        self.errors.push(format!("Type Error: .set() expects key type {:?}, got {:?}", *key_type, key_ty));
+                                    }
+                                    if !self.types_compatible(&value_type, &val_ty) {
+                                        self.errors.push(format!("Type Error: .set() expects value type {:?}, got {:?}", *value_type, val_ty));
+                                    }
+                                }
+                                obj_ty.clone() // Returns map for chaining
+                            }
+                            "remove" => {
+                                if args.len() != 1 { 
+                                    self.errors.push("Type Error: .remove() takes 1 argument".to_string()); 
+                                } else {
+                                    let arg_ty = self.check_expression(&args[0]);
+                                    if !self.types_compatible(&key_type, &arg_ty) {
+                                        self.errors.push(format!("Type Error: .remove() expects key type {:?}, got {:?}", *key_type, arg_ty));
+                                    }
+                                }
+                                *value_type.clone()
+                            }
+                            _ => {
+                                self.errors.push(format!("Type Error: Unknown method '{}' for Map type", method));
+                                Type::Any
+                            }
+                        }
+                    }
+                    
+                    // Set methods
+                    Type::Set(element_type) => {
+                        match method.as_str() {
+                            "size" => {
+                                if !args.is_empty() { self.errors.push("Type Error: .size() takes no arguments".to_string()); }
+                                Type::I64
+                            }
+                            "has" => {
+                                if args.len() != 1 { 
+                                    self.errors.push("Type Error: .has() takes 1 argument".to_string()); 
+                                } else {
+                                    let arg_ty = self.check_expression(&args[0]);
+                                    if !self.types_compatible(&element_type, &arg_ty) {
+                                        self.errors.push(format!("Type Error: .has() expects element type {:?}, got {:?}", *element_type, arg_ty));
+                                    }
+                                }
+                                Type::Bool
+                            }
+                            "add" => {
+                                if args.len() != 1 { 
+                                    self.errors.push("Type Error: .add() takes 1 argument".to_string()); 
+                                } else {
+                                    let arg_ty = self.check_expression(&args[0]);
+                                    if !self.types_compatible(&element_type, &arg_ty) {
+                                        self.errors.push(format!("Type Error: .add() expects element type {:?}, got {:?}", *element_type, arg_ty));
+                                    }
+                                }
+                                obj_ty.clone() // Returns set for chaining
+                            }
+                            "remove" => {
+                                if args.len() != 1 { 
+                                    self.errors.push("Type Error: .remove() takes 1 argument".to_string()); 
+                                } else {
+                                    let arg_ty = self.check_expression(&args[0]);
+                                    if !self.types_compatible(&element_type, &arg_ty) {
+                                        self.errors.push(format!("Type Error: .remove() expects element type {:?}, got {:?}", *element_type, arg_ty));
+                                    }
+                                }
+                                Type::Bool // Returns whether element was present
+                            }
+                            _ => {
+                                self.errors.push(format!("Type Error: Unknown method '{}' for Set type", method));
+                                Type::Any
+                            }
+                        }
+                    }
+                    
                     _ => {
                          self.errors.push(format!("Type Error: Methods not supported for type {:?}", obj_ty));
                          Type::Any
@@ -1146,6 +1259,12 @@ impl Analyzer {
                         Type::Any
                     }
                 }
+            }
+            Expr::Map(key_type, value_type) => {
+                Type::Map(Box::new(key_type.clone()), Box::new(value_type.clone()))
+            }
+            Expr::Set(element_type) => {
+                Type::Set(Box::new(element_type.clone()))
             }
         }
     }

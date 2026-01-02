@@ -21,6 +21,8 @@ pub enum Type {
     Model(String),
     Role(String),
     Generic(String, Vec<Type>),
+    Map(Box<Type>, Box<Type>),
+    Set(Box<Type>),
     Regex,
 }
 
@@ -127,7 +129,7 @@ pub enum Statement {
     Extend {
         target: Type,
         role: Option<String>,
-        methods: Vec<Statement>, // These should be Statement::Function
+        methods: Vec<Statement>,
     },
 }
 
@@ -186,6 +188,8 @@ pub enum Expr {
     },
     ModelInstance { name: String, fields: Vec<(String, Expr)> },
     FieldAccess { object: Box<Expr>, field: String },
+    Map(Type, Type),
+    Set(Type),
     This,
 }
 
@@ -233,6 +237,15 @@ impl Parser {
             self.advance();
 
             name_cloned
+        } else if matches!(self.current_token, Token::Set | Token::Map) {
+            // Allow keywords as identifiers in certain contexts (like method names)
+            let name = match &self.current_token {
+                Token::Set => "set".to_string(),
+                Token::Map => "map".to_string(),
+                _ => unreachable!()
+            };
+            self.advance();
+            name
         } else {
             panic!(
                 "Syntax Error: Expected an identifier, but found {:?}", 
@@ -579,6 +592,22 @@ impl Parser {
                 } else {
                     panic!("Syntax Error: channel type requires a type argument, e.g. channel<i64>");
                 }
+            }
+            Token::Map => {
+                self.advance(); // consume 'map'
+                self.expect(Token::LessThan);
+                let key_type = self.parse_type();
+                self.expect(Token::Comma);
+                let value_type = self.parse_type();
+                self.expect(Token::GreaterThan);
+                Type::Map(Box::new(key_type), Box::new(value_type))
+            }
+            Token::Set => {
+                self.advance(); // consume 'set'
+                self.expect(Token::LessThan);
+                let element_type = self.parse_type();
+                self.expect(Token::GreaterThan);
+                Type::Set(Box::new(element_type))
             }
             Token::LParen => {
                 self.advance();
@@ -928,6 +957,26 @@ impl Parser {
                 let initial = self.parse_expression();
                 self.expect(Token::RParen);
                 Expr::State(Box::new(initial))
+            }
+            Token::Map => {
+                self.advance(); // consume 'map'
+                self.expect(Token::LessThan);
+                let key_type = self.parse_type();
+                self.expect(Token::Comma);
+                let value_type = self.parse_type();
+                self.expect(Token::GreaterThan);
+                self.expect(Token::LParen);
+                self.expect(Token::RParen);
+                Expr::Map(key_type, value_type)
+            }
+            Token::Set => {
+                self.advance(); // consume 'set'
+                self.expect(Token::LessThan);
+                let element_type = self.parse_type();
+                self.expect(Token::GreaterThan);
+                self.expect(Token::LParen);
+                self.expect(Token::RParen);
+                Expr::Set(element_type)
             }
             Token::This => {
                 self.advance();

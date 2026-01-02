@@ -2,12 +2,12 @@
 pub enum Token {
     // Keywords
     Var, Const, Static, Fn, Return,
-    If, While, Until, Loop, For, In, Match, Next, Break, Once,
+    If, While, Loop, For, In, Match, Next, Break, Once,
     Import, From, As, Enum, Export, Default,
     Model, Role, Extend, With, This,
 
 	// Built-ins
-	Print, Echo, Sleep, Thread, Channel, State,
+	Print, Echo, Sleep, Thread, Channel, State, Map, Set,
     
     // Identifiers and Literals
     Identifier(String),
@@ -317,7 +317,6 @@ impl Lexer {
             "match" => Token::Match,
             "next" => Token::Next,
             "break" => Token::Break,
-            "until" => Token::Until,
 			"fn" => Token::Fn,
 			"return" => Token::Return,
 			"print" => Token::Print,
@@ -339,6 +338,8 @@ impl Lexer {
             "this" => Token::This,
 			"true" => Token::Bool(true),
     		"false" => Token::Bool(false),
+            "map" => Token::Map,
+            "set" => Token::Set,
             _ => Token::Identifier(ident),
         }
     }

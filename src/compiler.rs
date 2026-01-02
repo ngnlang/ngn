@@ -548,7 +548,9 @@ impl Compiler {
                 
                 // Mutating methods need CallMethodMut to write back to the source register
                 let is_mutating = matches!(method.as_str(), 
-                    "push" | "pull" | "slice" | "splice"  // array mutating methods
+                    "push" | "pull" | "slice" | "splice" |  // array mutating methods
+                    "set" | "remove" |  // map mutating methods (remove is shared with set)
+                    "add"  // set mutating methods
                 );
                 
                 if is_mutating {
@@ -564,6 +566,18 @@ impl Compiler {
                 let index_reg = self.compile_expr(index_expr);
                 let dest = self.alloc_reg();
                 self.instructions.push(OpCode::GetIndex(dest, obj_reg, index_reg));
+                self.reg_top = dest + 1;
+                dest
+            }
+            Expr::Map(_, _) => {
+                let dest = self.alloc_reg();
+                self.instructions.push(OpCode::CreateMap(dest));
+                self.reg_top = dest + 1;
+                dest
+            }
+            Expr::Set(_) => {
+                let dest = self.alloc_reg();
+                self.instructions.push(OpCode::CreateSet(dest));
                 self.reg_top = dest + 1;
                 dest
             }
@@ -665,6 +679,8 @@ impl Compiler {
                     crate::parser::Type::Model(ref name) => name.clone(),
                     crate::parser::Type::Channel(_) => "channel".to_string(),
                     crate::parser::Type::State(_) => "state".to_string(),
+                    crate::parser::Type::Map(_, _) => "map".to_string(),
+                    crate::parser::Type::Set(_) => "set".to_string(),
                     _ => "".to_string(),
                 };
                 

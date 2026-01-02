@@ -625,6 +625,12 @@ impl Fiber {
                 };
                 self.set_reg_at(dest, Value::Channel(chan));
             }
+            OpCode::CreateMap(dest) => {
+                self.set_reg_at(dest, Value::Map(std::collections::HashMap::new()));
+            }
+            OpCode::CreateSet(dest) => {
+                self.set_reg_at(dest, Value::Set(std::collections::HashSet::new()));
+            }
             OpCode::CreateState(dest, initial_reg) => {
                 let initial = self.get_reg_at(initial_reg);
                 let state = Value::State(Arc::new(Mutex::new(initial)));
@@ -880,6 +886,8 @@ impl Fiber {
             Value::Array(arr) => self.array_method(arr, method, args),
             Value::String(s) => self.string_method(&s, method, args),
             Value::Tuple(t) => self.tuple_method(&t, method, args),
+            Value::Map(map) => self.map_method(map, method, args),
+            Value::Set(set) => self.set_method(set, method, args),
             _ => panic!("Runtime Error: Cannot call method '{}' on {:?}", method, obj),
         }
     }
@@ -889,6 +897,8 @@ impl Fiber {
         match obj {
             Value::Array(arr) => self.array_method_mut(arr, method, args),
             Value::String(s) => self.string_method_mut(s, method, args),
+            Value::Map(map) => self.map_method_mut(map, method, args),
+            Value::Set(set) => self.set_method_mut(set, method, args),
             _ => panic!("Runtime Error: Cannot call mutating method '{}' on {:?}", method, obj),
         }
     }
@@ -1131,6 +1141,70 @@ impl Fiber {
             (Value::Enum(e1), Value::Enum(e2)) => e1.enum_name == e2.enum_name && e1.variant_name == e2.variant_name,
             (Value::Void, Value::Void) => true,
             _ => false,
+        }
+    }
+
+    ///Map non-mutating methods: size, has, get
+    fn map_method(&self, map: std::collections::HashMap<Value, Value>, method: &str, args: Vec<Value>) -> Value {
+        match method {
+            "size" => Value::Numeric(crate::value::Number::I64(map.len() as i64)),
+            "has" => {
+                if args.is_empty() { panic!("has() requires a key"); }
+                Value::Bool(map.contains_key(&args[0]))
+            }
+            "get" => {
+                if args.is_empty() { panic!("get() requires a key"); }
+                map.get(&args[0]).cloned().unwrap_or(Value::Void)
+            }
+            _ => panic!("Runtime Error: Unknown non-mutating map method '{}'", method),
+        }
+    }
+
+    /// Map mutating methods: set, remove
+    fn map_method_mut(&self, mut map: std::collections::HashMap<Value, Value>, method: &str, args: Vec<Value>) -> (Value, Value) {
+        match method {
+            "set" => {
+                if args.len() < 2 { panic!("set() requires key and value"); }
+                map.insert(args[0].clone(), args[1].clone());
+                // Return the map itself for chaining
+                (Value::Map(map.clone()), Value::Map(map))
+            }
+            "remove" => {
+                if args.is_empty() { panic!("remove() requires a key"); }
+                let removed = map.remove(&args[0]).unwrap_or(Value::Void);
+                (removed, Value::Map(map))
+            }
+            _ => panic!("Runtime Error: Unknown mutating map method '{}'", method),
+        }
+    }
+
+    /// Set non-mutating methods: size, has
+    fn set_method(&self, set: std::collections::HashSet<Value>, method: &str, args: Vec<Value>) -> Value {
+        match method {
+            "size" => Value::Numeric(crate::value::Number::I64(set.len() as i64)),
+            "has" => {
+                if args.is_empty() { panic!("has() requires a value"); }
+                Value::Bool(set.contains(&args[0]))
+            }
+            _ => panic!("Runtime Error: Unknown non-mutating set method '{}'", method),
+        }
+    }
+
+    /// Set mutating methods: add, remove
+    fn set_method_mut(&self, mut set: std::collections::HashSet<Value>, method: &str, args: Vec<Value>) -> (Value, Value) {
+        match method {
+            "add" => {
+                if args.is_empty() { panic!("add() requires a value"); }
+                set.insert(args[0].clone());
+                // Return the set itself for chaining
+                (Value::Set(set.clone()), Value::Set(set))
+            }
+            "remove" => {
+                if args.is_empty() { panic!("remove() requires a value"); }
+                let was_removed = set.remove(&args[0]);
+                (Value::Bool(was_removed), Value::Set(set))
+            }
+            _ => panic!("Runtime Error: Unknown mutating set method '{}'", method),
         }
     }
 

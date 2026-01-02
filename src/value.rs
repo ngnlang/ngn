@@ -468,6 +468,8 @@ pub enum Value {
     Enum(Box<EnumData>),
     State(Arc<Mutex<Value>>),
     Object(Box<ObjectData>),
+    Map(std::collections::HashMap<Value, Value>),
+    Set(std::collections::HashSet<Value>),
     Void,
     Regex(String),
 }
@@ -625,6 +627,8 @@ impl Value {
             Value::Channel(_) => "channel",
             Value::State(_) => "state",
             Value::Enum(e) => &e.enum_name,
+            Value::Map(_) => "map",
+            Value::Set(_) => "set",
             Value::Function(_) | Value::Closure(_) | Value::NativeFunction(_) => "function",
             Value::Void => "void",
             Value::Reference(_, _) => "reference",
@@ -680,8 +684,76 @@ impl fmt::Display for Value {
                 }
                 write!(f, "}}")
             }
+            Value::Map(map) => {
+                write!(f, "map{{")?;
+                let mut first = true;
+                for (k, v) in map {
+                    if !first { write!(f, ", ")?; }
+                    write!(f, "{}: {}", k, v)?;
+                    first = false;
+                }
+                write!(f, "}}")
+            }
+            Value::Set(set) => {
+                write!(f, "set{{")?;
+                let mut first = true;
+                for v in set {
+                    if !first { write!(f, ", ")?; }
+                    write!(f, "{}", v)?;
+                    first = false;
+                }
+                write!(f, "}}")
+            }
             Value::Void => write!(f, "void"),
             Value::Regex(r) => write!(f, "/{}/", r),
         }
     }
 }
+
+// Hash and Eq implementations for Value to support HashMap/HashSet keys
+impl std::hash::Hash for Value {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            Value::Numeric(n) => {
+                // Hash based on the actual numeric value
+                match n {
+                    Number::I64(v) => v.hash(state),
+                    Number::I32(v) => v.hash(state),
+                    Number::I16(v) => v.hash(state),
+                    Number::I8(v) => v.hash(state),
+                    Number::U64(v) => v.hash(state),
+                    Number::U32(v) => v.hash(state),
+                    Number::U16(v) => v.hash(state),
+                    Number::U8(v) => v.hash(state),
+                    Number::F64(v) => v.to_bits().hash(state),
+                    Number::F32(v) => v.to_bits().hash(state),
+                }
+            }
+            Value::String(s) => s.hash(state),
+            Value::Bool(b) => b.hash(state),
+            Value::Void => 0.hash(state),
+            Value::Regex(r) => r.hash(state),
+            // For unhashable types, panic with a clear error
+            Value::Function(_) => panic!("Runtime Error: Functions cannot be used as map keys or set values"),
+            Value::Closure(_) => panic!("Runtime Error: Closures cannot be used as map keys or set values"),
+            Value::NativeFunction(_) => panic!("Runtime Error: Native functions cannot be used as map keys or set values"),
+            Value::Channel(_) => panic!("Runtime Error: Channels cannot be used as map keys or set values"),
+            Value::State(_) => panic!("Runtime Error: State values cannot be used as map keys or set values"),
+            Value::Array(_) => panic!("Runtime Error: Arrays cannot be used as map keys or set values"),
+            Value::Tuple(_) => panic!("Runtime Error: Tuples cannot be used as map keys or set values"),
+            Value::Enum(_) => panic!("Runtime Error: Enums cannot be used as map keys or set values"),
+            Value::Object(_) => panic!("Runtime Error: Objects cannot be used as map keys or set values"),
+            Value::Map(_) => panic!("Runtime Error: Maps cannot be used as map keys or set values"),
+            Value::Set(_) => panic!("Runtime Error: Sets cannot be used as map keys or set values"),
+            Value::Reference(_, _) => panic!("Runtime Error: References cannot be used as map keys or set values"),
+        }
+    }
+}
+
+impl std::cmp::PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        self.is_equal(other)
+    }
+}
+
+impl std::cmp::Eq for Value {} // Value is Eq because is_equal handles all cases properly

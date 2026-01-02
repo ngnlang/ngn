@@ -54,6 +54,8 @@ pub enum OpCode {
     // Data Structures
     BuildArray(u16, u16, usize), // (DestReg, StartReg, Count)
     BuildTuple(u16, u16, usize), // (DestReg, StartReg, Count)
+    CreateMap(u16),              // (DestReg) - creates empty HashMap
+    CreateSet(u16),              // (DestReg) - creates empty HashSet
     
     // Enums
     CreateEnum(u16, usize, u16, u8), // (DestReg, NamesConstIdx, StartReg, Count)
