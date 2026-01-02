@@ -47,7 +47,7 @@ impl Number {
                 (Number::I16(x), Number::I16(y)) => Number::I16(x + y),
                 (Number::I32(x), Number::I32(y)) => Number::I32(x + y),
                 (Number::I64(x), Number::I64(y)) => Number::I64(x + y),
-                (Number::U8(x), Number::U8(y))   => Number::U8(x + y),
+                (Number::U8(x), Number::U8(y)) => Number::U8(x + y),
                 (Number::U16(x), Number::U16(y)) => Number::U16(x + y),
                 (Number::U32(x), Number::U32(y)) => Number::U32(x + y),
                 (Number::U64(x), Number::U64(y)) => Number::U64(x + y),
@@ -62,14 +62,20 @@ impl Number {
             let promoted = self.promote_to(r2);
             // Safety Check: If rank didn't change, we missed a match arm in promote_to
             if promoted.rank() == r1 {
-                panic!("Logic Error: Failed to promote rank {} to {} while adding {} and {}", r1, r2, promoted, other);
+                panic!(
+                    "Logic Error: Failed to promote rank {} to {} while adding {} and {}",
+                    r1, r2, promoted, other
+                );
             }
             promoted.add(other)
         } else {
             let promoted = other.promote_to(r1);
             // Safety Check: If rank didn't change, we missed a match arm in promote_to
             if promoted.rank() == r2 {
-                panic!("Logic Error: Failed to promote rank {} to {} while adding {} and {}", r2, r1, self, promoted);
+                panic!(
+                    "Logic Error: Failed to promote rank {} to {} while adding {} and {}",
+                    r2, r1, self, promoted
+                );
             }
             self.add(promoted)
         }
@@ -86,7 +92,7 @@ impl Number {
                 (Number::I16(x), Number::I16(y)) => Number::I16(x - y),
                 (Number::I32(x), Number::I32(y)) => Number::I32(x - y),
                 (Number::I64(x), Number::I64(y)) => Number::I64(x - y),
-                (Number::U8(x), Number::U8(y))   => Number::U8(x - y),
+                (Number::U8(x), Number::U8(y)) => Number::U8(x - y),
                 (Number::U16(x), Number::U16(y)) => Number::U16(x - y),
                 (Number::U32(x), Number::U32(y)) => Number::U32(x - y),
                 (Number::U64(x), Number::U64(y)) => Number::U64(x - y),
@@ -101,20 +107,26 @@ impl Number {
             let promoted = self.promote_to(r2);
             // Safety Check: If rank didn't change, we missed a match arm in promote_to
             if promoted.rank() == r1 {
-                panic!("Logic Error: Failed to promote rank {} to {} while subtracting {} and {}", r1, r2, promoted, other);
+                panic!(
+                    "Logic Error: Failed to promote rank {} to {} while subtracting {} and {}",
+                    r1, r2, promoted, other
+                );
             }
             promoted.subtract(other)
         } else {
             let promoted = other.promote_to(r1);
             // Safety Check: If rank didn't change, we missed a match arm in promote_to
             if promoted.rank() == r2 {
-                panic!("Logic Error: Failed to promote rank {} to {} while subtracting {} and {}", r2, r1, self, promoted);
+                panic!(
+                    "Logic Error: Failed to promote rank {} to {} while subtracting {} and {}",
+                    r2, r1, self, promoted
+                );
             }
             self.subtract(promoted)
         }
     }
 
-     pub fn multiply(self, other: Number) -> Number {
+    pub fn multiply(self, other: Number) -> Number {
         let r1 = self.rank();
         let r2 = other.rank();
 
@@ -125,7 +137,7 @@ impl Number {
                 (Number::I16(x), Number::I16(y)) => Number::I16(x * y),
                 (Number::I32(x), Number::I32(y)) => Number::I32(x * y),
                 (Number::I64(x), Number::I64(y)) => Number::I64(x * y),
-                (Number::U8(x), Number::U8(y))   => Number::U8(x * y),
+                (Number::U8(x), Number::U8(y)) => Number::U8(x * y),
                 (Number::U16(x), Number::U16(y)) => Number::U16(x * y),
                 (Number::U32(x), Number::U32(y)) => Number::U32(x * y),
                 (Number::U64(x), Number::U64(y)) => Number::U64(x * y),
@@ -140,14 +152,20 @@ impl Number {
             let promoted = self.promote_to(r2);
             // Safety Check: If rank didn't change, we missed a match arm in promote_to
             if promoted.rank() == r1 {
-                panic!("Logic Error: Failed to promote rank {} to {} while multiplying {} and {}", r1, r2, promoted, other);
+                panic!(
+                    "Logic Error: Failed to promote rank {} to {} while multiplying {} and {}",
+                    r1, r2, promoted, other
+                );
             }
             promoted.multiply(other)
         } else {
             let promoted = other.promote_to(r1);
             // Safety Check: If rank didn't change, we missed a match arm in promote_to
             if promoted.rank() == r2 {
-                panic!("Logic Error: Failed to promote rank {} to {} while multiplying {} and {}", r2, r1, self, promoted);
+                panic!(
+                    "Logic Error: Failed to promote rank {} to {} while multiplying {} and {}",
+                    r2, r1, self, promoted
+                );
             }
             self.multiply(promoted)
         }
@@ -164,17 +182,21 @@ impl Number {
                 (Number::I16(x), Number::I16(y)) => Ok(Number::I16(x / y)),
                 (Number::I32(x), Number::I32(y)) => Ok(Number::I32(x / y)),
                 (Number::I64(a), Number::I64(b)) => {
-                    if b == 0 { return Err("Division by zero".to_string()); }
+                    if b == 0 {
+                        return Err("Division by zero".to_string());
+                    }
                     // NGN Choice: 5 / 2 = 2.5
                     Ok(Number::F64(a as f64 / b as f64))
                 }
-                (Number::U8(x), Number::U8(y))   => Ok(Number::U8(x / y)),
+                (Number::U8(x), Number::U8(y)) => Ok(Number::U8(x / y)),
                 (Number::U16(x), Number::U16(y)) => Ok(Number::U16(x / y)),
                 (Number::U32(x), Number::U32(y)) => Ok(Number::U32(x / y)),
                 (Number::U64(x), Number::U64(y)) => Ok(Number::U64(x / y)),
                 (Number::F32(x), Number::F32(y)) => Ok(Number::F32(x / y)),
                 (Number::F64(a), Number::F64(b)) => {
-                    if b == 0.0 { return Err("Division by zero".to_string()); }
+                    if b == 0.0 {
+                        return Err("Division by zero".to_string());
+                    }
                     Ok(Number::F64(a / b))
                 }
                 _ => panic!("Division not implemented for these types"),
@@ -186,14 +208,20 @@ impl Number {
             let promoted = self.promote_to(r2);
             // Safety Check: If rank didn't change, we missed a match arm in promote_to
             if promoted.rank() == r1 {
-                panic!("Logic Error: Failed to promote rank {} to {} while dividing {} and {}", r1, r2, promoted, other);
+                panic!(
+                    "Logic Error: Failed to promote rank {} to {} while dividing {} and {}",
+                    r1, r2, promoted, other
+                );
             }
             promoted.divide(other)
         } else {
             let promoted = other.promote_to(r1);
             // Safety Check: If rank didn't change, we missed a match arm in promote_to
             if promoted.rank() == r2 {
-                panic!("Logic Error: Failed to promote rank {} to {} while dividing {} and {}", r2, r1, self, promoted);
+                panic!(
+                    "Logic Error: Failed to promote rank {} to {} while dividing {} and {}",
+                    r2, r1, self, promoted
+                );
             }
             self.divide(promoted)
         }
@@ -209,14 +237,18 @@ impl Number {
                 (Number::I16(x), Number::I16(y)) => Ok(Number::I16(x % y)),
                 (Number::I32(x), Number::I32(y)) => Ok(Number::I32(x % y)),
                 (Number::I64(x), Number::I64(y)) => {
-                    if y == 0 { return Err("Modulo by zero".to_string()); }
+                    if y == 0 {
+                        return Err("Modulo by zero".to_string());
+                    }
                     Ok(Number::I64(x % y))
                 }
                 (Number::U8(x), Number::U8(y)) => Ok(Number::U8(x % y)),
                 (Number::U16(x), Number::U16(y)) => Ok(Number::U16(x % y)),
                 (Number::U32(x), Number::U32(y)) => Ok(Number::U32(x % y)),
                 (Number::U64(x), Number::U64(y)) => {
-                    if y == 0 { return Err("Modulo by zero".to_string()); }
+                    if y == 0 {
+                        return Err("Modulo by zero".to_string());
+                    }
                     Ok(Number::U64(x % y))
                 }
                 (Number::F32(x), Number::F32(y)) => Ok(Number::F32(x % y)),
@@ -268,12 +300,12 @@ impl Number {
         let r2 = other.rank();
 
         if r1 == r2 {
-             match (self, other) {
+            match (self, other) {
                 (Number::I8(x), Number::I8(y)) => x < y,
                 (Number::I16(x), Number::I16(y)) => x < y,
                 (Number::I32(x), Number::I32(y)) => x < y,
                 (Number::I64(x), Number::I64(y)) => x < y,
-                (Number::U8(x), Number::U8(y))   => x < y,
+                (Number::U8(x), Number::U8(y)) => x < y,
                 (Number::U16(x), Number::U16(y)) => x < y,
                 (Number::U32(x), Number::U32(y)) => x < y,
                 (Number::U64(x), Number::U64(y)) => x < y,
@@ -295,12 +327,12 @@ impl Number {
         let r2 = other.rank();
 
         if r1 == r2 {
-             match (self, other) {
+            match (self, other) {
                 (Number::I8(x), Number::I8(y)) => x > y,
                 (Number::I16(x), Number::I16(y)) => x > y,
                 (Number::I32(x), Number::I32(y)) => x > y,
                 (Number::I64(x), Number::I64(y)) => x > y,
-                (Number::U8(x), Number::U8(y))   => x > y,
+                (Number::U8(x), Number::U8(y)) => x > y,
                 (Number::U16(x), Number::U16(y)) => x > y,
                 (Number::U32(x), Number::U32(y)) => x > y,
                 (Number::U64(x), Number::U64(y)) => x > y,
@@ -337,8 +369,8 @@ impl Number {
             (Number::I8(v), 6) => Number::I16(v as i16),
             (Number::I8(v), 7) => Number::I32(v as i32),
             (Number::I8(v), 8) => Number::I64(v as i64),
-            (Number::I8(v),  9) => Number::F32(v as f32),
-            (Number::I8(v),  10) => Number::F64(v as f64),
+            (Number::I8(v), 9) => Number::F32(v as f32),
+            (Number::I8(v), 10) => Number::F64(v as f64),
 
             (Number::I16(v), 7) => Number::I32(v as i32),
             (Number::I16(v), 8) => Number::I64(v as i64),
@@ -355,8 +387,8 @@ impl Number {
             (Number::U8(v), 2) => Number::U16(v as u16),
             (Number::U8(v), 3) => Number::U32(v as u32),
             (Number::U8(v), 4) => Number::U64(v as u64),
-            (Number::U8(v),  9) => Number::F32(v as f32),
-            (Number::U8(v),  10) => Number::F64(v as f64),
+            (Number::U8(v), 9) => Number::F32(v as f32),
+            (Number::U8(v), 10) => Number::F64(v as f64),
 
             (Number::U16(v), 3) => Number::U32(v as u32),
             (Number::U16(v), 4) => Number::U64(v as u64),
@@ -379,11 +411,11 @@ impl Number {
     // Higher rank = more capacity
     pub fn rank(&self) -> u8 {
         match self {
-            Number::U8(_)  => 1,
+            Number::U8(_) => 1,
             Number::U16(_) => 2,
             Number::U32(_) => 3,
             Number::U64(_) => 4,
-            Number::I8(_)  => 5,
+            Number::I8(_) => 5,
             Number::I16(_) => 6,
             Number::I32(_) => 7,
             Number::I64(_) => 8,
@@ -393,11 +425,10 @@ impl Number {
     }
 }
 
-use std::sync::{Arc, Mutex};
 use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 
-#[derive(Debug, Clone)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Channel {
     pub name: String,
     pub buffer: Arc<Mutex<VecDeque<Value>>>,
@@ -405,14 +436,13 @@ pub struct Channel {
     pub is_closed: Arc<Mutex<bool>>,
 }
 
-#[derive(Debug, Clone)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Function {
     pub name: String,
     pub instructions: Arc<Vec<OpCode>>,
     pub constants: Arc<Vec<Value>>,
     #[serde(skip)]
-    pub home_globals: Option<Arc<Vec<Value>>>,  // Reference to module's globals (None for main module functions)
+    pub home_globals: Option<Arc<Vec<Value>>>, // Reference to module's globals (None for main module functions)
     pub param_count: usize,
     // Index of the param in this list matches the index in the function's local env
     // bool = true if it's an owned parameter (<)
@@ -436,7 +466,11 @@ pub struct EnumData {
 
 impl EnumData {
     pub fn into_value(enum_name: String, variant_name: String, data: Option<Box<Value>>) -> Value {
-        Value::Enum(Box::new(Self { enum_name, variant_name, data }))
+        Value::Enum(Box::new(Self {
+            enum_name,
+            variant_name,
+            data,
+        }))
     }
 }
 
@@ -447,7 +481,10 @@ pub struct ObjectData {
 }
 
 impl ObjectData {
-    pub fn into_value(model_name: String, fields: std::collections::HashMap<String, Value>) -> Value {
+    pub fn into_value(
+        model_name: String,
+        fields: std::collections::HashMap<String, Value>,
+    ) -> Value {
         Value::Object(Box::new(Self { model_name, fields }))
     }
 }
@@ -475,35 +512,38 @@ pub enum Value {
 }
 
 impl Value {
-    pub fn add(&self, other: &Value) -> Result<Value, String>  {
+    pub fn add(&self, other: &Value) -> Result<Value, String> {
         match (self, other) {
             // If both are numbers, delegate to the Number enum
             (Value::Numeric(x), Value::Numeric(y)) => Ok(Value::Numeric(x.add(*y))),
-            
+
             // If both are strings, handle concatenation
             (Value::String(x), Value::String(y)) => Ok(Value::String(format!("{}{}", x, y))),
-            
+
             (x, y) => Err(format!("Runtime Error: Cannot add {:?} and {:?}", x, y)),
         }
     }
     pub fn subtract(&self, other: &Value) -> Result<Value, String> {
         match (self, other) {
             (Value::Numeric(x), Value::Numeric(y)) => Ok(Value::Numeric(x.subtract(*y))),
-            
-            (x, y) => Err(format!("Runtime Error: Cannot subtract {:?} and {:?}", x, y)),
+
+            (x, y) => Err(format!(
+                "Runtime Error: Cannot subtract {:?} and {:?}",
+                x, y
+            )),
         }
     }
-    pub fn multiply(&self, other: &Value) -> Result<Value, String>  {
+    pub fn multiply(&self, other: &Value) -> Result<Value, String> {
         match (self, other) {
             (Value::Numeric(x), Value::Numeric(y)) => Ok(Value::Numeric(x.multiply(*y))),
-            
+
             (x, y) => Err(format!("Runtime Error: Cannot multiply {:?} by {:?}", x, y)),
         }
     }
     pub fn divide(&self, other: &Value) -> Result<Value, String> {
         match (self, other) {
             (Value::Numeric(x), Value::Numeric(y)) => x.divide(*y).map(Value::Numeric),
-            
+
             (x, y) => Err(format!("Runtime Error: Cannot divide {:?} by {:?}", x, y)),
         }
     }
@@ -511,14 +551,20 @@ impl Value {
     pub fn power(self, other: Value) -> Result<Value, String> {
         match (self, other) {
             (Value::Numeric(x), Value::Numeric(y)) => Ok(Value::Numeric(x.power(y))),
-            (x, y) => Err(format!("Runtime Error: Cannot use power operator with {:?} and {:?}", x, y)),
+            (x, y) => Err(format!(
+                "Runtime Error: Cannot use power operator with {:?} and {:?}",
+                x, y
+            )),
         }
     }
 
     pub fn remainder(self, other: Value) -> Result<Value, String> {
         match (self, other) {
             (Value::Numeric(x), Value::Numeric(y)) => x.remainder(y).map(Value::Numeric),
-            (x, y) => Err(format!("Runtime Error: Cannot use modulo operator with {:?} and {:?}", x, y)),
+            (x, y) => Err(format!(
+                "Runtime Error: Cannot use modulo operator with {:?} and {:?}",
+                x, y
+            )),
         }
     }
     pub fn is_equal(&self, other: &Value) -> bool {
@@ -533,10 +579,10 @@ impl Value {
                         (Number::I16(x), Number::I16(y)) => x == y,
                         (Number::I32(x), Number::I32(y)) => x == y,
                         (Number::I64(x), Number::I64(y)) => x == y,
-                        (Number::U8(x),  Number::U8(y))  => x == y,
-                        (Number::U16(x),  Number::U16(y))  => x == y,
-                        (Number::U32(x),  Number::U32(y))  => x == y,
-                        (Number::U64(x),  Number::U64(y))  => x == y,
+                        (Number::U8(x), Number::U8(y)) => x == y,
+                        (Number::U16(x), Number::U16(y)) => x == y,
+                        (Number::U32(x), Number::U32(y)) => x == y,
+                        (Number::U64(x), Number::U64(y)) => x == y,
                         (Number::F32(x), Number::F32(y)) => x == y,
                         (Number::F64(x), Number::F64(y)) => x == y,
                         _ => false,
@@ -548,14 +594,20 @@ impl Value {
                     let promoted = a.promote_to(r2);
                     // Safety Check: If rank didn't change, we missed a match arm in promote_to
                     if promoted.rank() == r1 {
-                        panic!("Logic Error: Failed to promote rank {} to {} while comparing {} and {}", r1, r2, promoted, b);
+                        panic!(
+                            "Logic Error: Failed to promote rank {} to {} while comparing {} and {}",
+                            r1, r2, promoted, b
+                        );
                     }
                     Value::Numeric(promoted).is_equal(&Value::Numeric(*b))
                 } else {
                     let promoted = b.promote_to(r1);
                     // Safety Check: If rank didn't change, we missed a match arm in promote_to
                     if promoted.rank() == r2 {
-                        panic!("Logic Error: Failed to promote rank {} to {} while comparing {} and {}", r2, r1, a, promoted);
+                        panic!(
+                            "Logic Error: Failed to promote rank {} to {} while comparing {} and {}",
+                            r2, r1, a, promoted
+                        );
                     }
                     Value::Numeric(*a).is_equal(&Value::Numeric(promoted))
                 }
@@ -563,7 +615,9 @@ impl Value {
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::String(a), Value::String(b)) => a == b,
             (Value::Array(a), Value::Array(b)) => {
-                if a.len() != b.len() { return false; }
+                if a.len() != b.len() {
+                    return false;
+                }
                 for (v1, v2) in a.iter().zip(b.iter()) {
                     if !v1.is_equal(v2) {
                         return false;
@@ -572,7 +626,9 @@ impl Value {
                 true
             }
             (Value::Tuple(a), Value::Tuple(b)) => {
-                if a.len() != b.len() { return false; }
+                if a.len() != b.len() {
+                    return false;
+                }
                 for (v1, v2) in a.iter().zip(b.iter()) {
                     if !v1.is_equal(v2) {
                         return false;
@@ -581,8 +637,8 @@ impl Value {
                 true
             }
             (Value::Enum(e1), Value::Enum(e2)) => {
-                if e1.variant_name != e2.variant_name || e1.enum_name != e2.enum_name { 
-                    return false; 
+                if e1.variant_name != e2.variant_name || e1.enum_name != e2.enum_name {
+                    return false;
                 }
 
                 match (&e1.data, &e2.data) {
@@ -597,11 +653,17 @@ impl Value {
                 let m2 = &o2.model_name;
                 let f2 = &o2.fields;
 
-                if m1 != m2 || f1.len() != f2.len() { return false; }
+                if m1 != m2 || f1.len() != f2.len() {
+                    return false;
+                }
                 for (k, v1) in f1 {
                     if let Some(v2) = f2.get(k) {
-                        if !v1.is_equal(v2) { return false; }
-                    } else { return false; }
+                        if !v1.is_equal(v2) {
+                            return false;
+                        }
+                    } else {
+                        return false;
+                    }
                 }
                 true
             }
@@ -614,8 +676,14 @@ impl Value {
     pub fn type_name(&self) -> &str {
         match self {
             Value::Numeric(n) => match n {
-                Number::I64(_) | Number::I32(_) | Number::I16(_) | Number::I8(_) |
-                Number::U64(_) | Number::U32(_) | Number::U16(_) | Number::U8(_) => "i64",
+                Number::I64(_)
+                | Number::I32(_)
+                | Number::I16(_)
+                | Number::I8(_)
+                | Number::U64(_)
+                | Number::U32(_)
+                | Number::U16(_)
+                | Number::U8(_) => "i64",
                 Number::F64(_) | Number::F32(_) => "f64",
             },
             Value::String(_) => "string",
@@ -648,7 +716,9 @@ impl fmt::Display for Value {
             Value::Array(arr) => {
                 write!(f, "[")?;
                 for (i, v) in arr.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}", v)?;
                 }
                 write!(f, "]")
@@ -656,7 +726,9 @@ impl fmt::Display for Value {
             Value::Tuple(tup) => {
                 write!(f, "(")?;
                 for (i, v) in tup.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}", v)?;
                 }
                 write!(f, ")")
@@ -678,7 +750,9 @@ impl fmt::Display for Value {
                 write!(f, "{} {{", o.model_name)?;
                 let mut first = true;
                 for (name, val) in &o.fields {
-                    if !first { write!(f, ", ")?; }
+                    if !first {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}: {}", name, val)?;
                     first = false;
                 }
@@ -688,7 +762,9 @@ impl fmt::Display for Value {
                 write!(f, "map{{")?;
                 let mut first = true;
                 for (k, v) in map {
-                    if !first { write!(f, ", ")?; }
+                    if !first {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}: {}", k, v)?;
                     first = false;
                 }
@@ -698,7 +774,9 @@ impl fmt::Display for Value {
                 write!(f, "set{{")?;
                 let mut first = true;
                 for v in set {
-                    if !first { write!(f, ", ")?; }
+                    if !first {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}", v)?;
                     first = false;
                 }
@@ -734,18 +812,38 @@ impl std::hash::Hash for Value {
             Value::Void => 0.hash(state),
             Value::Regex(r) => r.hash(state),
             // For unhashable types, panic with a clear error
-            Value::Function(_) => panic!("Runtime Error: Functions cannot be used as map keys or set values"),
-            Value::Closure(_) => panic!("Runtime Error: Closures cannot be used as map keys or set values"),
-            Value::NativeFunction(_) => panic!("Runtime Error: Native functions cannot be used as map keys or set values"),
-            Value::Channel(_) => panic!("Runtime Error: Channels cannot be used as map keys or set values"),
-            Value::State(_) => panic!("Runtime Error: State values cannot be used as map keys or set values"),
-            Value::Array(_) => panic!("Runtime Error: Arrays cannot be used as map keys or set values"),
-            Value::Tuple(_) => panic!("Runtime Error: Tuples cannot be used as map keys or set values"),
-            Value::Enum(_) => panic!("Runtime Error: Enums cannot be used as map keys or set values"),
-            Value::Object(_) => panic!("Runtime Error: Objects cannot be used as map keys or set values"),
+            Value::Function(_) => {
+                panic!("Runtime Error: Functions cannot be used as map keys or set values")
+            }
+            Value::Closure(_) => {
+                panic!("Runtime Error: Closures cannot be used as map keys or set values")
+            }
+            Value::NativeFunction(_) => {
+                panic!("Runtime Error: Native functions cannot be used as map keys or set values")
+            }
+            Value::Channel(_) => {
+                panic!("Runtime Error: Channels cannot be used as map keys or set values")
+            }
+            Value::State(_) => {
+                panic!("Runtime Error: State values cannot be used as map keys or set values")
+            }
+            Value::Array(_) => {
+                panic!("Runtime Error: Arrays cannot be used as map keys or set values")
+            }
+            Value::Tuple(_) => {
+                panic!("Runtime Error: Tuples cannot be used as map keys or set values")
+            }
+            Value::Enum(_) => {
+                panic!("Runtime Error: Enums cannot be used as map keys or set values")
+            }
+            Value::Object(_) => {
+                panic!("Runtime Error: Objects cannot be used as map keys or set values")
+            }
             Value::Map(_) => panic!("Runtime Error: Maps cannot be used as map keys or set values"),
             Value::Set(_) => panic!("Runtime Error: Sets cannot be used as map keys or set values"),
-            Value::Reference(_, _) => panic!("Runtime Error: References cannot be used as map keys or set values"),
+            Value::Reference(_, _) => {
+                panic!("Runtime Error: References cannot be used as map keys or set values")
+            }
         }
     }
 }

@@ -5,6 +5,5 @@ pub mod error;
 pub mod lexer;
 pub mod parser;
 pub mod toolbox;
-pub mod utils;
 pub mod value;
 pub mod vm;
