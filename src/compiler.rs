@@ -776,6 +776,7 @@ impl Compiler {
                         self.instructions.push(OpCode::DefVar(var_idx, false));
                         self.instructions.push(OpCode::Move(var_idx as u16, reg));
                     }
+                    self.temp_start = self.next_index as u16;
                     self.reg_top = self.temp_start;
                 }
             }
