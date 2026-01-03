@@ -1,6 +1,6 @@
 use crate::bytecode::OpCode;
 use crate::lexer::Token;
-use crate::parser::{EnumDef, Expr, Pattern, Statement};
+use crate::parser::{EnumDef, Expr, ExprKind, Pattern, Statement, StatementKind};
 use crate::value::{Function, Number, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -181,8 +181,8 @@ impl Compiler {
     }
 
     pub fn compile_expr(&mut self, expr: &Expr) -> u16 {
-        match expr {
-            Expr::Assign { name, value } => {
+        match &expr.kind {
+            ExprKind::Assign { name, value } => {
                 let src_reg = self.compile_expr(value);
 
                 if let Some(&idx) = self.symbol_table.get(name) {
@@ -199,13 +199,13 @@ impl Compiler {
                     );
                 }
             }
-            Expr::Bool(b) => {
+            ExprKind::Bool(b) => {
                 let dest = self.alloc_reg();
                 let idx = self.add_constant(Value::Bool(*b));
                 self.instructions.push(OpCode::LoadConst(dest, idx));
                 dest
             }
-            Expr::Call { name, args } => {
+            ExprKind::Call { name, args } => {
                 match name.as_str() {
                     "print" => {
                         let reg = self.compile_expr(&args[0]);
@@ -233,7 +233,7 @@ impl Compiler {
                     for (i, arg_expr) in args.iter().enumerate() {
                         if i < sig.len() && sig[i] {
                             // This param is OWNED. Check if we passed a variable.
-                            if let Expr::Variable(var_name) = arg_expr {
+                            if let ExprKind::Variable(var_name) = &arg_expr.kind {
                                 self.moved_locals.insert(var_name.clone());
                             }
                         }
@@ -282,31 +282,31 @@ impl Compiler {
 
                 dest
             }
-            Expr::Number(n) => {
+            ExprKind::Number(n) => {
                 let dest = self.alloc_reg();
                 let idx = self.add_constant(Value::Numeric(Number::I64(*n)));
                 self.instructions.push(OpCode::LoadConst(dest, idx));
                 dest
             }
-            Expr::Float(n) => {
+            ExprKind::Float(n) => {
                 let dest = self.alloc_reg();
                 let idx = self.add_constant(Value::Numeric(Number::F64(*n)));
                 self.instructions.push(OpCode::LoadConst(dest, idx));
                 dest
             }
-            Expr::String(s) => {
+            ExprKind::String(s) => {
                 let dest = self.alloc_reg();
                 let idx = self.add_constant(Value::String(s.clone()));
                 self.instructions.push(OpCode::LoadConst(dest, idx));
                 dest
             }
-            Expr::Regex(pattern) => {
+            ExprKind::Regex(pattern) => {
                 let dest = self.alloc_reg();
                 let idx = self.add_constant(Value::String(pattern.clone()));
                 self.instructions.push(OpCode::MakeRegex(dest, idx));
                 dest
             }
-            Expr::InterpolatedString(parts) => {
+            ExprKind::InterpolatedString(parts) => {
                 let start_reg = self.compile_args(parts);
                 let dest = self.alloc_reg();
                 self.instructions
@@ -314,7 +314,7 @@ impl Compiler {
                 self.reg_top = dest + 1;
                 dest
             }
-            Expr::Variable(name) => {
+            ExprKind::Variable(name) => {
                 if self.moved_locals.contains(name) {
                     panic!("Compiler Error: Use of moved variable '{}'", name);
                 }
@@ -353,7 +353,7 @@ impl Compiler {
                     panic!("Compiler Error: Undefined variable '{}'", name);
                 }
             }
-            Expr::Closure {
+            ExprKind::Closure {
                 params,
                 body,
                 return_type: _,
@@ -431,7 +431,7 @@ impl Compiler {
 
                 dest
             }
-            Expr::EnumVariant {
+            ExprKind::EnumVariant {
                 enum_name,
                 variant_name,
                 args,
@@ -466,7 +466,7 @@ impl Compiler {
                 self.reg_top = dest + 1;
                 dest
             }
-            Expr::Binary { left, op, right } => {
+            ExprKind::Binary { left, op, right } => {
                 let left_reg = self.compile_expr(left);
                 let right_reg = self.compile_expr(right);
                 let dest = self.alloc_reg();
@@ -507,7 +507,7 @@ impl Compiler {
                 self.reg_top = dest + 1;
                 dest
             }
-            Expr::Array(elements) => {
+            ExprKind::Array(elements) => {
                 let start_reg = self.compile_args(elements);
                 let dest = self.alloc_reg();
                 self.instructions
@@ -515,7 +515,7 @@ impl Compiler {
                 self.reg_top = dest + 1;
                 dest
             }
-            Expr::Tuple(elements) => {
+            ExprKind::Tuple(elements) => {
                 let start_reg = self.compile_args(elements);
                 let dest = self.alloc_reg();
                 self.instructions
@@ -523,27 +523,27 @@ impl Compiler {
                 self.reg_top = dest + 1;
                 dest
             }
-            Expr::Thread(expr) => {
+            ExprKind::Thread(expr) => {
                 let closure_reg = self.compile_expr(expr);
                 let dest = self.alloc_reg();
                 self.instructions.push(OpCode::Spawn(dest, closure_reg));
                 self.reg_top = dest + 1;
                 dest
             }
-            Expr::Channel(_) => {
+            ExprKind::Channel(_) => {
                 let dest = self.alloc_reg();
                 self.instructions.push(OpCode::CreateChannel(dest, 10)); // Default capacity
                 self.reg_top = dest + 1;
                 dest
             }
-            Expr::Receive(chan_expr) => {
+            ExprKind::Receive(chan_expr) => {
                 let chan_reg = self.compile_expr(chan_expr);
                 let dest = self.alloc_reg();
                 self.instructions.push(OpCode::Receive(dest, chan_reg));
                 self.reg_top = dest + 1;
                 dest
             }
-            Expr::Send(chan_expr, val_expr) => {
+            ExprKind::Send(chan_expr, val_expr) => {
                 let chan_reg = self.compile_expr(chan_expr);
                 let val_reg = self.compile_expr(val_expr);
                 let dest = self.alloc_reg();
@@ -551,7 +551,7 @@ impl Compiler {
                 self.reg_top = dest + 1;
                 dest
             }
-            Expr::ReceiveCount(chan_expr, count_expr) => {
+            ExprKind::ReceiveCount(chan_expr, count_expr) => {
                 let chan_reg = self.compile_expr(chan_expr);
                 let count_reg = self.compile_expr(count_expr);
                 let dest = self.alloc_reg();
@@ -560,14 +560,14 @@ impl Compiler {
                 self.reg_top = dest + 1;
                 dest
             }
-            Expr::ReceiveMaybe(chan_expr) => {
+            ExprKind::ReceiveMaybe(chan_expr) => {
                 let chan_reg = self.compile_expr(chan_expr);
                 let dest = self.alloc_reg();
                 self.instructions.push(OpCode::ReceiveMaybe(dest, chan_reg));
                 self.reg_top = dest + 1;
                 dest
             }
-            Expr::State(initial_expr) => {
+            ExprKind::State(initial_expr) => {
                 let initial_reg = self.compile_expr(initial_expr);
                 let dest = self.alloc_reg();
                 self.instructions
@@ -575,7 +575,7 @@ impl Compiler {
                 self.reg_top = dest + 1;
                 dest
             }
-            Expr::ModelInstance { name, fields } => {
+            ExprKind::ModelInstance { name, fields } => {
                 let model_name_idx = self.add_constant(Value::String(name.clone()));
                 let start_reg = self.reg_top;
                 let mut field_names = Vec::new();
@@ -596,7 +596,7 @@ impl Compiler {
                 self.reg_top = dest + 1;
                 dest
             }
-            Expr::FieldAccess { object, field } => {
+            ExprKind::FieldAccess { object, field } => {
                 let obj_reg = self.compile_expr(object);
                 let field_idx = self.add_constant(Value::String(field.clone()));
                 let dest = self.alloc_reg();
@@ -605,7 +605,7 @@ impl Compiler {
                 self.reg_top = dest + 1;
                 dest
             }
-            Expr::This => {
+            ExprKind::This => {
                 if let Some(idx) = self.symbol_table.get("this").cloned() {
                     let dest = self.alloc_reg();
                     self.instructions.push(OpCode::Move(dest, idx as u16));
@@ -620,7 +620,7 @@ impl Compiler {
                     panic!("Compiler Error: 'this' used outside of method context");
                 }
             }
-            Expr::MethodCall(obj_expr, method, args) => {
+            ExprKind::MethodCall(obj_expr, method, args) => {
                 let obj_reg = self.compile_expr(obj_expr);
                 let dest = self.alloc_reg();
 
@@ -684,7 +684,7 @@ impl Compiler {
                 self.reg_top = dest + 1;
                 dest
             }
-            Expr::Index(obj_expr, index_expr) => {
+            ExprKind::Index(obj_expr, index_expr) => {
                 let obj_reg = self.compile_expr(obj_expr);
                 let index_reg = self.compile_expr(index_expr);
                 let dest = self.alloc_reg();
@@ -693,19 +693,19 @@ impl Compiler {
                 self.reg_top = dest + 1;
                 dest
             }
-            Expr::Map(_, _) => {
+            ExprKind::Map(_, _) => {
                 let dest = self.alloc_reg();
                 self.instructions.push(OpCode::CreateMap(dest));
                 self.reg_top = dest + 1;
                 dest
             }
-            Expr::Set(_) => {
+            ExprKind::Set(_) => {
                 let dest = self.alloc_reg();
                 self.instructions.push(OpCode::CreateSet(dest));
                 self.reg_top = dest + 1;
                 dest
             }
-            Expr::Unary { op, right } => {
+            ExprKind::Unary { op, right } => {
                 let reg = self.compile_expr(right);
                 let dest = self.alloc_reg();
                 match op {
@@ -716,16 +716,19 @@ impl Compiler {
                 self.reg_top = dest + 1;
                 dest
             }
+            ExprKind::Error(msg) => {
+                panic!("Compiler received invalid AST: {}", msg);
+            }
         }
     }
 
     fn extract_constant_literal(&self, expr: &Expr) -> Option<Value> {
-        match expr {
-            Expr::Number(n) => Some(Value::Numeric(Number::I64(*n))),
-            Expr::Float(n) => Some(Value::Numeric(Number::F64(*n))),
-            Expr::Bool(b) => Some(Value::Bool(*b)),
-            Expr::String(s) if s.len() <= 64 => Some(Value::String(s.clone())),
-            Expr::Array(elements)
+        match &expr.kind {
+            ExprKind::Number(n) => Some(Value::Numeric(Number::I64(*n))),
+            ExprKind::Float(n) => Some(Value::Numeric(Number::F64(*n))),
+            ExprKind::Bool(b) => Some(Value::Bool(*b)),
+            ExprKind::String(s) if s.len() <= 64 => Some(Value::String(s.clone())),
+            ExprKind::Array(elements)
                 if elements.len() < 5 && elements.iter().all(|el| el.is_primitive()) =>
             {
                 let mut values = Vec::new();
@@ -738,7 +741,7 @@ impl Compiler {
                 }
                 Some(Value::Array(values))
             }
-            Expr::Tuple(elements)
+            ExprKind::Tuple(elements)
                 if elements.len() < 5 && elements.iter().all(|el| el.is_primitive()) =>
             {
                 let mut values = Vec::new();
@@ -756,11 +759,11 @@ impl Compiler {
     }
 
     pub fn compile_statement(&mut self, stmt: Statement) {
-        match stmt {
-            Statement::Enum(enum_def) => {
+        match stmt.kind {
+            StatementKind::Enum(enum_def) => {
                 self.enums.insert(enum_def.name.clone(), enum_def);
             }
-            Statement::Declaration {
+            StatementKind::Declaration {
                 name,
                 is_mutable,
                 is_static,
@@ -802,8 +805,8 @@ impl Compiler {
                 self.temp_start = self.next_index as u16;
                 self.reg_top = self.temp_start;
             }
-            Statement::Model(_) | Statement::Role(_) => {}
-            Statement::Extend {
+            StatementKind::Model(_) | StatementKind::Role(_) => {}
+            StatementKind::Extend {
                 target, methods, ..
             } => {
                 let target_name = match target {
@@ -835,14 +838,15 @@ impl Compiler {
                 let target_idx = self.add_constant(Value::String(target_name));
 
                 for method in methods {
-                    if let Statement::Function {
+                    if let StatementKind::Function {
                         name, params, body, ..
-                    } = method
+                    } = method.kind
                     {
                         let mut method_params = vec![crate::parser::Parameter {
                             name: "this".to_string(),
                             ty: Some(target.clone()),
                             is_owned: false,
+                            span: crate::lexer::Span::default(),
                         }];
                         method_params.extend(params);
 
@@ -862,7 +866,7 @@ impl Compiler {
                     }
                 }
             }
-            Statement::Return(expr_opt) => {
+            StatementKind::Return(expr_opt) => {
                 if let Some(expr) = expr_opt {
                     let reg = self.compile_expr(&expr);
                     self.instructions.push(OpCode::Return(reg));
@@ -870,11 +874,14 @@ impl Compiler {
                     self.instructions.push(OpCode::ReturnVoid);
                 }
             }
-            Statement::Expression(expr) => {
+            StatementKind::Error(msg) => {
+                panic!("Compiler received invalid AST: {}", msg);
+            }
+            StatementKind::Expression(expr) => {
                 self.compile_expr(&expr);
                 self.reg_top = self.temp_start;
             }
-            Statement::Function {
+            StatementKind::Function {
                 name, params, body, ..
             } => {
                 let func = self.compile_function_helper(name.clone(), params, body);
@@ -958,7 +965,7 @@ impl Compiler {
                     self.reg_top = self.temp_start;
                 }
             }
-            Statement::Import { names, source } => {
+            StatementKind::Import { names, source } => {
                 // Identify if it's a toolbox import: "tbx::test"
                 if source.starts_with("tbx::") {
                     let module_name = source.strip_prefix("tbx::").unwrap();
@@ -995,49 +1002,49 @@ impl Compiler {
                     }
                 }
             }
-            Statement::Print(expression) => {
+            StatementKind::Print(expression) => {
                 let reg = self.compile_expr(&expression);
                 self.instructions.push(OpCode::Print(reg));
                 self.reg_top = self.temp_start;
             }
-            Statement::Echo(expression) => {
+            StatementKind::Echo(expression) => {
                 let reg = self.compile_expr(&expression);
                 self.instructions.push(OpCode::Echo(reg));
                 self.reg_top = self.temp_start;
             }
-            Statement::Sleep(expression) => {
+            StatementKind::Sleep(expression) => {
                 let reg = self.compile_expr(&expression);
                 self.instructions.push(OpCode::Sleep(reg));
                 self.reg_top = self.temp_start;
             }
-            Statement::Block(stmts) => {
+            StatementKind::Block(stmts) => {
                 for stmt in stmts {
                     self.compile_statement(stmt);
                 }
             }
-            Statement::If {
+            StatementKind::If {
                 condition,
                 then_branch,
                 else_branch,
             } => self.compile_if(condition, then_branch, else_branch),
-            Statement::While {
+            StatementKind::While {
                 condition,
                 body,
                 is_once,
             } => self.compile_while(condition, body, is_once),
-            Statement::Loop(body) => self.compile_loop(body),
-            Statement::For {
+            StatementKind::Loop(body) => self.compile_loop(body),
+            StatementKind::For {
                 binding,
                 index_binding,
                 iterable,
                 body,
             } => self.compile_for(binding, index_binding, iterable, body),
-            Statement::Match { condition, arms } => self.compile_match(condition, arms),
-            Statement::Next => self.compile_next(),
-            Statement::Break => self.compile_break(),
-            Statement::ImportDefault { .. }
-            | Statement::ImportModule { .. }
-            | Statement::ExportDefault(_) => {}
+            StatementKind::Match { condition, arms } => self.compile_match(condition, arms),
+            StatementKind::Next => self.compile_next(),
+            StatementKind::Break => self.compile_break(),
+            StatementKind::ImportDefault { .. }
+            | StatementKind::ImportModule { .. }
+            | StatementKind::ExportDefault(_) => {}
         }
     }
 
@@ -1148,8 +1155,8 @@ impl Compiler {
         body: Box<Statement>,
     ) {
         // Special case: for (msg in <-? chan)
-        let src_reg = if let Expr::ReceiveMaybe(chan_expr) = iterable {
-            self.compile_expr(&chan_expr)
+        let src_reg = if let ExprKind::ReceiveMaybe(chan_expr) = &iterable.kind {
+            self.compile_expr(chan_expr)
         } else {
             // 1. Compile iterable normally
             self.compile_expr(&iterable)

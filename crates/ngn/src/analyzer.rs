@@ -1,5 +1,8 @@
-use crate::lexer::Token;
-use crate::parser::{EnumDef, EnumVariantDef, Expr, ModelDef, Pattern, RoleDef, Statement, Type};
+use crate::lexer::{Span, Token};
+use crate::parser::{
+    EnumDef, EnumVariantDef, Expr, ExprKind, ModelDef, Pattern, RoleDef, Statement, StatementKind,
+    Type,
+};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
@@ -8,9 +11,22 @@ pub struct Symbol {
     pub is_mutable: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct Diagnostic {
+    pub message: String,
+    pub span: Span,
+}
+
+impl std::fmt::Display for Diagnostic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} at {:?}", self.message, self.span)
+    }
+}
+
 pub struct Analyzer {
     scopes: Vec<HashMap<String, Symbol>>,
-    errors: Vec<String>,
+    pub diagnostics: Vec<Diagnostic>,
+    errors: Vec<String>, // Deprecated, removing incrementally
     current_return_type: Option<Type>,
     infer_stack: Vec<Option<Type>>,
     enums: HashMap<String, EnumDef>,
@@ -90,6 +106,7 @@ impl Analyzer {
 
         let mut analyzer = Self {
             scopes: vec![global_scope],
+            diagnostics: Vec::new(),
             errors: Vec::new(),
             current_return_type: None,
             infer_stack: Vec::new(),
@@ -100,8 +117,8 @@ impl Analyzer {
             model_roles: HashMap::new(),
         };
 
-        analyzer.register_enum(&result_enum);
-        analyzer.register_enum(&maybe_enum);
+        analyzer.register_enum(&result_enum, Span::default());
+        analyzer.register_enum(&maybe_enum, Span::default());
 
         analyzer
     }
@@ -112,18 +129,18 @@ impl Analyzer {
         }
     }
 
-    pub fn analyze(&mut self, statements: &[Statement]) -> Result<(), Vec<String>> {
+    pub fn analyze(&mut self, statements: &[Statement]) -> Result<(), Vec<Diagnostic>> {
         // Pass 1a: Collect all top-level types (Enums, Models, Roles)
         for stmt in statements {
-            match stmt {
-                Statement::Enum(enum_def) => {
-                    self.register_enum(enum_def);
+            match &stmt.kind {
+                StatementKind::Enum(enum_def) => {
+                    self.register_enum(enum_def, stmt.span);
                 }
-                Statement::Model(model_def) => {
+                StatementKind::Model(model_def) => {
                     self.models
                         .insert(model_def.name.clone(), model_def.clone());
                 }
-                Statement::Role(role_def) => {
+                StatementKind::Role(role_def) => {
                     self.roles.insert(role_def.name.clone(), role_def.clone());
                 }
                 _ => {}
@@ -132,8 +149,8 @@ impl Analyzer {
 
         // Pass 1b: Collect function signatures and extensions with normalized types
         for stmt in statements {
-            match stmt {
-                Statement::Function {
+            match &stmt.kind {
+                StatementKind::Function {
                     name,
                     params,
                     return_type,
@@ -153,9 +170,10 @@ impl Analyzer {
                             return_type: Box::new(ret_ty),
                         },
                         false,
+                        stmt.span,
                     );
                 }
-                Statement::Extend {
+                StatementKind::Extend {
                     target,
                     role,
                     methods,
@@ -173,10 +191,14 @@ impl Analyzer {
 
                     let mut methods_to_add = Vec::new();
                     for m in methods {
-                        if let Statement::Function {
-                            name,
-                            params,
-                            return_type,
+                        if let Statement {
+                            kind:
+                                StatementKind::Function {
+                                    name,
+                                    params,
+                                    return_type,
+                                    ..
+                                },
                             ..
                         } = m
                         {
@@ -213,11 +235,23 @@ impl Analyzer {
             self.check_statement(stmt);
         }
 
-        if self.errors.is_empty() {
+        // Merge legacy errors
+        for msg in self.errors.drain(..) {
+            self.diagnostics.push(Diagnostic {
+                message: msg,
+                span: Span::default(),
+            });
+        }
+
+        if self.diagnostics.is_empty() {
             Ok(())
         } else {
-            Err(self.errors.clone())
+            Err(self.diagnostics.clone())
         }
+    }
+
+    fn add_error(&mut self, message: String, span: Span) {
+        self.diagnostics.push(Diagnostic { message, span });
     }
 
     fn enter_scope(&mut self) {
@@ -228,7 +262,7 @@ impl Analyzer {
         self.scopes.pop();
     }
 
-    fn define(&mut self, name: &str, ty: Type, is_mutable: bool) {
+    fn define(&mut self, name: &str, ty: Type, is_mutable: bool, span: Span) {
         if let Some(scope) = self.scopes.last_mut() {
             if scope.contains_key(name) {
                 if let Some(existing) = scope.get(name) {
@@ -236,19 +270,21 @@ impl Analyzer {
                         return;
                     }
                 }
-                self.errors
-                    .push(format!("Error: '{}' already defined in this scope", name));
+                self.add_error(
+                    format!("Error: '{}' already defined in this scope", name),
+                    span,
+                );
                 return;
             }
             scope.insert(name.to_string(), Symbol { ty, is_mutable });
         }
     }
 
-    fn register_enum(&mut self, enum_def: &EnumDef) {
+    fn register_enum(&mut self, enum_def: &EnumDef, span: Span) {
         self.enums.insert(enum_def.name.clone(), enum_def.clone());
         // Register variants in global scope (accessible as bare names if unambiguous)
         for v in &enum_def.variants {
-            self.define(&v.name, Type::Any, false);
+            self.define(&v.name, Type::Any, false, span);
         }
     }
 
@@ -257,8 +293,8 @@ impl Analyzer {
     }
 
     fn check_statement(&mut self, stmt: &Statement) -> Type {
-        match stmt {
-            Statement::Declaration {
+        match &stmt.kind {
+            StatementKind::Declaration {
                 name,
                 is_mutable,
                 value,
@@ -269,16 +305,19 @@ impl Analyzer {
 
                 if let Type::Array(inner) = &inferred {
                     if matches!(**inner, Type::Any) && declared_type.is_none() {
-                        self.errors.push(format!("Type Error: Cannot infer type for empty array variable '{}'. Please provide an explicit type annotation.", name));
+                        self.add_error(format!("Type Error: Cannot infer type for empty array variable '{}'. Please provide an explicit type annotation.", name), stmt.span);
                     }
                 }
 
                 let ty = if let Some(declared) = declared_type {
                     if !self.types_compatible(declared, &inferred) {
-                        self.errors.push(format!(
-                            "Type Error: '{}' expected {:?}, but got {:?}",
-                            name, declared, inferred
-                        ));
+                        self.add_error(
+                            format!(
+                                "Type Error: '{}' expected {:?}, but got {:?}",
+                                name, declared, inferred
+                            ),
+                            stmt.span,
+                        );
                     }
                     declared.clone()
                 } else {
@@ -287,22 +326,22 @@ impl Analyzer {
 
                 if let Type::Channel(_) = &ty {
                     if *is_mutable {
-                        self.errors.push(format!("Type Error: Channel '{}' must be declared as 'const' or 'static', not 'var'.", name));
+                        self.add_error(format!("Type Error: Channel '{}' must be declared as 'const' or 'static', not 'var'.", name), stmt.span);
                     }
                 }
 
                 // Closure
                 if let Type::Function { .. } = &ty {
                     if *is_mutable {
-                        self.errors.push(format!("Type Error: Closure '{}' must be declared as 'const' or 'static', not 'var'.", name));
+                        self.add_error(format!("Type Error: Closure '{}' must be declared as 'const' or 'static', not 'var'.", name), stmt.span);
                     }
                 }
 
-                self.define(name, ty, *is_mutable);
+                self.define(name, ty, *is_mutable, stmt.span);
                 Type::Void
             }
-            Statement::Expression(expr) => self.check_expression(expr),
-            Statement::Function {
+            StatementKind::Expression(expr) => self.check_expression(expr),
+            StatementKind::Function {
                 name,
                 params,
                 body,
@@ -338,6 +377,7 @@ impl Analyzer {
                             return_type: Box::new(actual_return_type.clone()),
                         },
                         false,
+                        stmt.span,
                     );
                 }
 
@@ -347,9 +387,9 @@ impl Analyzer {
                 self.enter_scope();
                 for param in params {
                     if let Some(ty) = &param.ty {
-                        self.define(&param.name, ty.clone(), true);
+                        self.define(&param.name, ty.clone(), true, param.span);
                     } else {
-                        self.define(&param.name, Type::Any, true);
+                        self.define(&param.name, Type::Any, true, param.span);
                     }
                 }
 
@@ -361,7 +401,7 @@ impl Analyzer {
                 self.current_return_type = prev_return;
                 Type::Void
             }
-            Statement::If {
+            StatementKind::If {
                 condition,
                 then_branch,
                 else_branch,
@@ -373,14 +413,14 @@ impl Analyzer {
                 }
                 Type::Void
             }
-            Statement::While {
+            StatementKind::While {
                 condition, body, ..
             } => {
                 self.check_expression(condition);
                 self.check_statement(body);
                 Type::Void
             }
-            Statement::For {
+            StatementKind::For {
                 binding,
                 index_binding,
                 iterable,
@@ -394,58 +434,62 @@ impl Analyzer {
                     Type::Channel(inner) => *inner,
                     Type::Any => Type::Any,
                     _ => {
-                        self.errors.push(format!(
-                            "Type Error: Cannot iterate over type {:?}",
-                            iter_ty
-                        ));
+                        self.add_error(
+                            format!("Type Error: Cannot iterate over type {:?}", iter_ty),
+                            stmt.span,
+                        );
                         Type::Any
                     }
                 };
 
                 self.enter_scope();
-                self.define(binding, element_ty, false);
+                self.define(binding, element_ty, false, stmt.span);
                 if let Some(idx_name) = index_binding {
-                    self.define(idx_name, Type::I64, false);
+                    self.define(idx_name, Type::I64, false, stmt.span);
                 }
                 self.check_statement(body);
                 self.exit_scope();
                 Type::Void
             }
-            Statement::Match {
+            StatementKind::Match {
                 condition, arms, ..
             } => {
                 let cond_ty = self.check_expression(condition);
                 for arm in arms {
                     self.enter_scope();
                     for pattern in &arm.patterns {
-                        self.check_pattern(pattern, &cond_ty);
+                        self.check_pattern(pattern, &cond_ty, stmt.span);
                     }
                     self.check_statement(&arm.body);
                     self.exit_scope();
                 }
                 Type::Void
             }
-            Statement::Enum(_) => Type::Void,
-            Statement::Next => Type::Void,
-            Statement::Model(_) => Type::Void,
-            Statement::Role(_) => Type::Void,
-            Statement::Extend {
+            StatementKind::Enum(_) => Type::Void,
+            StatementKind::Next => Type::Void,
+            StatementKind::Model(_) => Type::Void,
+            StatementKind::Role(_) => Type::Void,
+            StatementKind::Extend {
                 target,
                 role,
                 methods,
             } => {
                 // If role is provided, verify it exists and methods match
                 if let Some(role_name) = role {
-                    self.validate_role_impl(target, role_name, methods);
+                    self.validate_role_impl(target, role_name, methods, stmt.span);
                 }
 
                 // Check method bodies
                 for method in methods {
-                    if let Statement::Function {
-                        params,
-                        body,
-                        return_type,
-                        ..
+                    if let Statement {
+                        kind:
+                            StatementKind::Function {
+                                params,
+                                body,
+                                return_type,
+                                ..
+                            },
+                        span: method_span,
                     } = method
                     {
                         let actual_return_type = return_type.clone().unwrap_or(Type::Void);
@@ -453,10 +497,15 @@ impl Analyzer {
                         self.current_return_type = Some(actual_return_type);
 
                         self.enter_scope();
-                        self.define("this", target.clone(), false);
+                        self.define("this", target.clone(), false, *method_span);
 
                         for param in params {
-                            self.define(&param.name, param.ty.clone().unwrap_or(Type::Any), true);
+                            self.define(
+                                &param.name,
+                                param.ty.clone().unwrap_or(Type::Any),
+                                true,
+                                param.span,
+                            );
                         }
 
                         for s in body {
@@ -469,7 +518,7 @@ impl Analyzer {
                 }
                 Type::Void
             }
-            Statement::Block(stmts) => {
+            StatementKind::Block(stmts) => {
                 self.enter_scope();
                 for s in stmts {
                     self.check_statement(s);
@@ -477,11 +526,11 @@ impl Analyzer {
                 self.exit_scope();
                 Type::Void
             }
-            Statement::Print(expr) => {
+            StatementKind::Print(expr) => {
                 self.check_expression(expr);
                 Type::Void
             }
-            Statement::Return(expr_opt) => {
+            StatementKind::Return(expr_opt) => {
                 let actual = if let Some(expr) = expr_opt {
                     self.check_expression(expr)
                 } else {
@@ -490,17 +539,20 @@ impl Analyzer {
 
                 if let Some(expected) = &self.current_return_type {
                     if !self.types_compatible(expected, &actual) {
-                        self.errors.push(format!(
-                            "Type Error: Return type mismatch. Expected {:?}, got {:?}",
-                            expected, actual
-                        ));
+                        self.add_error(
+                            format!(
+                                "Type Error: Return type mismatch. Expected {:?}, got {:?}",
+                                expected, actual
+                            ),
+                            stmt.span,
+                        );
                     }
                 } else if let Some(last_inferred) = self.infer_stack.last_mut() {
                     match last_inferred {
                         Some(prev) => {
                             let prev_cloned = prev.clone();
                             if !self.types_compatible(&prev_cloned, &actual) {
-                                self.errors.push(format!("Type Error: Return type inconsistency. Previously inferred {:?}, but now got {:?}", prev_cloned, actual));
+                                self.add_error(format!("Type Error: Return type inconsistency. Previously inferred {:?}, but now got {:?}", prev_cloned, actual), stmt.span);
                             }
                         }
                         None => {
@@ -510,8 +562,8 @@ impl Analyzer {
                 }
                 Type::Void
             }
-            Statement::Break => Type::Void,
-            Statement::Import { names, source } => {
+            StatementKind::Break => Type::Void,
+            StatementKind::Import { names, source } => {
                 // Handle toolbox imports by registering functions in scope
                 if source.starts_with("tbx::") {
                     let module = source.strip_prefix("tbx::").unwrap();
@@ -539,9 +591,22 @@ impl Analyzer {
                             },
                         };
                         let bind_name = alias.as_ref().unwrap_or(name);
-                        self.define(bind_name, fn_type, false);
+                        self.define(bind_name, fn_type, false, stmt.span);
+                    }
+                } else {
+                    // For local/other modules, we blindly trust the import for now (LSP context)
+                    // In a full compiler, these are resolved by the main driver.
+                    for (name, alias) in names {
+                        let bind_name = alias.as_ref().unwrap_or(name);
+                        if self.lookup(bind_name).is_none() {
+                            self.define(bind_name, Type::Any, false, stmt.span);
+                        }
                     }
                 }
+                Type::Void
+            }
+            StatementKind::Error(msg) => {
+                self.add_error(msg.clone(), stmt.span);
                 Type::Void
             }
             _ => Type::Void,
@@ -549,19 +614,19 @@ impl Analyzer {
     }
 
     fn check_expression(&mut self, expr: &Expr) -> Type {
-        match expr {
-            Expr::Number(_) => Type::I64,
-            Expr::Float(_) => Type::F64,
-            Expr::String(_) => Type::String,
-            Expr::Regex(_) => Type::Regex,
-            Expr::InterpolatedString(parts) => {
+        match &expr.kind {
+            ExprKind::Number(_) => Type::I64,
+            ExprKind::Float(_) => Type::F64,
+            ExprKind::String(_) => Type::String,
+            ExprKind::Regex(_) => Type::Regex,
+            ExprKind::InterpolatedString(parts) => {
                 for part in parts {
                     self.check_expression(part);
                 }
                 Type::String
             }
-            Expr::Bool(_) => Type::Bool,
-            Expr::Closure {
+            ExprKind::Bool(_) => Type::Bool,
+            ExprKind::Closure {
                 params,
                 body,
                 return_type,
@@ -574,7 +639,7 @@ impl Analyzer {
                     } else {
                         Type::Any
                     };
-                    self.define(&param.name, ty.clone(), false);
+                    self.define(&param.name, ty.clone(), false, param.span);
                     param_types.push(ty);
                 }
 
@@ -601,16 +666,15 @@ impl Analyzer {
                     return_type: Box::new(actual_ret),
                 }
             }
-            Expr::Variable(name) => {
+            ExprKind::Variable(name) => {
                 if let Some(sym) = self.lookup(name) {
                     sym.ty.clone()
                 } else {
-                    self.errors
-                        .push(format!("Error: Undefined variable '{}'", name));
+                    self.add_error(format!("Error: Undefined variable '{}'", name), expr.span);
                     Type::Void
                 }
             }
-            Expr::Binary { left, op, right } => {
+            ExprKind::Binary { left, op, right } => {
                 let l_ty = self.check_expression(left);
                 let r_ty = self.check_expression(right);
 
@@ -619,10 +683,10 @@ impl Analyzer {
                         if !self.types_compatible(&l_ty, &r_ty)
                             && !self.types_compatible(&r_ty, &l_ty)
                         {
-                            self.errors.push(format!(
-                                "Type Error: Cannot compare {:?} and {:?}",
-                                l_ty, r_ty
-                            ));
+                            self.add_error(
+                                format!("Type Error: Cannot compare {:?} and {:?}", l_ty, r_ty),
+                                expr.span,
+                            );
                         }
                         return Type::Bool;
                     }
@@ -631,10 +695,10 @@ impl Analyzer {
                     | Token::LessThanEqual
                     | Token::GreaterThanEqual => {
                         if !self.is_numeric(&l_ty) || !self.is_numeric(&r_ty) {
-                            self.errors.push(format!(
+                            self.add_error(format!(
                                 "Type Error: Comparison requires numeric types, got {:?} and {:?}",
                                 l_ty, r_ty
-                            ));
+                            ), expr.span);
                         }
                         return Type::Bool;
                     }
@@ -652,167 +716,207 @@ impl Analyzer {
                 {
                     // Allow String + String, String + Any, or Any + String
                     if l_ty != Type::String && l_ty != Type::Any {
-                        self.errors.push(format!(
-                            "Type Error: Cannot perform binary operation on {:?} and {:?}",
-                            l_ty, r_ty
-                        ));
+                        self.add_error(
+                            format!(
+                                "Type Error: Cannot perform binary operation on {:?} and {:?}",
+                                l_ty, r_ty
+                            ),
+                            expr.span,
+                        );
                     }
                     if r_ty != Type::String && r_ty != Type::Any {
-                        self.errors.push(format!(
-                            "Type Error: Cannot perform binary operation on {:?} and {:?}",
-                            l_ty, r_ty
-                        ));
+                        self.add_error(
+                            format!(
+                                "Type Error: Cannot perform binary operation on {:?} and {:?}",
+                                l_ty, r_ty
+                            ),
+                            expr.span,
+                        );
                     }
                     Type::String
                 } else {
-                    self.errors.push(format!(
-                        "Type Error: Cannot perform binary operation on {:?} and {:?}",
-                        l_ty, r_ty
-                    ));
+                    self.add_error(
+                        format!(
+                            "Type Error: Cannot perform binary operation on {:?} and {:?}",
+                            l_ty, r_ty
+                        ),
+                        expr.span,
+                    );
                     Type::Void
                 }
             }
-            Expr::Assign { name, value } => {
+            ExprKind::Assign { name, value } => {
                 let val_type = self.check_expression(value);
                 let sym_info = self.lookup(name).cloned();
                 if let Some(sym) = sym_info {
                     if !sym.is_mutable {
-                        self.errors.push(format!(
-                            "Error: Cannot reassign immutable variable '{}'",
-                            name
-                        ));
+                        self.add_error(
+                            format!("Error: Cannot reassign immutable variable '{}'", name),
+                            expr.span,
+                        );
                     }
                     if !self.types_compatible(&sym.ty, &val_type) {
-                        self.errors.push(format!(
-                            "Type Error: Cannot assign {:?} to variable '{}' of type {:?}",
-                            val_type, name, sym.ty
-                        ));
+                        self.add_error(
+                            format!(
+                                "Type Error: Cannot assign {:?} to variable '{}' of type {:?}",
+                                val_type, name, sym.ty
+                            ),
+                            expr.span,
+                        );
                     }
                 } else {
-                    self.errors
-                        .push(format!("Error: Undefined variable '{}'", name));
+                    self.add_error(format!("Error: Undefined variable '{}'", name), expr.span);
                 }
                 val_type
             }
-            Expr::Call { name, args } => {
+            ExprKind::Call { name, args } => {
                 let arg_types: Vec<Type> = args.iter().map(|a| self.check_expression(a)).collect();
 
                 // Check if it's an enum variant constructor
-                if let Some(e) = self
+                let enum_info = self
                     .enums
                     .values()
                     .find(|e| e.variants.iter().any(|v| &v.name == name))
-                {
-                    let variant = e.variants.iter().find(|v| &v.name == name).unwrap();
+                    .map(|e| {
+                        let variant = e.variants.iter().find(|v| &v.name == name).unwrap();
+                        (e.name.clone(), variant.clone())
+                    });
+
+                if let Some((enum_name, variant)) = enum_info {
                     if let Some(expected_ty) = &variant.data_type {
                         if args.len() != 1 {
-                            self.errors.push(format!(
-                                "Error: Enum variant '{}' expects 1 argument, got {}",
-                                name,
-                                args.len()
-                            ));
+                            self.add_error(
+                                format!(
+                                    "Error: Enum variant '{}' expects 1 argument, got {}",
+                                    name,
+                                    args.len()
+                                ),
+                                expr.span,
+                            );
                         } else if !self.types_compatible(expected_ty, &arg_types[0]) {
-                            self.errors.push(format!(
-                                "Type Error: Enum variant '{}' expected {:?}, got {:?}",
-                                name, expected_ty, arg_types[0]
-                            ));
+                            self.add_error(
+                                format!(
+                                    "Type Error: Enum variant '{}' expected {:?}, got {:?}",
+                                    name, expected_ty, arg_types[0]
+                                ),
+                                expr.span,
+                            );
                         }
                     } else if !args.is_empty() {
-                        self.errors.push(format!(
-                            "Error: Enum variant '{}' does not take any arguments",
-                            name
-                        ));
+                        self.add_error(
+                            format!("Error: Enum variant '{}' does not take any arguments", name),
+                            expr.span,
+                        );
                     }
-                    return Type::Enum(e.name.clone());
+                    return Type::Enum(enum_name);
                 }
 
                 let sym_info = self.lookup(name).cloned();
 
                 if let Some(sym) = sym_info {
-                    if let Type::Function {
-                        params,
-                        return_type,
-                    } = sym.ty
-                    {
-                        if params.len() != arg_types.len() {
-                            self.errors.push(format!(
-                                "Error: '{}' expects {} arguments, got {}",
-                                name,
-                                params.len(),
-                                arg_types.len()
-                            ));
-                        } else {
-                            for (i, (expected, actual)) in
-                                params.iter().zip(arg_types.iter()).enumerate()
-                            {
-                                if !self.types_compatible(expected, actual) {
-                                    self.errors.push(format!(
-                                        "Type Error: '{}' argument {} expected {:?}, got {:?}",
+                    match sym.ty {
+                        Type::Function {
+                            params,
+                            return_type,
+                        } => {
+                            if params.len() != arg_types.len() {
+                                self.add_error(
+                                    format!(
+                                        "Error: '{}' expects {} arguments, got {}",
                                         name,
-                                        i + 1,
-                                        expected,
-                                        actual
-                                    ));
+                                        params.len(),
+                                        arg_types.len()
+                                    ),
+                                    expr.span,
+                                );
+                            } else {
+                                for (i, (expected, actual)) in
+                                    params.iter().zip(arg_types.iter()).enumerate()
+                                {
+                                    if !self.types_compatible(expected, actual) {
+                                        self.add_error(format!("Type Error: Argument {} mismatch. Expected {:?}, got {:?}", i + 1, expected, actual), expr.span);
+                                    }
                                 }
                             }
+
+                            return *return_type;
                         }
-                        return *return_type;
-                    } else {
-                        self.errors
-                            .push(format!("Error: '{}' is not a function", name));
+                        Type::Any => {
+                            // Support calling Any (e.g. imported functions)
+                            return Type::Any;
+                        }
+                        _ => {
+                            self.add_error(
+                                format!("Error: '{}' is not a function", name),
+                                expr.span,
+                            );
+                            // Return Any to prevent cascading errors
+                            return Type::Any;
+                        }
                     }
                 } else {
-                    self.errors
-                        .push(format!("Error: Undefined function '{}'", name));
+                    self.add_error(format!("Error: Undefined function '{}'", name), expr.span);
                 }
                 Type::Void
             }
-            Expr::EnumVariant {
+            ExprKind::EnumVariant {
                 enum_name,
                 variant_name,
                 args,
             } => {
                 let arg_types: Vec<Type> = args.iter().map(|a| self.check_expression(a)).collect();
 
-                let enum_def = if let Some(e_name) = enum_name {
+                let enum_data = if let Some(e_name) = enum_name {
                     self.enums.get(e_name)
                 } else {
                     self.enums
                         .values()
                         .find(|e| e.variants.iter().any(|v| &v.name == variant_name))
-                };
-
-                if let Some(e) = enum_def {
+                }
+                .map(|e| {
                     let variant = e.variants.iter().find(|v| &v.name == variant_name).unwrap();
+                    (e.name.clone(), variant.clone())
+                });
+
+                if let Some((e_name, variant)) = enum_data {
                     if let Some(expected_ty) = &variant.data_type {
                         if args.len() != 1 {
-                            self.errors.push(format!(
-                                "Error: Enum variant '{}' expects 1 argument, got {}",
-                                variant_name,
-                                args.len()
-                            ));
+                            self.add_error(
+                                format!(
+                                    "Error: Enum variant '{}' expects 1 argument, got {}",
+                                    variant_name,
+                                    args.len()
+                                ),
+                                expr.span,
+                            );
                         } else if !self.types_compatible(expected_ty, &arg_types[0]) {
-                            self.errors.push(format!(
-                                "Type Error: Enum variant '{}' expected {:?}, got {:?}",
-                                variant_name, expected_ty, arg_types[0]
-                            ));
+                            self.add_error(
+                                format!(
+                                    "Type Error: Enum variant '{}' expected {:?}, got {:?}",
+                                    variant_name, expected_ty, arg_types[0]
+                                ),
+                                expr.span,
+                            );
                         }
                     } else if !args.is_empty() {
-                        self.errors.push(format!(
-                            "Error: Enum variant '{}' does not take any arguments",
-                            variant_name
-                        ));
+                        self.add_error(
+                            format!(
+                                "Error: Enum variant '{}' does not take any arguments",
+                                variant_name
+                            ),
+                            expr.span,
+                        );
                     }
-                    Type::Enum(e.name.clone())
+                    Type::Enum(e_name)
                 } else {
-                    self.errors.push(format!(
-                        "Type Error: Unknown enum variant '{}'",
-                        variant_name
-                    ));
+                    self.add_error(
+                        format!("Type Error: Unknown enum variant '{}'", variant_name),
+                        expr.span,
+                    );
                     Type::Any
                 }
             }
-            Expr::Array(elements) => {
+            ExprKind::Array(elements) => {
                 if elements.is_empty() {
                     Type::Array(Box::new(Type::Any))
                 } else {
@@ -820,132 +924,151 @@ impl Analyzer {
                     for el in elements.iter().skip(1) {
                         let ty = self.check_expression(el);
                         if !self.types_compatible(&first_ty, &ty) {
-                            self.errors.push(format!(
+                            self.add_error(format!(
                                 "Type Error: Array contains mixed types. Expected {:?}, got {:?}",
                                 first_ty, ty
-                            ));
+                            ), expr.span);
                         }
                     }
                     Type::Array(Box::new(first_ty))
                 }
             }
-            Expr::Tuple(elements) => {
+            ExprKind::Tuple(elements) => {
                 let types = elements.iter().map(|e| self.check_expression(e)).collect();
                 Type::Tuple(types)
             }
-            Expr::Thread(expr) => {
-                let closure_ty = self.check_expression(expr);
+            ExprKind::Thread(expr_inner) => {
+                let closure_ty = self.check_expression(expr_inner);
                 if let Type::Function { return_type, .. } = closure_ty {
                     Type::Channel(return_type)
                 } else {
-                    self.errors
-                        .push("Type Error: thread() expects a closure".to_string());
+                    self.add_error(
+                        "Type Error: thread() expects a closure".to_string(),
+                        expr.span,
+                    );
                     Type::Void
                 }
             }
-            Expr::Send(chan_expr, val_expr) => {
+            ExprKind::Send(chan_expr, val_expr) => {
                 let chan_ty = self.check_expression(chan_expr);
                 let val_ty = self.check_expression(val_expr);
                 if let Type::Channel(inner) = chan_ty {
                     if !self.types_compatible(&inner, &val_ty) {
-                        self.errors.push(format!(
-                            "Type Error: Cannot send {:?} to channel of type {:?}",
-                            val_ty, *inner
-                        ));
+                        self.add_error(
+                            format!(
+                                "Type Error: Cannot send {:?} to channel of type {:?}",
+                                val_ty, *inner
+                            ),
+                            expr.span,
+                        );
                     }
                 } else {
-                    self.errors.push(format!(
-                        "Type Error: Cannot send to non-channel type {:?}",
-                        chan_ty
-                    ));
+                    self.add_error(
+                        format!("Type Error: Cannot send to non-channel type {:?}", chan_ty),
+                        expr.span,
+                    );
                 }
                 Type::Void
             }
-            Expr::Receive(chan_expr) => {
+            ExprKind::Receive(chan_expr) => {
                 let chan_ty = self.check_expression(chan_expr);
                 if let Type::Channel(inner) = chan_ty {
                     *inner
                 } else {
-                    self.errors.push(format!(
-                        "Type Error: Cannot receive from non-channel type {:?}",
-                        chan_ty
-                    ));
+                    self.add_error(
+                        format!(
+                            "Type Error: Cannot receive from non-channel type {:?}",
+                            chan_ty
+                        ),
+                        expr.span,
+                    );
                     Type::Any
                 }
             }
-            Expr::Channel(inner_ty) => {
+            ExprKind::Channel(inner_ty) => {
                 if inner_ty.is_none() {
-                    self.errors.push(format!(
+                    self.add_error(format!(
                         "Type Error: channel() requires a data type suffix (e.g. channel(): i64)"
-                    ));
+                    ), expr.span);
                 }
                 Type::Channel(Box::new(inner_ty.clone().unwrap_or(Type::Any)))
             }
-            Expr::ReceiveCount(chan_expr, count_expr) => {
+            ExprKind::ReceiveCount(chan_expr, count_expr) => {
                 let chan_ty = self.check_expression(chan_expr);
                 let _count_ty = self.check_expression(count_expr);
                 // TODO: verify count is numeric
                 if let Type::Channel(inner) = chan_ty {
                     Type::Array(inner)
                 } else {
-                    self.errors.push(format!(
-                        "Type Error: Cannot receive from non-channel type {:?}",
-                        chan_ty
-                    ));
+                    self.add_error(
+                        format!(
+                            "Type Error: Cannot receive from non-channel type {:?}",
+                            chan_ty
+                        ),
+                        expr.span,
+                    );
                     Type::Any
                 }
             }
-            Expr::ReceiveMaybe(chan_expr) => {
+            ExprKind::ReceiveMaybe(chan_expr) => {
                 let chan_ty = self.check_expression(chan_expr);
                 if let Type::Channel(_) = chan_ty {
                     Type::Enum("Maybe".to_string())
                 } else {
-                    self.errors.push(format!(
-                        "Type Error: Cannot receive from non-channel type {:?}",
-                        chan_ty
-                    ));
+                    self.add_error(
+                        format!(
+                            "Type Error: Cannot receive from non-channel type {:?}",
+                            chan_ty
+                        ),
+                        expr.span,
+                    );
                     Type::Enum("Maybe".to_string())
                 }
             }
-            Expr::State(initial_expr) => {
+            ExprKind::State(initial_expr) => {
                 let initial_ty = self.check_expression(initial_expr);
                 Type::State(Box::new(initial_ty))
             }
-            Expr::ModelInstance { name, fields } => {
+            ExprKind::ModelInstance { name, fields } => {
                 if let Some(model_def) = self.models.get(name).cloned() {
                     for (f_name, f_val_expr) in fields {
                         if let Some((_, f_ty)) = model_def.fields.iter().find(|(n, _)| n == f_name)
                         {
                             let val_ty = self.check_expression(f_val_expr);
                             if !self.types_compatible(f_ty, &val_ty) {
-                                self.errors.push(format!(
+                                self.add_error(format!(
                                     "Type Error: Field '{}' in model '{}' expected {:?}, got {:?}",
                                     f_name, name, f_ty, val_ty
-                                ));
+                                ), expr.span);
                             }
                         } else {
-                            self.errors.push(format!(
-                                "Type Error: Model '{}' has no field named '{}'",
-                                name, f_name
-                            ));
+                            self.add_error(
+                                format!(
+                                    "Type Error: Model '{}' has no field named '{}'",
+                                    name, f_name
+                                ),
+                                expr.span,
+                            );
                         }
                     }
                     for (f_name, _) in &model_def.fields {
                         if !fields.iter().any(|(n, _)| n == f_name) {
-                            self.errors.push(format!(
-                                "Type Error: Missing field '{}' in instantiation of model '{}'",
-                                f_name, name
-                            ));
+                            self.add_error(
+                                format!(
+                                    "Type Error: Missing field '{}' in instantiation of model '{}'",
+                                    f_name, name
+                                ),
+                                expr.span,
+                            );
                         }
                     }
                     Type::Model(name.clone())
                 } else {
-                    self.errors
-                        .push(format!("Type Error: Undefined model '{}'", name));
+                    self.add_error(format!("Type Error: Undefined model '{}'", name), expr.span);
                     Type::Any
                 }
             }
-            Expr::FieldAccess { object, field } => {
+            ExprKind::FieldAccess { object, field } => {
                 let obj_ty = self.check_expression(object);
                 match obj_ty {
                     Type::Model(name) => {
@@ -955,38 +1078,51 @@ impl Analyzer {
                             {
                                 f_ty.clone()
                             } else {
-                                self.errors.push(format!(
-                                    "Type Error: Model '{}' has no field named '{}'",
-                                    name, field
-                                ));
+                                self.add_error(
+                                    format!(
+                                        "Type Error: Model '{}' has no field named '{}'",
+                                        name, field
+                                    ),
+                                    expr.span,
+                                );
                                 Type::Any
                             }
                         } else {
-                            self.errors
-                                .push(format!("Type Error: Undefined model '{}'", name));
+                            self.add_error(
+                                format!("Type Error: Undefined model '{}'", name),
+                                expr.span,
+                            );
                             Type::Any
                         }
                     }
                     _ => {
-                        self.errors.push(format!(
-                            "Type Error: Cannot access field '{}' on non-model type {:?}",
-                            field, obj_ty
-                        ));
+                        self.add_error(
+                            format!(
+                                "Type Error: Cannot access field '{}' on non-model type {:?}",
+                                field, obj_ty
+                            ),
+                            expr.span,
+                        );
                         Type::Any
                     }
                 }
             }
-            Expr::This => {
+            ExprKind::Error(msg) => {
+                self.add_error(msg.clone(), expr.span);
+                Type::Any
+            }
+            ExprKind::This => {
                 if let Some(sym) = self.lookup("this") {
                     sym.ty.clone()
                 } else {
-                    self.errors.push(
+                    self.add_error(
                         "Type Error: 'this' can only be used inside model methods".to_string(),
+                        expr.span,
                     );
                     Type::Any
                 }
             }
-            Expr::MethodCall(obj_expr, method, args) => {
+            ExprKind::MethodCall(obj_expr, method, args) => {
                 // Check for immutability
                 if matches!(
                     method.as_str(),
@@ -994,10 +1130,10 @@ impl Analyzer {
                     "set" | "remove" |  // map mutating methods (remove is shared with set)
                     "add" // set mutating methods
                 ) {
-                    if let Expr::Variable(name) = &**obj_expr {
+                    if let ExprKind::Variable(name) = &obj_expr.kind {
                         if let Some(sym) = self.lookup(name) {
                             if !sym.is_mutable {
-                                self.errors.push(format!("Type Error: Cannot call mutating method '{}' on immutable variable '{}'", method, name));
+                                self.add_error(format!("Type Error: Cannot call mutating method '{}' on immutable variable '{}'", method, name), expr.span);
                             }
                         }
                     }
@@ -1030,39 +1166,45 @@ impl Analyzer {
                 }) = custom_method_ty
                 {
                     if args.len() != params.len() {
-                        self.errors.push(format!(
-                            "Type Error: Method '{}' expected {} arguments, got {}",
-                            method,
-                            params.len(),
-                            args.len()
-                        ));
+                        self.add_error(
+                            format!(
+                                "Type Error: Method '{}' expected {} arguments, got {}",
+                                method,
+                                params.len(),
+                                args.len()
+                            ),
+                            expr.span,
+                        );
                     }
                     for (p_ty, arg_expr) in params.iter().zip(args) {
                         let arg_ty = self.check_expression(arg_expr);
                         if !self.types_compatible(p_ty, &arg_ty) {
-                            self.errors.push(format!("Type Error: Method '{}' parameter mismatch, expected {:?}, got {:?}", method, p_ty, arg_ty));
+                            self.add_error(format!("Type Error: Method '{}' parameter mismatch, expected {:?}, got {:?}", method, p_ty, arg_ty), expr.span);
                         }
                     }
                     return *return_type;
                 }
                 match obj_ty.clone() {
                     Type::Model(name) => {
-                        self.errors.push(format!(
-                            "Type Error: Method '{}' not found on model '{}'",
-                            method, name
-                        ));
+                        self.add_error(
+                            format!(
+                                "Type Error: Method '{}' not found on model '{}'",
+                                method, name
+                            ),
+                            expr.span,
+                        );
                         Type::Any
                     }
                     Type::Role(role_name) => {
                         if let Some(role_def) = self.roles.get(&role_name) {
                             let mut found_method = None;
                             for m in &role_def.methods {
-                                if let Statement::Function {
+                                if let StatementKind::Function {
                                     name,
                                     params,
                                     return_type,
                                     ..
-                                } = m
+                                } = &m.kind
                                 {
                                     if name == method {
                                         let mut param_types = Vec::new();
@@ -1078,25 +1220,30 @@ impl Analyzer {
 
                             if let Some((params, ret_ty)) = found_method {
                                 if args.len() != params.len() {
-                                    self.errors.push(format!("Type Error: Role method '{}' expected {} arguments, got {}", method, params.len(), args.len()));
+                                    self.add_error(format!("Type Error: Role method '{}' expected {} arguments, got {}", method, params.len(), args.len()), expr.span);
                                 }
                                 for (p_ty, arg_expr) in params.iter().zip(args) {
                                     let arg_ty = self.check_expression(arg_expr);
                                     if !self.types_compatible(p_ty, &arg_ty) {
-                                        self.errors.push(format!("Type Error: Role method '{}' parameter mismatch, expected {:?}, got {:?}", method, p_ty, arg_ty));
+                                        self.add_error(format!("Type Error: Role method '{}' parameter mismatch, expected {:?}, got {:?}", method, p_ty, arg_ty), expr.span);
                                     }
                                 }
                                 return ret_ty;
                             } else {
-                                self.errors.push(format!(
-                                    "Type Error: Method '{}' not found in role '{}'",
-                                    method, role_name
-                                ));
+                                self.add_error(
+                                    format!(
+                                        "Type Error: Method '{}' not found in role '{}'",
+                                        method, role_name
+                                    ),
+                                    expr.span,
+                                );
                                 Type::Any
                             }
                         } else {
-                            self.errors
-                                .push(format!("Type Error: Unknown role '{}'", role_name));
+                            self.add_error(
+                                format!("Type Error: Unknown role '{}'", role_name),
+                                expr.span,
+                            );
                             Type::Any
                         }
                     }
@@ -1105,264 +1252,311 @@ impl Analyzer {
                         match method.as_str() {
                             "size" => {
                                 if !args.is_empty() {
-                                    self.errors
-                                        .push("Type Error: .size() takes no arguments".to_string());
+                                    self.add_error(
+                                        "Type Error: .size() takes no arguments".to_string(),
+                                        expr.span,
+                                    );
                                 }
                                 Type::I64
                             }
                             "push" => {
                                 if args.is_empty() {
-                                    self.errors.push(
+                                    self.add_error(
                                         "Type Error: .push() requires at least 1 argument"
                                             .to_string(),
+                                        expr.span,
                                     );
                                 } else {
                                     let arg_ty = self.check_expression(&args[0]);
                                     if !self.types_compatible(&inner, &arg_ty) {
-                                        self.errors.push(format!(
-                                            "Type Error: Cannot push {:?} to array of {:?}",
-                                            arg_ty, *inner
-                                        ));
+                                        self.add_error(
+                                            format!(
+                                                "Type Error: Cannot push {:?} to array of {:?}",
+                                                arg_ty, *inner
+                                            ),
+                                            expr.span,
+                                        );
                                     }
                                     if args.len() > 1 {
                                         let idx_ty = self.check_expression(&args[1]);
                                         if !self.types_compatible(&Type::I64, &idx_ty) {
-                                            self.errors.push(format!(
+                                            self.add_error(format!(
                                                 "Type Error: push() index must be I64, got {:?}",
                                                 idx_ty
-                                            ));
+                                            ), expr.span);
                                         }
                                     }
                                 }
-                                Type::I64 // Returns new size
+                                Type::I64
                             }
                             "pull" => {
                                 if args.len() > 1 {
-                                    self.errors.push(
+                                    self.add_error(
                                         "Type Error: .pull() takes at most 1 argument".to_string(),
+                                        expr.span,
                                     );
                                 }
                                 if !args.is_empty() {
                                     let idx_ty = self.check_expression(&args[0]);
                                     if !self.types_compatible(&Type::I64, &idx_ty) {
-                                        self.errors.push(format!(
-                                            "Type Error: pull() index must be I64, got {:?}",
-                                            idx_ty
-                                        ));
+                                        self.add_error(
+                                            format!(
+                                                "Type Error: pull() index must be I64, got {:?}",
+                                                idx_ty
+                                            ),
+                                            expr.span,
+                                        );
                                     }
                                 }
                                 *inner
                             }
                             "splice" => {
                                 if args.len() < 1 {
-                                    self.errors.push("Type Error: .splice() requires an array as the first argument".to_string());
+                                    self.add_error("Type Error: .splice() requires an array as the first argument".to_string(), expr.span);
                                 } else {
                                     let items_ty = self.check_expression(&args[0]);
                                     if !self
                                         .types_compatible(&Type::Array(inner.clone()), &items_ty)
                                     {
-                                        self.errors.push(format!("Type Error: .splice() first argument must be array of {:?}, got {:?}", *inner, items_ty));
+                                        self.add_error(format!("Type Error: .splice() first argument must be array of {:?}, got {:?}", *inner, items_ty), expr.span);
                                     }
                                     if args.len() > 1 {
                                         let idx_ty = self.check_expression(&args[1]);
                                         if !self.types_compatible(&Type::I64, &idx_ty) {
-                                            self.errors.push(format!(
+                                            self.add_error(format!(
                                                 "Type Error: splice() index must be I64, got {:?}",
                                                 idx_ty
-                                            ));
+                                            ), expr.span);
                                         }
                                     }
                                 }
-                                Type::I64 // Returns new size
+                                Type::I64
                             }
                             "slice" | "copy" => {
-                                // args: start, optional end
                                 for arg in args {
                                     let arg_ty = self.check_expression(arg);
                                     if !self.types_compatible(&Type::I64, &arg_ty) {
-                                        self.errors.push(format!(
-                                            "Type Error: {} index must be I64, got {:?}",
-                                            method, arg_ty
-                                        ));
+                                        self.add_error(
+                                            format!(
+                                                "Type Error: {} index must be I64, got {:?}",
+                                                method, arg_ty
+                                            ),
+                                            expr.span,
+                                        );
                                     }
                                 }
                                 Type::Array(inner)
                             }
                             "each" => {
                                 if args.len() != 1 {
-                                    self.errors
-                                        .push("Type Error: .each() takes 1 argument".to_string());
+                                    self.add_error(
+                                        "Type Error: .each() takes 1 argument".to_string(),
+                                        expr.span,
+                                    );
                                 } else {
                                     let closure_ty = self.check_expression(&args[0]);
                                     if let Type::Function { params, .. } = closure_ty {
                                         if params.is_empty()
                                             || !self.types_compatible(&params[0], &inner)
                                         {
-                                            self.errors.push(format!("Type Error: .each() closure must accept item of type {:?}", *inner));
+                                            self.add_error(format!("Type Error: .each() closure must accept item of type {:?}", *inner), expr.span);
                                         }
                                     } else {
-                                        self.errors.push(
+                                        self.add_error(
                                             "Type Error: .each() expects a closure".to_string(),
+                                            expr.span,
                                         );
                                     }
                                 }
                                 Type::Void
                             }
                             _ => {
-                                self.errors
-                                    .push(format!("Type Error: Unknown array method '{}'", method));
+                                self.add_error(
+                                    format!("Type Error: Unknown array method '{}'", method),
+                                    expr.span,
+                                );
                                 Type::Any
                             }
                         }
                     }
 
                     // String methods
-                    Type::String => match method.as_str() {
-                        "length" => {
-                            if !args.is_empty() {
-                                self.errors
-                                    .push("Type Error: .length() takes no arguments".to_string());
+                    Type::String => {
+                        match method.as_str() {
+                            "length" => {
+                                if !args.is_empty() {
+                                    self.add_error(
+                                        "Type Error: .length() takes no arguments".to_string(),
+                                        expr.span,
+                                    );
+                                }
+                                Type::I64
                             }
-                            Type::I64
-                        }
-                        "index" => {
-                            if args.is_empty() {
-                                self.errors.push(
-                                    "Type Error: .index() requires at least 1 argument".to_string(),
-                                );
-                            }
-                            for (i, arg) in args.iter().enumerate() {
-                                let arg_ty = self.check_expression(arg);
-                                if i == 0 {
-                                    if !self.types_compatible(&Type::String, &arg_ty) {
-                                        self.errors.push(format!(
+                            "index" => {
+                                if args.is_empty() {
+                                    self.add_error(
+                                        "Type Error: .index() requires at least 1 argument"
+                                            .to_string(),
+                                        expr.span,
+                                    );
+                                }
+                                for (i, arg) in args.iter().enumerate() {
+                                    let arg_ty = self.check_expression(arg);
+                                    if i == 0 {
+                                        if !self.types_compatible(&Type::String, &arg_ty) {
+                                            self.add_error(format!(
                                             "Type Error: index() pattern must be string, got {:?}",
                                             arg_ty
-                                        ));
-                                    }
-                                } else if !self.types_compatible(&Type::I64, &arg_ty) {
-                                    self.errors.push(format!(
+                                        ), expr.span);
+                                        }
+                                    } else if !self.types_compatible(&Type::I64, &arg_ty) {
+                                        self.add_error(format!(
                                         "Type Error: index() start index must be I64, got {:?}",
                                         arg_ty
-                                    ));
+                                    ), expr.span);
+                                    }
                                 }
+                                Type::I64
                             }
-                            Type::I64
-                        }
-                        "includes" | "starts" | "ends" => {
-                            if args.len() != 1 {
-                                self.errors
-                                    .push(format!("Type Error: .{}() takes 1 argument", method));
-                            } else {
-                                let arg_ty = self.check_expression(&args[0]);
-                                if !self.types_compatible(&Type::String, &arg_ty) {
-                                    self.errors.push(format!(
-                                        "Type Error: .{}() argument must be string",
-                                        method
-                                    ));
+                            "includes" | "starts" | "ends" => {
+                                if args.len() != 1 {
+                                    self.add_error(
+                                        format!("Type Error: .{}() takes 1 argument", method),
+                                        expr.span,
+                                    );
+                                } else {
+                                    let arg_ty = self.check_expression(&args[0]);
+                                    if !self.types_compatible(&Type::String, &arg_ty) {
+                                        self.add_error(
+                                            format!(
+                                                "Type Error: .{}() argument must be string",
+                                                method
+                                            ),
+                                            expr.span,
+                                        );
+                                    }
                                 }
+                                Type::Bool
                             }
-                            Type::Bool
-                        }
-                        "upper" | "lower" | "trim" => {
-                            if !args.is_empty() {
-                                self.errors
-                                    .push(format!("Type Error: .{}() takes no arguments", method));
-                            }
-                            Type::String
-                        }
-                        "replace" => {
-                            if args.len() != 2 {
-                                self.errors
-                                    .push("Type Error: .replace() takes 2 arguments".to_string());
-                            }
-                            if args.len() >= 1 {
-                                let search_ty = self.check_expression(&args[0]);
-                                if !matches!(search_ty, Type::String | Type::Regex) {
-                                    self.errors.push(format!("Type Error: replace() search pattern must be String or Regex, got {:?}", search_ty));
+                            "upper" | "lower" | "trim" => {
+                                if !args.is_empty() {
+                                    self.add_error(
+                                        format!("Type Error: .{}() takes no arguments", method),
+                                        expr.span,
+                                    );
                                 }
+                                Type::String
                             }
-                            if args.len() >= 2 {
-                                let repl_ty = self.check_expression(&args[1]);
-                                if !self.types_compatible(&Type::String, &repl_ty) {
-                                    self.errors.push(format!("Type Error: replace() replacement must be String, got {:?}", repl_ty));
+                            "replace" => {
+                                if args.len() != 2 {
+                                    self.add_error(
+                                        "Type Error: .replace() takes 2 arguments".to_string(),
+                                        expr.span,
+                                    );
                                 }
-                            }
-                            Type::String
-                        }
-                        "repeat" => {
-                            if args.len() != 1 {
-                                self.errors
-                                    .push("Type Error: .repeat() takes 1 argument".to_string());
-                            } else {
-                                let arg_ty = self.check_expression(&args[0]);
-                                if !self.types_compatible(&Type::I64, &arg_ty) {
-                                    self.errors.push(format!(
-                                        "Type Error: repeat() count must be I64, got {:?}",
-                                        arg_ty
-                                    ));
+                                if args.len() >= 1 {
+                                    let search_ty = self.check_expression(&args[0]);
+                                    if !matches!(search_ty, Type::String | Type::Regex) {
+                                        self.add_error(format!("Type Error: replace() search pattern must be String or Regex, got {:?}", search_ty), expr.span);
+                                    }
                                 }
-                            }
-                            Type::String
-                        }
-                        "copy" | "slice" => {
-                            for arg in args {
-                                let arg_ty = self.check_expression(arg);
-                                if !self.types_compatible(&Type::I64, &arg_ty) {
-                                    self.errors.push(format!(
-                                        "Type Error: {} index must be I64, got {:?}",
-                                        method, arg_ty
-                                    ));
+                                if args.len() >= 2 {
+                                    let repl_ty = self.check_expression(&args[1]);
+                                    if !self.types_compatible(&Type::String, &repl_ty) {
+                                        self.add_error(format!("Type Error: replace() replacement must be String, got {:?}", repl_ty), expr.span);
+                                    }
                                 }
+                                Type::String
                             }
-                            Type::String
-                        }
-                        "split" => {
-                            if args.len() > 1 {
-                                self.errors.push(
-                                    "Type Error: .split() takes at most 1 argument".to_string(),
-                                );
+                            "repeat" => {
+                                if args.len() != 1 {
+                                    self.add_error(
+                                        "Type Error: .repeat() takes 1 argument".to_string(),
+                                        expr.span,
+                                    );
+                                } else {
+                                    let arg_ty = self.check_expression(&args[0]);
+                                    if !self.types_compatible(&Type::I64, &arg_ty) {
+                                        self.add_error(
+                                            format!(
+                                                "Type Error: repeat() count must be I64, got {:?}",
+                                                arg_ty
+                                            ),
+                                            expr.span,
+                                        );
+                                    }
+                                }
+                                Type::String
                             }
-                            if !args.is_empty() {
-                                let arg_ty = self.check_expression(&args[0]);
-                                if !self.types_compatible(&Type::String, &arg_ty) {
-                                    self.errors.push(format!(
+                            "copy" | "slice" => {
+                                for arg in args {
+                                    let arg_ty = self.check_expression(arg);
+                                    if !self.types_compatible(&Type::I64, &arg_ty) {
+                                        self.add_error(
+                                            format!(
+                                                "Type Error: {} index must be I64, got {:?}",
+                                                method, arg_ty
+                                            ),
+                                            expr.span,
+                                        );
+                                    }
+                                }
+                                Type::String
+                            }
+                            "split" => {
+                                if args.len() > 1 {
+                                    self.add_error(
+                                        "Type Error: .split() takes at most 1 argument".to_string(),
+                                        expr.span,
+                                    );
+                                }
+                                if !args.is_empty() {
+                                    let arg_ty = self.check_expression(&args[0]);
+                                    if !self.types_compatible(&Type::String, &arg_ty) {
+                                        self.add_error(format!(
                                         "Type Error: split() delimiter must be string, got {:?}",
                                         arg_ty
-                                    ));
+                                    ), expr.span);
+                                    }
                                 }
+                                Type::Array(Box::new(Type::String))
                             }
-                            Type::Array(Box::new(Type::String))
+                            _ => {
+                                self.add_error(
+                                    format!("Type Error: Unknown string method '{}'", method),
+                                    expr.span,
+                                );
+                                Type::Any
+                            }
                         }
-                        _ => {
-                            self.errors
-                                .push(format!("Type Error: Unknown string method '{}'", method));
-                            Type::Any
-                        }
-                    },
+                    }
 
                     // Tuple methods
                     Type::Tuple(_) => {
                         match method.as_str() {
                             "size" => {
                                 if !args.is_empty() {
-                                    self.errors
-                                        .push("Type Error: .size() takes no arguments".to_string());
+                                    self.add_error(
+                                        "Type Error: .size() takes no arguments".to_string(),
+                                        expr.span,
+                                    );
                                 }
                                 Type::I64
                             }
                             "toArray" => {
                                 if !args.is_empty() {
-                                    self.errors.push(
+                                    self.add_error(
                                         "Type Error: .toArray() takes no arguments".to_string(),
+                                        expr.span,
                                     );
                                 }
                                 Type::Array(Box::new(Type::Any))
                             }
                             "includes" => {
                                 if args.len() != 1 {
-                                    self.errors.push(
+                                    self.add_error(
                                         "Type Error: .includes() takes 1 argument".to_string(),
+                                        expr.span,
                                     );
                                 } else {
                                     self.check_expression(&args[0]);
@@ -1371,8 +1565,10 @@ impl Analyzer {
                             }
                             "index" => {
                                 if args.len() != 1 {
-                                    self.errors
-                                        .push("Type Error: .index() takes 1 argument".to_string());
+                                    self.add_error(
+                                        "Type Error: .index() takes 1 argument".to_string(),
+                                        expr.span,
+                                    );
                                 } else {
                                     self.check_expression(&args[0]);
                                 }
@@ -1380,121 +1576,133 @@ impl Analyzer {
                             }
                             "copy" => {
                                 if args.len() > 2 {
-                                    self.errors.push(
+                                    self.add_error(
                                         "Type Error: .copy() takes at most 2 arguments".to_string(),
+                                        expr.span,
                                     );
                                 }
                                 for arg in args {
                                     let arg_ty = self.check_expression(arg);
                                     if !self.types_compatible(&Type::I64, &arg_ty) {
-                                        self.errors.push(format!(
+                                        self.add_error(format!(
                                             "Type Error: .copy() arguments must be I64, got {:?}",
                                             arg_ty
-                                        ));
+                                        ), expr.span);
                                     }
                                 }
-                                Type::Any // Hard to determine tuple size/types at compile time without constant folding
+                                Type::Any
                             }
                             "join" => {
                                 if args.len() != 1 {
-                                    self.errors
-                                        .push("Type Error: .join() takes 1 argument".to_string());
+                                    self.add_error(
+                                        "Type Error: .join() takes 1 argument".to_string(),
+                                        expr.span,
+                                    );
                                 } else {
                                     let arg_ty = self.check_expression(&args[0]);
                                     if !self.types_compatible(&Type::String, &arg_ty) {
-                                        self.errors.push(format!(
+                                        self.add_error(format!(
                                             "Type Error: .join() argument must be string, got {:?}",
                                             arg_ty
-                                        ));
+                                        ), expr.span);
                                     }
                                 }
                                 Type::String
                             }
                             _ => {
-                                self.errors
-                                    .push(format!("Type Error: Unknown tuple method '{}'", method));
+                                self.add_error(
+                                    format!("Type Error: Unknown tuple method '{}'", method),
+                                    expr.span,
+                                );
                                 Type::Any
                             }
                         }
                     }
 
                     // State methods
-                    Type::State(inner) => {
-                        match method.as_str() {
-                            "read" => {
-                                if !args.is_empty() {
-                                    self.errors
-                                        .push("Type Error: .read() takes no arguments".to_string());
-                                }
-                                *inner
+                    Type::State(inner) => match method.as_str() {
+                        "read" => {
+                            if !args.is_empty() {
+                                self.add_error(
+                                    "Type Error: .read() takes no arguments".to_string(),
+                                    expr.span,
+                                );
                             }
-                            "write" => {
-                                if args.len() != 1 {
-                                    self.errors
-                                        .push("Type Error: .write() takes 1 argument".to_string());
-                                } else {
-                                    // Note: args were already checked at the top of this match
-                                    // Type compatibility check for write value
-                                    let arg_ty = self.check_expression(&args[0]);
-                                    if !self.types_compatible(&inner, &arg_ty) {
-                                        self.errors.push(format!(
+                            *inner
+                        }
+                        "write" => {
+                            if args.len() != 1 {
+                                self.add_error(
+                                    "Type Error: .write() takes 1 argument".to_string(),
+                                    expr.span,
+                                );
+                            } else {
+                                let arg_ty = self.check_expression(&args[0]);
+                                if !self.types_compatible(&inner, &arg_ty) {
+                                    self.add_error(
+                                        format!(
                                             "Type Error: Cannot write {:?} to state of type {:?}",
                                             arg_ty, *inner
-                                        ));
-                                    }
+                                        ),
+                                        expr.span,
+                                    );
                                 }
-                                Type::Void
                             }
-                            "update" => {
-                                if args.len() != 1 {
-                                    self.errors
-                                        .push("Type Error: .update() takes 1 argument".to_string());
-                                } else {
-                                    // Type check: closure should be |T| -> T
-                                    let closure_ty = self.check_expression(&args[0]);
-                                    if let Type::Function {
-                                        params,
-                                        return_type,
-                                    } = closure_ty
-                                    {
-                                        if params.len() != 1
-                                            || !self.types_compatible(&params[0], &inner)
-                                            || !self.types_compatible(&inner, &return_type)
-                                        {
-                                            self.errors.push(format!("Type Error: .update() expects closure |{:?}| -> {:?}", *inner, *inner));
-                                        }
-                                    } else {
-                                        self.errors.push(
-                                            "Type Error: .update() expects a closure".to_string(),
-                                        );
-                                    }
-                                }
-                                Type::Void
-                            }
-                            _ => {
-                                self.errors.push(format!(
-                                    "Type Error: Unknown method '{}' for State type",
-                                    method
-                                ));
-                                Type::Any
-                            }
+                            Type::Void
                         }
-                    }
+                        "update" => {
+                            if args.len() != 1 {
+                                self.add_error(
+                                    "Type Error: .update() takes 1 argument".to_string(),
+                                    expr.span,
+                                );
+                            } else {
+                                let closure_ty = self.check_expression(&args[0]);
+                                if let Type::Function {
+                                    params,
+                                    return_type,
+                                } = closure_ty
+                                {
+                                    if params.len() != 1
+                                        || !self.types_compatible(&params[0], &inner)
+                                        || !self.types_compatible(&inner, &return_type)
+                                    {
+                                        self.add_error(format!("Type Error: .update() expects closure |{:?}| -> {:?}", *inner, *inner), expr.span);
+                                    }
+                                } else {
+                                    self.add_error(
+                                        "Type Error: .update() expects a closure".to_string(),
+                                        expr.span,
+                                    );
+                                }
+                            }
+                            Type::Void
+                        }
+                        _ => {
+                            self.add_error(
+                                format!("Type Error: Unknown method '{}' for State type", method),
+                                expr.span,
+                            );
+                            Type::Any
+                        }
+                    },
 
                     // Channel methods
                     Type::Channel(_) => match method.as_str() {
                         "close" => {
                             if !args.is_empty() {
-                                self.errors
-                                    .push("Type Error: .close() takes no arguments".to_string());
+                                self.add_error(
+                                    "Type Error: .close() takes no arguments".to_string(),
+                                    expr.span,
+                                );
                             }
                             Type::Void
                         }
                         _ => {
-                            self.errors.push(format!(
-                                "Type Error: Unknown method '{}' for Channel type",
-                                method
-                            ));
+                            self.add_error(
+                                format!("Type Error: Unknown method '{}' for Channel type", method),
+                                expr.span,
+                            );
                             Type::Any
                         }
                     },
@@ -1504,162 +1712,178 @@ impl Analyzer {
                         match method.as_str() {
                             "size" => {
                                 if !args.is_empty() {
-                                    self.errors
-                                        .push("Type Error: .size() takes no arguments".to_string());
+                                    self.add_error(
+                                        "Type Error: .size() takes no arguments".to_string(),
+                                        expr.span,
+                                    );
                                 }
                                 Type::I64
                             }
                             "has" => {
                                 if args.len() != 1 {
-                                    self.errors
-                                        .push("Type Error: .has() takes 1 argument".to_string());
+                                    self.add_error(
+                                        "Type Error: .has() takes 1 argument".to_string(),
+                                        expr.span,
+                                    );
                                 } else {
                                     let arg_ty = self.check_expression(&args[0]);
                                     if !self.types_compatible(&key_type, &arg_ty) {
-                                        self.errors.push(format!(
+                                        self.add_error(format!(
                                             "Type Error: .has() expects key type {:?}, got {:?}",
                                             *key_type, arg_ty
-                                        ));
+                                        ), expr.span);
                                     }
                                 }
                                 Type::Bool
                             }
                             "get" => {
                                 if args.len() != 1 {
-                                    self.errors
-                                        .push("Type Error: .get() takes 1 argument".to_string());
+                                    self.add_error(
+                                        "Type Error: .get() takes 1 argument".to_string(),
+                                        expr.span,
+                                    );
                                 } else {
                                     let arg_ty = self.check_expression(&args[0]);
                                     if !self.types_compatible(&key_type, &arg_ty) {
-                                        self.errors.push(format!(
+                                        self.add_error(format!(
                                             "Type Error: .get() expects key type {:?}, got {:?}",
                                             *key_type, arg_ty
-                                        ));
+                                        ), expr.span);
                                     }
                                 }
                                 *value_type.clone()
                             }
                             "set" => {
                                 if args.len() != 2 {
-                                    self.errors
-                                        .push("Type Error: .set() takes 2 arguments".to_string());
+                                    self.add_error(
+                                        "Type Error: .set() takes 2 arguments".to_string(),
+                                        expr.span,
+                                    );
                                 } else {
                                     let key_ty = self.check_expression(&args[0]);
                                     let val_ty = self.check_expression(&args[1]);
                                     if !self.types_compatible(&key_type, &key_ty) {
-                                        self.errors.push(format!(
+                                        self.add_error(format!(
                                             "Type Error: .set() expects key type {:?}, got {:?}",
                                             *key_type, key_ty
-                                        ));
+                                        ), expr.span);
                                     }
                                     if !self.types_compatible(&value_type, &val_ty) {
-                                        self.errors.push(format!(
+                                        self.add_error(format!(
                                             "Type Error: .set() expects value type {:?}, got {:?}",
                                             *value_type, val_ty
-                                        ));
+                                        ), expr.span);
                                     }
                                 }
-                                obj_ty.clone() // Returns map for chaining
+                                obj_ty.clone()
                             }
                             "remove" => {
                                 if args.len() != 1 {
-                                    self.errors
-                                        .push("Type Error: .remove() takes 1 argument".to_string());
+                                    self.add_error(
+                                        "Type Error: .remove() takes 1 argument".to_string(),
+                                        expr.span,
+                                    );
                                 } else {
                                     let arg_ty = self.check_expression(&args[0]);
                                     if !self.types_compatible(&key_type, &arg_ty) {
-                                        self.errors.push(format!(
+                                        self.add_error(format!(
                                             "Type Error: .remove() expects key type {:?}, got {:?}",
                                             *key_type, arg_ty
-                                        ));
+                                        ), expr.span);
                                     }
                                 }
                                 *value_type.clone()
                             }
                             _ => {
-                                self.errors.push(format!(
-                                    "Type Error: Unknown method '{}' for Map type",
-                                    method
-                                ));
+                                self.add_error(
+                                    format!("Type Error: Unknown method '{}' for Map type", method),
+                                    expr.span,
+                                );
                                 Type::Any
                             }
                         }
                     }
 
                     // Set methods
-                    Type::Set(element_type) => {
-                        match method.as_str() {
-                            "size" => {
-                                if !args.is_empty() {
-                                    self.errors
-                                        .push("Type Error: .size() takes no arguments".to_string());
-                                }
-                                Type::I64
+                    Type::Set(element_type) => match method.as_str() {
+                        "size" => {
+                            if !args.is_empty() {
+                                self.add_error(
+                                    "Type Error: .size() takes no arguments".to_string(),
+                                    expr.span,
+                                );
                             }
-                            "has" => {
-                                if args.len() != 1 {
-                                    self.errors
-                                        .push("Type Error: .has() takes 1 argument".to_string());
-                                } else {
-                                    let arg_ty = self.check_expression(&args[0]);
-                                    if !self.types_compatible(&element_type, &arg_ty) {
-                                        self.errors.push(format!("Type Error: .has() expects element type {:?}, got {:?}", *element_type, arg_ty));
-                                    }
-                                }
-                                Type::Bool
-                            }
-                            "add" => {
-                                if args.len() != 1 {
-                                    self.errors
-                                        .push("Type Error: .add() takes 1 argument".to_string());
-                                } else {
-                                    let arg_ty = self.check_expression(&args[0]);
-                                    if !self.types_compatible(&element_type, &arg_ty) {
-                                        self.errors.push(format!("Type Error: .add() expects element type {:?}, got {:?}", *element_type, arg_ty));
-                                    }
-                                }
-                                obj_ty.clone() // Returns set for chaining
-                            }
-                            "remove" => {
-                                if args.len() != 1 {
-                                    self.errors
-                                        .push("Type Error: .remove() takes 1 argument".to_string());
-                                } else {
-                                    let arg_ty = self.check_expression(&args[0]);
-                                    if !self.types_compatible(&element_type, &arg_ty) {
-                                        self.errors.push(format!("Type Error: .remove() expects element type {:?}, got {:?}", *element_type, arg_ty));
-                                    }
-                                }
-                                Type::Bool // Returns whether element was present
-                            }
-                            _ => {
-                                self.errors.push(format!(
-                                    "Type Error: Unknown method '{}' for Set type",
-                                    method
-                                ));
-                                Type::Any
-                            }
+                            Type::I64
                         }
-                    }
+                        "has" => {
+                            if args.len() != 1 {
+                                self.add_error(
+                                    "Type Error: .has() takes 1 argument".to_string(),
+                                    expr.span,
+                                );
+                            } else {
+                                let arg_ty = self.check_expression(&args[0]);
+                                if !self.types_compatible(&element_type, &arg_ty) {
+                                    self.add_error(format!("Type Error: .has() expects element type {:?}, got {:?}", *element_type, arg_ty), expr.span);
+                                }
+                            }
+                            Type::Bool
+                        }
+                        "add" => {
+                            if args.len() != 1 {
+                                self.add_error(
+                                    "Type Error: .add() takes 1 argument".to_string(),
+                                    expr.span,
+                                );
+                            } else {
+                                let arg_ty = self.check_expression(&args[0]);
+                                if !self.types_compatible(&element_type, &arg_ty) {
+                                    self.add_error(format!("Type Error: .add() expects element type {:?}, got {:?}", *element_type, arg_ty), expr.span);
+                                }
+                            }
+                            obj_ty.clone()
+                        }
+                        "remove" => {
+                            if args.len() != 1 {
+                                self.add_error(
+                                    "Type Error: .remove() takes 1 argument".to_string(),
+                                    expr.span,
+                                );
+                            } else {
+                                let arg_ty = self.check_expression(&args[0]);
+                                if !self.types_compatible(&element_type, &arg_ty) {
+                                    self.add_error(format!("Type Error: .remove() expects element type {:?}, got {:?}", *element_type, arg_ty), expr.span);
+                                }
+                            }
+                            Type::Bool
+                        }
+                        _ => {
+                            self.add_error(
+                                format!("Type Error: Unknown method '{}' for Set type", method),
+                                expr.span,
+                            );
+                            Type::Any
+                        }
+                    },
 
                     _ => {
-                        self.errors.push(format!(
-                            "Type Error: Methods not supported for type {:?}",
-                            obj_ty
-                        ));
+                        self.add_error(
+                            format!("Type Error: Methods not supported for type {:?}", obj_ty),
+                            expr.span,
+                        );
                         Type::Any
                     }
                 }
             }
-            Expr::Index(obj, index) => {
+            ExprKind::Index(obj, index) => {
                 let obj_ty = self.check_expression(obj);
                 let index_ty = self.check_expression(index);
 
                 if !self.types_compatible(&Type::I64, &index_ty) {
-                    self.errors.push(format!(
-                        "Type Error: Array index must be I64, got {:?}",
-                        index_ty
-                    ));
+                    self.add_error(
+                        format!("Type Error: Array index must be I64, got {:?}", index_ty),
+                        expr.span,
+                    );
                 }
 
                 match obj_ty {
@@ -1667,42 +1891,48 @@ impl Analyzer {
                     Type::String => Type::String,
                     Type::Any => Type::Any,
                     _ => {
-                        self.errors.push(format!(
-                            "Type Error: Type {:?} does not support indexing",
-                            obj_ty
-                        ));
+                        self.add_error(
+                            format!("Type Error: Type {:?} does not support indexing", obj_ty),
+                            expr.span,
+                        );
                         Type::Any
                     }
                 }
             }
-            Expr::Unary { op, right } => {
+            ExprKind::Unary { op, right } => {
                 let right_ty = self.check_expression(right);
                 match op {
                     Token::Minus => {
                         if !self.is_numeric(&right_ty) {
-                            self.errors
-                                .push(format!("Type Error: Cannot negate type {:?}", right_ty));
+                            self.add_error(
+                                format!("Type Error: Cannot negate type {:?}", right_ty),
+                                expr.span,
+                            );
                         }
                         right_ty
                     }
                     Token::Bang => {
                         if !self.types_compatible(&Type::Bool, &right_ty) {
-                            self.errors
-                                .push(format!("Type Error: Cannot apply ! to type {:?}", right_ty));
+                            self.add_error(
+                                format!("Type Error: Cannot apply ! to type {:?}", right_ty),
+                                expr.span,
+                            );
                         }
                         Type::Bool
                     }
                     _ => {
-                        self.errors
-                            .push(format!("Type Error: Unknown unary operator {:?}", op));
+                        self.add_error(
+                            format!("Type Error: Unknown unary operator {:?}", op),
+                            expr.span,
+                        );
                         Type::Any
                     }
                 }
             }
-            Expr::Map(key_type, value_type) => {
+            ExprKind::Map(key_type, value_type) => {
                 Type::Map(Box::new(key_type.clone()), Box::new(value_type.clone()))
             }
-            Expr::Set(element_type) => Type::Set(Box::new(element_type.clone())),
+            ExprKind::Set(element_type) => Type::Set(Box::new(element_type.clone())),
         }
     }
 
@@ -1724,25 +1954,34 @@ impl Analyzer {
         )
     }
 
-    fn validate_role_impl(&mut self, target: &Type, role_name: &str, methods: &[Statement]) {
+    fn validate_role_impl(
+        &mut self,
+        target: &Type,
+        role_name: &str,
+        methods: &[Statement],
+        span: Span,
+    ) {
         let role_def = match self.roles.get(role_name).cloned() {
             Some(def) => def,
             None => {
-                self.errors.push(format!(
-                    "Type Error: Cannot use unknown role '{}' in extend",
-                    role_name
-                ));
+                self.add_error(
+                    format!(
+                        "Type Error: Cannot use unknown role '{}' in extend",
+                        role_name
+                    ),
+                    span,
+                );
                 return;
             }
         };
 
         for rm in &role_def.methods {
-            let (rm_name, rm_params, rm_ret) = if let Statement::Function {
+            let (rm_name, rm_params, rm_ret) = if let StatementKind::Function {
                 name,
                 params,
                 return_type,
                 ..
-            } = rm
+            } = &rm.kind
             {
                 (name, params, return_type)
             } else {
@@ -1750,7 +1989,7 @@ impl Analyzer {
             };
 
             let impl_method = methods.iter().find(|m| {
-                if let Statement::Function { name, .. } = m {
+                if let StatementKind::Function { name, .. } = &m.kind {
                     name == rm_name
                 } else {
                     false
@@ -1760,16 +1999,16 @@ impl Analyzer {
             let m = match impl_method {
                 Some(m) => m,
                 None => {
-                    self.errors.push(format!("Type Error: Target '{:?}' does not implement method '{}' required by role '{}'", target, rm_name, role_name));
+                    self.add_error(format!("Type Error: Target '{:?}' does not implement method '{}' required by role '{}'", target, rm_name, role_name), span);
                     continue;
                 }
             };
 
-            let (m_params, m_ret) = if let Statement::Function {
+            let (m_params, m_ret) = if let StatementKind::Function {
                 params,
                 return_type,
                 ..
-            } = m
+            } = &m.kind
             {
                 (params, return_type)
             } else {
@@ -1777,7 +2016,7 @@ impl Analyzer {
             };
 
             if m_params.len() != rm_params.len() {
-                self.errors.push(format!("Type Error: Method '{}' in extend of '{:?}' with role '{}' has wrong number of parameters", rm_name, target, role_name));
+                self.add_error(format!("Type Error: Method '{}' in extend of '{:?}' with role '{}' has wrong number of parameters", rm_name, target, role_name), m.span);
                 continue;
             }
 
@@ -1785,17 +2024,20 @@ impl Analyzer {
                 let m_ty = mp.ty.clone().unwrap_or(Type::Any);
                 let rm_ty = rmp.ty.clone().unwrap_or(Type::Any);
                 if !self.types_compatible(&rm_ty, &m_ty) {
-                    self.errors.push(format!("Type Error: Method '{}' parameter {} type mismatch. Expected {:?}, got {:?}", rm_name, i + 1, rm_ty, m_ty));
+                    self.add_error(format!("Type Error: Method '{}' parameter {} type mismatch. Expected {:?}, got {:?}", rm_name, i + 1, rm_ty, m_ty), m.span);
                 }
             }
 
             let m_ret_ty = m_ret.clone().unwrap_or(Type::Void);
             let rm_ret_ty = rm_ret.clone().unwrap_or(Type::Void);
             if !self.types_compatible(&rm_ret_ty, &m_ret_ty) {
-                self.errors.push(format!(
-                    "Type Error: Method '{}' return type mismatch. Expected {:?}, got {:?}",
-                    rm_name, rm_ret_ty, m_ret_ty
-                ));
+                self.add_error(
+                    format!(
+                        "Type Error: Method '{}' return type mismatch. Expected {:?}, got {:?}",
+                        rm_name, rm_ret_ty, m_ret_ty
+                    ),
+                    m.span,
+                );
             }
         }
     }
@@ -1912,15 +2154,18 @@ impl Analyzer {
         }
     }
 
-    fn check_pattern(&mut self, pattern: &Pattern, matched_type: &Type) {
+    fn check_pattern(&mut self, pattern: &Pattern, matched_type: &Type, span: Span) {
         match pattern {
             Pattern::Literal(expr) => {
                 let ty = self.check_expression(expr);
                 if !self.types_compatible(matched_type, &ty) {
-                    self.errors.push(format!(
-                        "Type Error: Match pattern type {:?} doesn't match condition type {:?}",
-                        ty, matched_type
-                    ));
+                    self.add_error(
+                        format!(
+                            "Type Error: Match pattern type {:?} doesn't match condition type {:?}",
+                            ty, matched_type
+                        ),
+                        span,
+                    );
                 }
             }
             Pattern::EnumVariant {
@@ -1940,19 +2185,22 @@ impl Analyzer {
                     let variant = e.variants.iter().find(|v| &v.name == variant_name).unwrap();
                     if let Some(bind_name) = binding {
                         if let Some(v_ty) = &variant.data_type {
-                            self.define(bind_name, v_ty.clone(), false);
+                            self.define(bind_name, v_ty.clone(), false, span);
                         } else {
-                            self.errors.push(format!(
-                                "Type Error: Enum variant '{}' does not take any data",
-                                variant_name
-                            ));
+                            self.add_error(
+                                format!(
+                                    "Type Error: Enum variant '{}' does not take any data",
+                                    variant_name
+                                ),
+                                span,
+                            );
                         }
                     }
                 } else {
-                    self.errors.push(format!(
-                        "Type Error: Unknown enum variant '{}'",
-                        variant_name
-                    ));
+                    self.add_error(
+                        format!("Type Error: Unknown enum variant '{}'", variant_name),
+                        span,
+                    );
                 }
             }
             Pattern::Wildcard => {}

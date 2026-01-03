@@ -1,24 +1,30 @@
-use ngn::lexer::{Lexer, Token};
-use ngn::parser::{Parser, Statement};
 use ngn::analyzer::Analyzer;
-use ngn::compiler::Compiler;
-use ngn::vm::VM;
 use ngn::bytecode::OpCode;
-use std::time::Instant;
+use ngn::compiler::Compiler;
+use ngn::lexer::{Lexer, Token};
+use ngn::parser::{Parser, StatementKind};
+use ngn::vm::VM;
 use std::fs;
 use std::path::Path;
+use std::time::Instant;
 
 fn main() {
     let benchmarks_dir = "benchmarks";
     let paths = fs::read_dir(benchmarks_dir).expect("Could not read benchmarks directory");
 
-    println!("{: <20} | {: >10} | {: >10} | {: >10} | {: >10}", "Benchmark", "Parse", "Analyze", "Compile", "Execute");
-    println!("{:-<21}|{:-<12}|{:-<12}|{:-<12}|{:-<11}", "", "", "", "", "");
+    println!(
+        "{: <20} | {: >10} | {: >10} | {: >10} | {: >10}",
+        "Benchmark", "Parse", "Analyze", "Compile", "Execute"
+    );
+    println!(
+        "{:-<21}|{:-<12}|{:-<12}|{:-<12}|{:-<11}",
+        "", "", "", "", ""
+    );
 
     for entry in paths {
         let entry = entry.expect("Could not read entry");
         let path = entry.path();
-        
+
         if path.extension().and_then(|s| s.to_str()) == Some("ngn") {
             run_benchmark(&path);
         }
@@ -56,10 +62,10 @@ fn run_benchmark(path: &Path) {
     let start_compile = Instant::now();
     let mut compiler = Compiler::new(None);
     compiler.inject_builtins();
-    
+
     // Register globals
     for stmt in &statements {
-        if let Statement::Function { name, .. } = stmt {
+        if let StatementKind::Function { name, .. } = &stmt.kind {
             let var_idx = compiler.next_index;
             compiler.global_table.insert(name.clone(), var_idx);
             compiler.next_index += 1;
@@ -83,6 +89,8 @@ fn run_benchmark(path: &Path) {
     vm.run();
     let execute_time = start_execute.elapsed();
 
-    println!("{: <20} | {: >10?} | {: >10?} | {: >10?} | {: >10?}", 
-        filename, parse_time, analyze_time, compile_time, execute_time);
+    println!(
+        "{: <20} | {: >10?} | {: >10?} | {: >10?} | {: >10?}",
+        filename, parse_time, analyze_time, compile_time, execute_time
+    );
 }

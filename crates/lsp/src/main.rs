@@ -6,11 +6,72 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use ngn::lexer::{Lexer, Token, Span};
+use ngn::parser::Parser;
+use ngn::analyzer::Analyzer;
 
 #[derive(Debug)]
 struct Backend {
     client: Client,
     documents: Arc<RwLock<HashMap<String, String>>>,
+}
+
+fn offset_to_position(text: &str, offset: usize) -> Position {
+    let mut line = 0;
+    let mut last_line_start = 0;
+    for (i, c) in text.char_indices() {
+        if i >= offset {
+            break;
+        }
+        if c == '\n' {
+            line += 1;
+            last_line_start = i + 1;
+        }
+    }
+    let slice_len = if offset <= text.len() { offset } else { text.len() };
+    let character = text[last_line_start..slice_len].chars().count() as u32;
+    Position { line, character }
+}
+
+impl Backend {
+    async fn validate_document(&self, uri: Url, text: &str) {
+        // Parse the document
+        let lexer = Lexer::new(text);
+        let mut parser = Parser::new(lexer);
+        let mut statements = Vec::new();
+
+        while parser.current_token != Token::EOF {
+            if parser.current_token == Token::Newline {
+                parser.advance();
+                continue;
+            }
+            statements.push(parser.parse_statement());
+        }
+
+        // Analyze
+        let mut analyzer = Analyzer::new();
+        let diagnostics = match analyzer.analyze(&statements) {
+            Ok(_) => Vec::new(),
+            Err(d) => d,
+        };
+
+        // publish diagnostics
+        let lsp_diagnostics: Vec<Diagnostic> = diagnostics
+            .into_iter()
+            .map(|d| {
+                let start = offset_to_position(text, d.span.start);
+                let end = offset_to_position(text, d.span.end);
+                Diagnostic {
+                    range: Range { start, end },
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    message: d.message,
+                    source: Some("ngn".to_string()),
+                    ..Default::default()
+                }
+            })
+            .collect();
+
+        self.client.publish_diagnostics(uri, lsp_diagnostics, None).await;
+    }
 }
 
 fn modifier_to_bit(modifier: &str) -> u32 {
@@ -177,15 +238,18 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        let uri = params.text_document.uri.to_string();
+        let uri = params.text_document.uri.clone();
         let text = params.text_document.text;
-        self.documents.write().await.insert(uri, text);
+        self.documents.write().await.insert(uri.to_string(), text.clone());
+        self.validate_document(uri, &text).await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        let uri = params.text_document.uri.to_string();
+        let uri = params.text_document.uri.clone();
         if let Some(change) = params.content_changes.last() {
-            self.documents.write().await.insert(uri, change.text.clone());
+            let text = change.text.clone();
+            self.documents.write().await.insert(uri.to_string(), text.clone());
+            self.validate_document(uri, &text).await;
         }
     }
 
@@ -220,7 +284,7 @@ impl LanguageServer for Backend {
         // Build line/column index from the source (character-based for LSP)
         let mut line_starts = vec![0];
         let mut char_count = 0;
-        for (i, c) in text.char_indices() {
+        for (_i, c) in text.char_indices() {
             char_count += 1;
             if c == '\n' {
                 line_starts.push(char_count);
@@ -229,7 +293,6 @@ impl LanguageServer for Backend {
 
         // Helper to convert byte offset to (line, character_offset)
         let byte_to_line_col = |byte_offset: usize| -> (u32, u32) {
-            let mut current_line = 0;
             let mut current_line_start_byte = 0;
             let mut line_count = 0;
             

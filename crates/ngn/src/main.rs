@@ -1,8 +1,8 @@
 use ngn::analyzer::{Analyzer, Symbol};
 use ngn::bytecode::OpCode;
 use ngn::compiler::Compiler;
-use ngn::lexer::{Lexer, Token};
-use ngn::parser::{Expr, Parser, Statement, Type};
+use ngn::lexer::{Lexer, Span, Token};
+use ngn::parser::{Expr, Parser, Statement, StatementKind, Type};
 use ngn::value::Value;
 use ngn::vm::VM;
 use std::collections::HashMap;
@@ -102,7 +102,7 @@ fn main() {
     let mut module_cache: ModuleCache = HashMap::new();
 
     for stmt in &statements {
-        if let Statement::Import { names, source } = stmt {
+        if let StatementKind::Import { names, source } = &stmt.kind {
             // Skip toolbox imports (handled by compiler)
             if source.starts_with("tbx::") {
                 continue;
@@ -185,7 +185,7 @@ fn main() {
                     panic!("Import Error: '{}' is not exported from '{}'", name, source);
                 }
             }
-        } else if let Statement::ImportDefault { name, source } = stmt {
+        } else if let StatementKind::ImportDefault { name, source } = &stmt.kind {
             // Load the module
             let exports = load_module(source, &base_path, &mut module_cache);
             println!(
@@ -255,7 +255,7 @@ fn main() {
             } else {
                 panic!("Import Error: Module '{}' has no default export", source);
             }
-        } else if let Statement::ImportModule { alias, source } = stmt {
+        } else if let StatementKind::ImportModule { alias, source } = &stmt.kind {
             // import * as alias from "source"
             eprintln!(
                 "Warning: Module imports ('import * as {} from \"{}\"') are not fully supported yet.",
@@ -275,7 +275,7 @@ fn main() {
     // 3. PASS ONE: Register all function names in the symbol table
     // (We don't compile them yet, just reserve their slots)
     for stmt in &statements {
-        if let Statement::Function { name, params, .. } = stmt {
+        if let StatementKind::Function { name, params, .. } = &stmt.kind {
             let var_idx = compiler.next_index;
             compiler.global_table.insert(name.clone(), var_idx);
 
@@ -417,15 +417,15 @@ fn load_module(module_path: &str, base_path: &PathBuf, cache: &mut ModuleCache) 
     let mut default_export_expr: Option<Expr> = None;
 
     for stmt in &statements {
-        match stmt {
-            Statement::Function {
+        match &stmt.kind {
+            StatementKind::Function {
                 name,
                 is_exported: true,
                 ..
             } => {
                 export_names.push(name.clone());
             }
-            Statement::ExportDefault(expr) => {
+            StatementKind::ExportDefault(expr) => {
                 default_export_expr = Some(expr.clone());
             }
             _ => {}
@@ -435,16 +435,19 @@ fn load_module(module_path: &str, base_path: &PathBuf, cache: &mut ModuleCache) 
     // 2. Transform statements: remove ExportDefault, add __default__ declaration if needed
     let mut processed_statements: Vec<Statement> = statements
         .into_iter()
-        .filter(|s| !matches!(s, Statement::ExportDefault(_)))
+        .filter(|s| !matches!(s.kind, StatementKind::ExportDefault(_)))
         .collect();
 
     if let Some(expr) = default_export_expr {
-        processed_statements.push(Statement::Declaration {
-            name: "__default__".to_string(),
-            is_mutable: false,
-            is_static: true, // Global scope
-            value: expr,
-            declared_type: None,
+        processed_statements.push(Statement {
+            kind: StatementKind::Declaration {
+                name: "__default__".to_string(),
+                is_mutable: false,
+                is_static: true, // Global scope
+                value: expr,
+                declared_type: None,
+            },
+            span: Span::default(),
         });
         export_names.push("__default__".to_string());
     }

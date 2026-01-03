@@ -1,4 +1,4 @@
-use crate::lexer::{Lexer, Token};
+use crate::lexer::{Lexer, Span, Token};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
@@ -39,6 +39,7 @@ pub struct Parameter {
     pub name: String,
     pub is_owned: bool,
     pub ty: Option<Type>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -71,7 +72,13 @@ pub struct EnumDef {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Statement {
+pub struct Statement {
+    pub kind: StatementKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum StatementKind {
     Declaration {
         name: String,
         is_mutable: bool,
@@ -139,6 +146,7 @@ pub enum Statement {
         role: Option<String>,
         methods: Vec<Statement>,
     },
+    Error(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -154,7 +162,13 @@ pub struct RoleDef {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Expr {
+pub struct Expr {
+    pub kind: ExprKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExprKind {
     Assign {
         name: String,
         value: Box<Expr>,
@@ -211,17 +225,18 @@ pub enum Expr {
     Map(Type, Type),
     Set(Type),
     This,
+    Error(String),
 }
 
 impl Expr {
     pub fn is_primitive(&self) -> bool {
-        match self {
-            Expr::Number(_) | Expr::Float(_) | Expr::Bool(_) => true,
+        match &self.kind {
+            ExprKind::Number(_) | ExprKind::Float(_) | ExprKind::Bool(_) => true,
 
-            Expr::String(s) => s.len() <= 32,
+            ExprKind::String(s) => s.len() <= 32,
 
-            Expr::Array(elements) => elements.is_empty(),
-            Expr::Tuple(elements) => elements.is_empty(),
+            ExprKind::Array(elements) => elements.is_empty(),
+            ExprKind::Tuple(elements) => elements.is_empty(),
 
             _ => false,
         }
@@ -231,16 +246,20 @@ impl Expr {
 pub struct Parser {
     pub lexer: Lexer,
     pub current_token: Token,
+    pub current_span: Span,
+    pub previous_span: Span,
     pub in_function: bool,
     pub paren_depth: usize,
 }
 
 impl Parser {
     pub fn new(mut lexer: Lexer) -> Self {
-        let first_token = lexer.next_token();
+        let (first_token, first_span) = lexer.next_token_with_span();
         Self {
             lexer,
             current_token: first_token,
+            current_span: first_span,
+            previous_span: Span::default(),
             in_function: false,
             paren_depth: 0,
         }
@@ -248,7 +267,10 @@ impl Parser {
 
     // Move to the next token
     pub fn advance(&mut self) {
-        self.current_token = self.lexer.next_token();
+        self.previous_span = self.current_span;
+        let (token, span) = self.lexer.next_token_with_span();
+        self.current_token = token;
+        self.current_span = span;
     }
 
     fn consume_newlines(&mut self) {
@@ -261,7 +283,11 @@ impl Parser {
         if self.current_token == expected {
             self.advance();
         } else {
-            panic!("Expected {:?}, got {:?}", expected, self.current_token);
+            eprintln!(
+                "Syntax Error: Expected {:?}, got {:?}",
+                expected, self.current_token
+            );
+            // We assume the token was missing and continue to prevent crashing
         }
     }
 
@@ -282,10 +308,11 @@ impl Parser {
             self.advance();
             name
         } else {
-            panic!(
+            eprintln!(
                 "Syntax Error: Expected an identifier, but found {:?}",
                 self.current_token
             );
+            "__error_identifier__".to_string()
         }
     }
 
@@ -294,6 +321,7 @@ impl Parser {
     }
 
     fn parse_function_with_export(&mut self, is_exported: bool) -> Statement {
+        let start = self.current_span.start;
         self.advance();
 
         let name = self.expect_identifier();
@@ -302,6 +330,7 @@ impl Parser {
         let mut params = Vec::new();
 
         while self.current_token != Token::RParen {
+            let start_param = self.current_span.start;
             let param_name = self.expect_identifier();
 
             let mut ty = None;
@@ -317,11 +346,13 @@ impl Parser {
 
                 ty = Some(self.parse_type());
             }
+            let end_param = self.previous_span.end;
 
             params.push(Parameter {
                 name: param_name,
                 is_owned,
                 ty,
+                span: Span::new(start_param, end_param),
             });
 
             if self.current_token == Token::Comma {
@@ -346,21 +377,29 @@ impl Parser {
             vec![]
         } else {
             // Implicit return
-            vec![Statement::Return(Some(self.parse_expression()))]
+            vec![Statement {
+                kind: StatementKind::Return(Some(self.parse_expression())),
+                span: self.current_span, // Approx span
+            }]
         };
 
         self.in_function = old_in_function;
+        let end = self.previous_span.end;
 
-        Statement::Function {
-            name,
-            params,
-            body,
-            return_type,
-            is_exported,
+        Statement {
+            kind: StatementKind::Function {
+                name,
+                params,
+                body,
+                return_type,
+                is_exported,
+            },
+            span: Span::new(start, end),
         }
     }
 
     fn parse_import_statement(&mut self) -> Statement {
+        let start = self.current_span.start;
         self.advance(); // consume 'import'
 
         // 1. Module Import: import * as Name from "..."
@@ -371,14 +410,18 @@ impl Parser {
             self.expect(Token::From);
 
             let source = self.parse_literal_string();
-            return Statement::ImportModule { alias, source };
+            let end = self.previous_span.end;
+            return Statement {
+                kind: StatementKind::ImportModule { alias, source },
+                span: Span::new(start, end),
+            };
         }
 
         // 2. Named Imports: import { a, b as c } from "..."
         if self.current_token == Token::LBrace {
             self.advance(); // consume '{'
             let mut names = Vec::new();
-            while self.current_token != Token::RBrace {
+            while self.current_token != Token::RBrace && self.current_token != Token::EOF {
                 let name = self.expect_identifier();
                 let mut alias = None;
                 if self.current_token == Token::As {
@@ -394,7 +437,11 @@ impl Parser {
             self.expect(Token::From);
 
             let source = self.parse_literal_string();
-            return Statement::Import { names, source };
+            let end = self.previous_span.end;
+            return Statement {
+                kind: StatementKind::Import { names, source },
+                span: Span::new(start, end),
+            };
         }
 
         // 3. Default Import: import Name from "..."
@@ -402,32 +449,53 @@ impl Parser {
         self.expect(Token::From);
 
         let source = self.parse_literal_string();
-        Statement::ImportDefault { name, source }
+        let end = self.previous_span.end;
+        Statement {
+            kind: StatementKind::ImportDefault { name, source },
+            span: Span::new(start, end),
+        }
     }
 
     pub fn parse_statement(&mut self) -> Statement {
         self.consume_newlines();
 
-        let stmt = match self.current_token.clone() {
+        let start = self.current_span.start;
+
+        match self.current_token.clone() {
             Token::Static => {
                 if self.in_function {
-                    panic!("Syntax Error: 'static' declarator can only be used in global scope");
+                    let msg = "Syntax Error: 'static' declarator can only be used in global scope"
+                        .to_string();
+                    eprintln!("{}", msg);
+                    self.advance(); // consume token to proceed
+                    return Statement {
+                        kind: StatementKind::Error(msg),
+                        span: Span::new(start, self.current_span.end),
+                    };
                 }
                 self.parse_declaration()
             }
             Token::Const => {
                 if !self.in_function {
-                    panic!(
-                        "Syntax Error: 'const' declarator can only be used inside functions (global state must be 'static')"
-                    );
+                    let msg = "Syntax Error: 'const' declarator can only be used inside functions (global state must be 'static')".to_string();
+                    eprintln!("{}", msg);
+                    self.advance();
+                    return Statement {
+                        kind: StatementKind::Error(msg),
+                        span: Span::new(start, self.current_span.end),
+                    };
                 }
                 self.parse_declaration()
             }
             Token::Var => {
                 if !self.in_function {
-                    panic!(
-                        "Syntax Error: 'var' declarator can only be used inside functions (global state must be 'static')"
-                    );
+                    let msg = "Syntax Error: 'var' declarator can only be used inside functions (global state must be 'static')".to_string();
+                    eprintln!("{}", msg);
+                    self.advance();
+                    return Statement {
+                        kind: StatementKind::Error(msg),
+                        span: Span::new(start, self.current_span.end),
+                    };
                 }
                 self.parse_declaration()
             }
@@ -438,7 +506,11 @@ impl Parser {
                     self.advance(); // consume 'default'
                     // Expect an expression for now (typically an identifier)
                     let expr = self.parse_expression();
-                    Statement::ExportDefault(expr)
+                    let end = self.previous_span.end;
+                    Statement {
+                        kind: StatementKind::ExportDefault(expr),
+                        span: Span::new(start, end),
+                    }
                 } else if self.current_token == Token::Fn {
                     self.parse_function_with_export(true)
                 } else {
@@ -447,7 +519,11 @@ impl Parser {
             }
             Token::Identifier(_) => {
                 let expr = self.parse_expression();
-                Statement::Expression(expr)
+                let end = expr.span.end; // Expression end
+                Statement {
+                    kind: StatementKind::Expression(expr),
+                    span: Span::new(start, end),
+                }
             }
             Token::Import => self.parse_import_statement(),
             Token::Enum => self.parse_enum_stmt(),
@@ -459,35 +535,67 @@ impl Parser {
                 self.expect(Token::LParen);
                 let expr = self.parse_expression();
                 self.expect(Token::RParen);
-                Statement::Print(expr)
+                let end = self.previous_span.end;
+                Statement {
+                    kind: StatementKind::Print(expr),
+                    span: Span::new(start, end),
+                }
             }
             Token::Echo => {
                 self.advance();
                 self.expect(Token::LParen);
                 let expr = self.parse_expression();
                 self.expect(Token::RParen);
-                Statement::Echo(expr)
+                let end = self.previous_span.end;
+                Statement {
+                    kind: StatementKind::Echo(expr),
+                    span: Span::new(start, end),
+                }
             }
             Token::Sleep => {
                 self.advance();
                 self.expect(Token::LParen);
                 let expr = self.parse_expression();
                 self.expect(Token::RParen);
-                Statement::Sleep(expr)
+                let end = self.previous_span.end;
+                Statement {
+                    kind: StatementKind::Sleep(expr),
+                    span: Span::new(start, end),
+                }
             }
             Token::If => self.parse_if_stmt(),
             Token::While => self.parse_while_stmt(),
             Token::Loop => self.parse_loop_stmt(),
             Token::For => self.parse_for_stmt(),
             Token::Match => self.parse_match_stmt(),
-            Token::LBrace => Statement::Block(self.parse_block()),
+            Token::LBrace => {
+                let block = self.parse_block();
+                // parse_block returns Vec<Statement>. We must wrap it in Statement::Block
+                // But parse_block eats the braces?
+                // Wait, parse_block returns Vec<Statement>.
+                // We need to know where the closing brace was.
+                // Assuming parse_block updates current/previous span.
+                let end = self.previous_span.end;
+                Statement {
+                    kind: StatementKind::Block(block),
+                    span: Span::new(start, end),
+                }
+            }
             Token::Break => {
                 self.advance();
-                Statement::Break
+                let end = self.previous_span.end;
+                Statement {
+                    kind: StatementKind::Break,
+                    span: Span::new(start, end),
+                }
             }
             Token::Next => {
                 self.advance();
-                Statement::Next
+                let end = self.previous_span.end;
+                Statement {
+                    kind: StatementKind::Next,
+                    span: Span::new(start, end),
+                }
             }
             Token::Return => {
                 self.advance();
@@ -499,22 +607,25 @@ impl Parser {
                 } else {
                     None
                 };
-                Statement::Return(expr)
+                let end = self.previous_span.end;
+                Statement {
+                    kind: StatementKind::Return(expr),
+                    span: Span::new(start, end),
+                }
             }
             _ => {
                 let expr = self.parse_expression();
-                Statement::Expression(expr)
+                let end = expr.span.end;
+                Statement {
+                    kind: StatementKind::Expression(expr),
+                    span: Span::new(start, end),
+                }
             }
-        };
-
-        if self.current_token == Token::Newline {
-            self.advance();
         }
-
-        stmt
     }
 
     fn parse_declaration(&mut self) -> Statement {
+        let start = self.current_span.start;
         let declarator = self.current_token.clone();
         self.advance(); // consume 'var', 'const', or 'static'
 
@@ -535,13 +646,17 @@ impl Parser {
 
         self.expect(Token::Equal);
         let value = self.parse_expression();
+        let end = value.span.end; // Declaration ends at value end (or semicolon usually, but NGN has implicit semi)
 
-        Statement::Declaration {
-            name,
-            is_mutable,
-            is_static,
-            value,
-            declared_type,
+        Statement {
+            kind: StatementKind::Declaration {
+                name,
+                is_mutable,
+                is_static,
+                value,
+                declared_type,
+            },
+            span: Span::new(start, end),
         }
     }
 
@@ -778,9 +893,14 @@ impl Parser {
         let mut left = self.parse_assignment();
 
         while self.current_token == Token::LArrow {
+            let start = left.span.start;
             self.advance();
             let right = self.parse_assignment();
-            left = Expr::Send(Box::new(left), Box::new(right));
+            let end = right.span.end;
+            left = Expr {
+                kind: ExprKind::Send(Box::new(left), Box::new(right)),
+                span: Span::new(start, end),
+            };
         }
         left
     }
@@ -800,16 +920,25 @@ impl Parser {
         };
 
         if let Some(binary_op) = compound_op {
+            let start = expr.span.start;
             self.advance();
             let value = self.parse_assignment();
-            if let Expr::Variable(ref name) = expr {
-                return Expr::Assign {
-                    name: name.clone(),
-                    value: Box::new(Expr::Binary {
-                        left: Box::new(expr),
-                        op: binary_op,
-                        right: Box::new(value),
-                    }),
+            let end = value.span.end;
+
+            if let ExprKind::Variable(ref name) = expr.kind {
+                return Expr {
+                    kind: ExprKind::Assign {
+                        name: name.clone(),
+                        value: Box::new(Expr {
+                            kind: ExprKind::Binary {
+                                left: Box::new(expr),
+                                op: binary_op,
+                                right: Box::new(value),
+                            },
+                            span: Span::new(start, end),
+                        }),
+                    },
+                    span: Span::new(start, end),
                 };
             } else {
                 panic!("Syntax Error: Invalid assignment target");
@@ -818,14 +947,19 @@ impl Parser {
 
         // If the next token is '=', this is an assignment
         if self.current_token == Token::Equal {
+            let start = expr.span.start;
             self.advance(); // consume '='
             let value = self.parse_assignment(); // Recursive for things like x = y = 10
+            let end = value.span.end;
 
             // We check if the left side was actually a variable
-            if let Expr::Variable(name) = expr {
-                return Expr::Assign {
-                    name,
-                    value: Box::new(value),
+            if let ExprKind::Variable(name) = expr.kind {
+                return Expr {
+                    kind: ExprKind::Assign {
+                        name,
+                        value: Box::new(value),
+                    },
+                    span: Span::new(start, end),
                 };
             } else {
                 panic!("Syntax Error: Invalid assignment target");
@@ -842,13 +976,18 @@ impl Parser {
                 self.consume_newlines();
             }
             if self.current_token == Token::EqualEqual || self.current_token == Token::NotEqual {
+                let start = left.span.start;
                 let op = self.current_token.clone();
                 self.advance();
                 let right = self.parse_comparison();
-                left = Expr::Binary {
-                    left: Box::new(left),
-                    op,
-                    right: Box::new(right),
+                let end = right.span.end;
+                left = Expr {
+                    kind: ExprKind::Binary {
+                        left: Box::new(left),
+                        op,
+                        right: Box::new(right),
+                    },
+                    span: Span::new(start, end),
                 };
             } else {
                 break;
@@ -869,13 +1008,18 @@ impl Parser {
                 || self.current_token == Token::LessThanEqual
                 || self.current_token == Token::GreaterThanEqual
             {
+                let start = left.span.start;
                 let op = self.current_token.clone();
                 self.advance();
                 let right = self.parse_addition();
-                left = Expr::Binary {
-                    left: Box::new(left),
-                    op,
-                    right: Box::new(right),
+                let end = right.span.end;
+                left = Expr {
+                    kind: ExprKind::Binary {
+                        left: Box::new(left),
+                        op,
+                        right: Box::new(right),
+                    },
+                    span: Span::new(start, end),
                 };
             } else {
                 break;
@@ -892,14 +1036,19 @@ impl Parser {
                 self.consume_newlines();
             }
             if self.current_token == Token::Plus || self.current_token == Token::Minus {
+                let start = left.span.start;
                 let op = self.current_token.clone();
                 self.advance();
                 let right = self.parse_multiplication();
+                let end = right.span.end;
 
-                left = Expr::Binary {
-                    left: Box::new(left),
-                    op,
-                    right: Box::new(right),
+                left = Expr {
+                    kind: ExprKind::Binary {
+                        left: Box::new(left),
+                        op,
+                        right: Box::new(right),
+                    },
+                    span: Span::new(start, end),
                 };
             } else {
                 break;
@@ -919,13 +1068,18 @@ impl Parser {
                 || self.current_token == Token::Slash
                 || self.current_token == Token::Percent
             {
+                let start = left.span.start;
                 let op = self.current_token.clone();
                 self.advance();
                 let right = self.parse_power();
-                left = Expr::Binary {
-                    left: Box::new(left),
-                    op,
-                    right: Box::new(right),
+                let end = right.span.end;
+                left = Expr {
+                    kind: ExprKind::Binary {
+                        left: Box::new(left),
+                        op,
+                        right: Box::new(right),
+                    },
+                    span: Span::new(start, end),
                 };
             } else {
                 break;
@@ -938,12 +1092,17 @@ impl Parser {
         let left = self.parse_unary();
 
         if self.current_token == Token::Power {
+            let start = left.span.start;
             self.advance();
             let right = self.parse_power(); // Right-associative
-            return Expr::Binary {
-                left: Box::new(left),
-                op: Token::Power,
-                right: Box::new(right),
+            let end = right.span.end;
+            return Expr {
+                kind: ExprKind::Binary {
+                    left: Box::new(left),
+                    op: Token::Power,
+                    right: Box::new(right),
+                },
+                span: Span::new(start, end),
             };
         }
         left
@@ -954,12 +1113,17 @@ impl Parser {
             self.consume_newlines();
         }
         if self.current_token == Token::Minus || self.current_token == Token::Bang {
+            let start = self.current_span.start;
             let op = self.current_token.clone();
             self.advance();
             let right = self.parse_unary();
-            return Expr::Unary {
-                op,
-                right: Box::new(right),
+            let end = right.span.end;
+            return Expr {
+                kind: ExprKind::Unary {
+                    op,
+                    right: Box::new(right),
+                },
+                span: Span::new(start, end),
             };
         }
         self.parse_primary()
@@ -972,10 +1136,15 @@ impl Parser {
 
         let mut expr = match self.current_token.clone() {
             Token::Bool(b) => {
+                let start = self.current_span.start;
                 self.advance();
-                Expr::Bool(b)
+                Expr {
+                    kind: ExprKind::Bool(b),
+                    span: Span::new(start, self.previous_span.end),
+                }
             }
             Token::LParen => {
+                let start = self.current_span.start;
                 self.advance();
                 self.paren_depth += 1;
                 self.consume_newlines();
@@ -983,7 +1152,10 @@ impl Parser {
                 if self.current_token == Token::RParen {
                     self.paren_depth -= 1;
                     self.advance();
-                    Expr::Tuple(Vec::new())
+                    Expr {
+                        kind: ExprKind::Tuple(Vec::new()),
+                        span: Span::new(start, self.previous_span.end),
+                    }
                 } else {
                     let expression = self.parse_expression();
                     self.consume_newlines();
@@ -1003,7 +1175,10 @@ impl Parser {
                         }
                         self.paren_depth -= 1;
                         self.expect(Token::RParen);
-                        Expr::Tuple(elements)
+                        Expr {
+                            kind: ExprKind::Tuple(elements),
+                            span: Span::new(start, self.previous_span.end),
+                        }
                     } else {
                         self.paren_depth -= 1;
                         self.expect(Token::RParen);
@@ -1012,68 +1187,96 @@ impl Parser {
                 }
             }
             Token::Number(n) => {
+                let start = self.current_span.start;
                 self.advance();
-                Expr::Number(n)
+                Expr {
+                    kind: ExprKind::Number(n),
+                    span: Span::new(start, self.previous_span.end),
+                }
             }
             Token::Float(n) => {
+                let start = self.current_span.start;
                 self.advance();
-                Expr::Float(n)
+                Expr {
+                    kind: ExprKind::Float(n),
+                    span: Span::new(start, self.previous_span.end),
+                }
             }
             Token::Regex(pattern) => {
+                let start = self.current_span.start;
                 self.advance();
-                Expr::Regex(pattern)
+                Expr {
+                    kind: ExprKind::Regex(pattern),
+                    span: Span::new(start, self.previous_span.end),
+                }
             }
             Token::StringStart => self.parse_interpolated_string(),
             Token::Identifier(name) => {
+                let start = self.current_span.start;
                 self.advance();
                 if self.current_token == Token::DoubleColon {
                     self.advance();
                     let variant_name = self.expect_identifier();
-                    Expr::EnumVariant {
-                        enum_name: Some(name),
-                        variant_name,
-                        args: Vec::new(),
+                    Expr {
+                        kind: ExprKind::EnumVariant {
+                            enum_name: Some(name),
+                            variant_name,
+                            args: Vec::new(),
+                        },
+                        span: Span::new(start, self.previous_span.end),
                     }
                 } else {
-                    Expr::Variable(name)
+                    Expr {
+                        kind: ExprKind::Variable(name),
+                        span: Span::new(start, self.previous_span.end),
+                    }
                 }
             }
             Token::LBracket => self.parse_array_literal(),
             Token::Pipe => self.parse_closure(),
             Token::Thread => {
+                let start = self.current_span.start;
                 self.advance();
                 self.expect(Token::LParen);
                 let expr = self.parse_expression();
                 self.expect(Token::RParen);
-                Expr::Thread(Box::new(expr))
+                Expr {
+                    kind: ExprKind::Thread(Box::new(expr)),
+                    span: Span::new(start, self.previous_span.end),
+                }
             }
             Token::LArrow => {
+                let start = self.current_span.start;
                 self.advance();
 
                 // Case 1: <-? chan (MaybeReceive)
                 if self.current_token == Token::Question {
                     self.advance();
                     let chan = self.parse_expression();
-                    Expr::ReceiveMaybe(Box::new(chan))
+                    Expr {
+                        kind: ExprKind::ReceiveMaybe(Box::new(chan)),
+                        span: Span::new(start, self.previous_span.end),
+                    }
                 } else {
                     // We need to distinguish between <- chan and <- count chan
-                    // In ngn2's current parser, we can try to parse one expression
                     let first = self.parse_expression();
-
-                    // If the NEXT token can start a channel expression (like an identifier, bracket, etc.)
-                    // then 'first' was likely a count.
-                    // This is slightly ambiguous but let's follow the simple heuristic:
-                    // if it's a number literal, it's a count if followed by another expression.
 
                     if self.can_start_expression() {
                         let chan = self.parse_expression();
-                        Expr::ReceiveCount(Box::new(chan), Box::new(first))
+                        Expr {
+                            kind: ExprKind::ReceiveCount(Box::new(chan), Box::new(first)),
+                            span: Span::new(start, self.previous_span.end),
+                        }
                     } else {
-                        Expr::Receive(Box::new(first))
+                        Expr {
+                            kind: ExprKind::Receive(Box::new(first)),
+                            span: Span::new(start, self.previous_span.end),
+                        }
                     }
                 }
             }
             Token::Channel => {
+                let start = self.current_span.start;
                 self.advance();
                 self.expect(Token::LParen);
                 self.expect(Token::RParen);
@@ -1083,16 +1286,24 @@ impl Parser {
                 } else {
                     None
                 };
-                Expr::Channel(ty)
+                Expr {
+                    kind: ExprKind::Channel(ty),
+                    span: Span::new(start, self.previous_span.end),
+                }
             }
             Token::State => {
+                let start = self.current_span.start;
                 self.advance();
                 self.expect(Token::LParen);
                 let initial = self.parse_expression();
                 self.expect(Token::RParen);
-                Expr::State(Box::new(initial))
+                Expr {
+                    kind: ExprKind::State(Box::new(initial)),
+                    span: Span::new(start, self.previous_span.end),
+                }
             }
             Token::Map => {
+                let start = self.current_span.start;
                 self.advance(); // consume 'map'
                 self.expect(Token::LessThan);
                 let key_type = self.parse_type();
@@ -1101,22 +1312,44 @@ impl Parser {
                 self.expect(Token::GreaterThan);
                 self.expect(Token::LParen);
                 self.expect(Token::RParen);
-                Expr::Map(key_type, value_type)
+                Expr {
+                    kind: ExprKind::Map(key_type, value_type),
+                    span: Span::new(start, self.previous_span.end),
+                }
             }
             Token::Set => {
+                let start = self.current_span.start;
                 self.advance(); // consume 'set'
                 self.expect(Token::LessThan);
                 let element_type = self.parse_type();
                 self.expect(Token::GreaterThan);
                 self.expect(Token::LParen);
                 self.expect(Token::RParen);
-                Expr::Set(element_type)
+                Expr {
+                    kind: ExprKind::Set(element_type),
+                    span: Span::new(start, self.previous_span.end),
+                }
             }
             Token::This => {
+                let start = self.current_span.start;
                 self.advance();
-                Expr::This
+                Expr {
+                    kind: ExprKind::This,
+                    span: Span::new(start, self.previous_span.end),
+                }
             }
-            _ => panic!("Expected expression, found {:?}", self.current_token),
+            _ => {
+                let msg = format!("Expected expression, found {:?}", self.current_token);
+                eprintln!("{}", msg); // Log to stderr for debugging
+                let start = self.current_span.start;
+                if self.current_token != Token::EOF {
+                    self.advance(); // consume the bad token to make progress
+                }
+                Expr {
+                    kind: ExprKind::Error(msg),
+                    span: Span::new(start, self.previous_span.end),
+                }
+            }
         };
 
         loop {
@@ -1124,7 +1357,7 @@ impl Parser {
                 Token::LParen => {
                     self.advance(); // consume '('
                     let mut args = Vec::new();
-                    while self.current_token != Token::RParen {
+                    while self.current_token != Token::RParen && self.current_token != Token::EOF {
                         args.push(self.parse_expression());
                         if self.current_token == Token::Comma {
                             self.advance();
@@ -1132,52 +1365,81 @@ impl Parser {
                     }
                     self.expect(Token::RParen);
 
-                    if let Expr::Variable(name) = expr {
-                        expr = Expr::Call { name, args };
-                    } else if let Expr::EnumVariant {
-                        enum_name,
-                        variant_name,
-                        ..
-                    } = expr
-                    {
-                        expr = Expr::EnumVariant {
+                    let end = self.previous_span.end;
+                    let start = expr.span.start;
+
+                    match expr.kind {
+                        ExprKind::Variable(name) => {
+                            expr = Expr {
+                                kind: ExprKind::Call { name, args },
+                                span: Span::new(start, end),
+                            };
+                        }
+                        ExprKind::EnumVariant {
                             enum_name,
                             variant_name,
-                            args,
-                        };
-                    } else {
-                        panic!(
-                            "Syntax Error: Current expression {:?} cannot be called",
-                            expr
-                        );
+                            ..
+                        } => {
+                            expr = Expr {
+                                kind: ExprKind::EnumVariant {
+                                    enum_name,
+                                    variant_name,
+                                    args,
+                                },
+                                span: Span::new(start, end),
+                            };
+                        }
+                        _ => {
+                            let msg =
+                                "Syntax Error: Current expression cannot be called".to_string();
+                            eprintln!("{}", msg);
+                            expr = Expr {
+                                kind: ExprKind::Error(msg),
+                                span: expr.span,
+                            };
+                        }
                     }
                 }
                 Token::Period => {
                     self.advance(); // consume '.'
                     let name = self.expect_identifier();
+                    let start = expr.span.start;
 
                     // Check for method call: .method(args)
                     if self.current_token == Token::LParen {
                         self.advance();
                         let mut args = Vec::new();
-                        while self.current_token != Token::RParen {
+                        while self.current_token != Token::RParen
+                            && self.current_token != Token::EOF
+                        {
                             args.push(self.parse_expression());
                             if self.current_token == Token::Comma {
                                 self.advance();
                             }
                         }
                         self.expect(Token::RParen);
-                        expr = Expr::MethodCall(Box::new(expr), name, args);
+                        let end = self.previous_span.end;
+
+                        expr = Expr {
+                            kind: ExprKind::MethodCall(Box::new(expr), name, args),
+                            span: Span::new(start, end),
+                        };
                     } else {
                         // Field access: .field
-                        expr = Expr::FieldAccess {
-                            object: Box::new(expr),
-                            field: name,
+                        let end = self.previous_span.end;
+                        expr = Expr {
+                            kind: ExprKind::FieldAccess {
+                                object: Box::new(expr),
+                                field: name,
+                            },
+                            span: Span::new(start, end),
                         };
                     }
                 }
                 Token::LBrace => {
-                    if let Expr::Variable(name) = expr {
+                    if let ExprKind::Variable(name) = &expr.kind {
+                        let name = name.clone();
+                        let start = expr.span.start;
                         self.advance(); // consume '{'
                         self.consume_newlines();
                         let mut fields = Vec::new();
@@ -1194,7 +1456,12 @@ impl Parser {
                             self.consume_newlines();
                         }
                         self.expect(Token::RBrace);
-                        expr = Expr::ModelInstance { name, fields };
+                        let end = self.previous_span.end;
+
+                        expr = Expr {
+                            kind: ExprKind::ModelInstance { name, fields },
+                            span: Span::new(start, end),
+                        };
                     } else {
                         break;
                     }
@@ -1203,7 +1470,13 @@ impl Parser {
                     self.advance(); // consume '['
                     let index_expr = self.parse_expression();
                     self.expect(Token::RBracket);
-                    expr = Expr::Index(Box::new(expr), Box::new(index_expr));
+                    let start = expr.span.start;
+                    let end = self.previous_span.end;
+
+                    expr = Expr {
+                        kind: ExprKind::Index(Box::new(expr), Box::new(index_expr)),
+                        span: Span::new(start, end),
+                    };
                 }
                 _ => break,
             }
@@ -1231,14 +1504,20 @@ impl Parser {
     }
 
     fn parse_interpolated_string(&mut self) -> Expr {
+        let start = self.current_span.start;
         self.expect(Token::StringStart);
         let mut parts = Vec::new();
 
         while self.current_token != Token::StringEnd && self.current_token != Token::EOF {
             match self.current_token.clone() {
                 Token::StringPart(s) => {
+                    let p_start = self.current_span.start;
                     self.advance();
-                    parts.push(Expr::String(s));
+                    let p_end = self.previous_span.end;
+                    parts.push(Expr {
+                        kind: ExprKind::String(s),
+                        span: Span::new(p_start, p_end),
+                    });
                 }
                 Token::InterpolationStart => {
                     self.advance();
@@ -1250,7 +1529,11 @@ impl Parser {
         }
 
         self.expect(Token::StringEnd);
-        Expr::InterpolatedString(parts)
+        let end = self.previous_span.end; // string end token
+        Expr {
+            kind: ExprKind::InterpolatedString(parts),
+            span: Span::new(start, end),
+        }
     }
 
     fn parse_literal_string(&mut self) -> String {
@@ -1273,15 +1556,20 @@ impl Parser {
     }
 
     fn parse_array_literal(&mut self) -> Expr {
+        let start = self.current_span.start;
         self.advance(); // consume '['
         let mut elements = Vec::new();
 
         if self.current_token == Token::RBracket {
             self.advance(); // empty array
-            return Expr::Array(elements);
+            let end = self.previous_span.end;
+            return Expr {
+                kind: ExprKind::Array(elements),
+                span: Span::new(start, end),
+            };
         }
 
-        while self.current_token != Token::RBracket {
+        while self.current_token != Token::RBracket && self.current_token != Token::EOF {
             elements.push(self.parse_expression());
 
             if self.current_token == Token::Comma {
@@ -1292,7 +1580,11 @@ impl Parser {
         }
 
         self.expect(Token::RBracket);
-        Expr::Array(elements)
+        let end = self.previous_span.end;
+        Expr {
+            kind: ExprKind::Array(elements),
+            span: Span::new(start, end),
+        }
     }
 
     fn parse_block(&mut self) -> Vec<Statement> {
@@ -1317,6 +1609,7 @@ impl Parser {
     }
 
     fn parse_if_stmt(&mut self) -> Statement {
+        let start = self.current_span.start;
         self.advance(); // consume 'if'
 
         // Check for Block If: if { ... }
@@ -1370,18 +1663,46 @@ impl Parser {
                         }
                         else_stmts.push(self.parse_statement());
                     }
-                    else_branch = Some(Box::new(Statement::Block(else_stmts)));
+                    let block_span = if !else_stmts.is_empty() {
+                        Span::new(
+                            else_stmts[0].span.start,
+                            else_stmts.last().unwrap().span.end,
+                        )
+                    } else {
+                        self.current_span
+                    };
+                    else_branch = Some(Box::new(Statement {
+                        kind: StatementKind::Block(else_stmts),
+                        span: block_span,
+                    }));
                 }
             }
 
             if self.current_token == Token::RBrace {
                 self.advance();
             }
+            let end = self.previous_span.end;
 
-            Statement::If {
-                condition,
-                then_branch: Box::new(Statement::Block(then_block)),
-                else_branch,
+            // Construct 'then' block span approx
+            let then_span = if !then_block.is_empty() {
+                Span::new(
+                    then_block[0].span.start,
+                    then_block.last().unwrap().span.end,
+                )
+            } else {
+                Span::new(start, end)
+            };
+
+            Statement {
+                kind: StatementKind::If {
+                    condition,
+                    then_branch: Box::new(Statement {
+                        kind: StatementKind::Block(then_block),
+                        span: then_span,
+                    }),
+                    else_branch,
+                },
+                span: Span::new(start, end),
             }
         } else {
             // Inline If: if (cond) stmt : ...
@@ -1403,16 +1724,25 @@ impl Parser {
                 }
             }
 
-            Statement::If {
-                condition,
-                then_branch: Box::new(then_stmt),
-                else_branch,
+            let end = match &else_branch {
+                Some(stmt) => stmt.span.end,
+                None => then_stmt.span.end,
+            };
+
+            Statement {
+                kind: StatementKind::If {
+                    condition,
+                    then_branch: Box::new(then_stmt),
+                    else_branch,
+                },
+                span: Span::new(start, end),
             }
         }
     }
 
     // Helper for Block If recursion
     fn parse_if_inner(&mut self) -> Statement {
+        let start = self.current_span.start; // start at '('
         // Expect condition
         self.expect(Token::LParen);
         let condition = self.parse_expression();
@@ -1452,19 +1782,50 @@ impl Parser {
                     }
                     else_stmts.push(self.parse_statement());
                 }
-                else_branch = Some(Box::new(Statement::Block(else_stmts)));
+                let block_span = if !else_stmts.is_empty() {
+                    Span::new(
+                        else_stmts[0].span.start,
+                        else_stmts.last().unwrap().span.end,
+                    )
+                } else {
+                    self.current_span
+                };
+                else_branch = Some(Box::new(Statement {
+                    kind: StatementKind::Block(else_stmts),
+                    span: block_span,
+                }));
             }
         }
 
-        Statement::If {
-            condition,
-            then_branch: Box::new(Statement::Block(then_block)),
-            else_branch,
+        let end = self.previous_span.end; // May not be accurate if RBrace handled by parent?
+        // Actually, parse_if_inner is called inside the braces loop of parent.
+        // It consumes segments inside the block.
+
+        let then_span = if !then_block.is_empty() {
+            Span::new(
+                then_block[0].span.start,
+                then_block.last().unwrap().span.end,
+            )
+        } else {
+            Span::new(start, end)
+        };
+
+        Statement {
+            kind: StatementKind::If {
+                condition,
+                then_branch: Box::new(Statement {
+                    kind: StatementKind::Block(then_block),
+                    span: then_span,
+                }),
+                else_branch,
+            },
+            span: Span::new(start, end),
         }
     }
 
     // Helper for Inline If recursion (implicit if)
     fn parse_implicit_if(&mut self) -> Statement {
+        let start = self.current_span.start;
         self.expect(Token::LParen);
         let condition = self.parse_expression();
         self.expect(Token::RParen);
@@ -1481,14 +1842,23 @@ impl Parser {
             }
         }
 
-        Statement::If {
-            condition,
-            then_branch: Box::new(then_stmt),
-            else_branch,
+        let end = match &else_branch {
+            Some(stmt) => stmt.span.end,
+            None => then_stmt.span.end,
+        };
+
+        Statement {
+            kind: StatementKind::If {
+                condition,
+                then_branch: Box::new(then_stmt),
+                else_branch,
+            },
+            span: Span::new(start, end),
         }
     }
 
     fn parse_while_stmt(&mut self) -> Statement {
+        let start = self.current_span.start;
         self.advance(); // consume 'while'
 
         let mut is_once = false;
@@ -1502,31 +1872,53 @@ impl Parser {
         self.expect(Token::RParen);
 
         let body = if self.current_token == Token::LBrace {
-            Statement::Block(self.parse_block())
+            let b_start = self.current_span.start;
+            let stmts = self.parse_block();
+            let b_end = self.previous_span.end;
+            Statement {
+                kind: StatementKind::Block(stmts),
+                span: Span::new(b_start, b_end),
+            }
         } else {
             self.parse_statement()
         };
+        let end = body.span.end;
 
-        Statement::While {
-            condition,
-            body: Box::new(body),
-            is_once,
+        Statement {
+            kind: StatementKind::While {
+                condition,
+                body: Box::new(body),
+                is_once,
+            },
+            span: Span::new(start, end),
         }
     }
 
     fn parse_loop_stmt(&mut self) -> Statement {
+        let start = self.current_span.start;
         self.advance(); // consume 'loop'
 
         let body = if self.current_token == Token::LBrace {
-            Statement::Block(self.parse_block())
+            let b_start = self.current_span.start;
+            let stmts = self.parse_block();
+            let b_end = self.previous_span.end;
+            Statement {
+                kind: StatementKind::Block(stmts),
+                span: Span::new(b_start, b_end),
+            }
         } else {
             self.parse_statement()
         };
+        let end = body.span.end;
 
-        Statement::Loop(Box::new(body))
+        Statement {
+            kind: StatementKind::Loop(Box::new(body)),
+            span: Span::new(start, end),
+        }
     }
 
     fn parse_for_stmt(&mut self) -> Statement {
+        let start = self.current_span.start;
         self.advance(); // consume 'for'
         self.expect(Token::LParen);
 
@@ -1543,20 +1935,31 @@ impl Parser {
         self.expect(Token::RParen);
 
         let body = if self.current_token == Token::LBrace {
-            Statement::Block(self.parse_block())
+            let b_start = self.current_span.start;
+            let stmts = self.parse_block();
+            let b_end = self.previous_span.end;
+            Statement {
+                kind: StatementKind::Block(stmts),
+                span: Span::new(b_start, b_end),
+            }
         } else {
             self.parse_statement()
         };
+        let end = body.span.end;
 
-        Statement::For {
-            binding,
-            index_binding,
-            iterable,
-            body: Box::new(body),
+        Statement {
+            kind: StatementKind::For {
+                binding,
+                index_binding,
+                iterable,
+                body: Box::new(body),
+            },
+            span: Span::new(start, end),
         }
     }
 
     fn parse_match_stmt(&mut self) -> Statement {
+        let start = self.current_span.start;
         self.advance(); // consume 'match'
 
         self.expect(Token::LParen);
@@ -1589,7 +1992,13 @@ impl Parser {
             }
 
             let body = if self.current_token == Token::LBrace {
-                Statement::Block(self.parse_block())
+                let b_start = self.current_span.start;
+                let stmts = self.parse_block();
+                let b_end = self.previous_span.end;
+                Statement {
+                    kind: StatementKind::Block(stmts),
+                    span: Span::new(b_start, b_end),
+                }
             } else {
                 self.parse_statement()
             };
@@ -1606,8 +2015,12 @@ impl Parser {
         }
 
         self.expect(Token::RBrace);
+        let end = self.previous_span.end;
 
-        Statement::Match { condition, arms }
+        Statement {
+            kind: StatementKind::Match { condition, arms },
+            span: Span::new(start, end),
+        }
     }
 
     fn parse_pattern(&mut self) -> Pattern {
@@ -1659,6 +2072,7 @@ impl Parser {
     }
 
     fn parse_closure(&mut self) -> Expr {
+        let start = self.current_span.start;
         self.advance(); // consume first '|'
 
         let mut params = Vec::new();
@@ -1669,6 +2083,7 @@ impl Parser {
                     break;
                 }
 
+                let p_start = self.current_span.start;
                 let param_name = self.expect_identifier();
 
                 let mut ty = None;
@@ -1684,11 +2099,13 @@ impl Parser {
 
                     ty = Some(self.parse_type());
                 }
+                let p_end = self.previous_span.end;
 
                 params.push(Parameter {
                     name: param_name,
                     is_owned,
                     ty,
+                    span: Span::new(p_start, p_end),
                 });
 
                 if self.current_token == Token::Comma {
@@ -1710,21 +2127,38 @@ impl Parser {
 
         // Parse body - expect block or expression
         let body_stmt = if self.current_token == Token::LBrace {
-            Box::new(Statement::Block(self.parse_block()))
+            let b_start = self.current_span.start;
+            let stmts = self.parse_block();
+            let b_end = self.previous_span.end;
+            Box::new(Statement {
+                kind: StatementKind::Block(stmts),
+                span: Span::new(b_start, b_end),
+            })
         } else {
             // Single expression implicit return
             let expr = self.parse_expression();
-            Box::new(Statement::Return(Some(expr)))
+            let e_start = expr.span.start;
+            let e_end = expr.span.end;
+            Box::new(Statement {
+                kind: StatementKind::Return(Some(expr)),
+                span: Span::new(e_start, e_end),
+            })
         };
+        let end = body_stmt.span.end;
 
-        Expr::Closure {
-            params,
-            body: body_stmt,
-            return_type,
+        Expr {
+            kind: ExprKind::Closure {
+                params,
+                body: body_stmt,
+                return_type,
+            },
+            span: Span::new(start, end),
         }
     }
 
     fn parse_enum_stmt(&mut self) -> Statement {
+        let start = self.current_span.start;
+
         if self.in_function {
             panic!("Syntax Error: 'enum' can only be declared in global scope");
         }
@@ -1755,10 +2189,16 @@ impl Parser {
             self.consume_newlines();
         }
         self.expect(Token::RBrace);
+        let end = self.previous_span.end;
 
-        Statement::Enum(EnumDef { name, variants })
+        Statement {
+            kind: StatementKind::Enum(EnumDef { name, variants }),
+            span: Span::new(start, end),
+        }
     }
     fn parse_model_stmt(&mut self) -> Statement {
+        let start = self.current_span.start;
+
         if self.in_function {
             panic!("Syntax Error: 'model' can only be declared in global scope");
         }
@@ -1780,10 +2220,17 @@ impl Parser {
             self.consume_newlines();
         }
         self.expect(Token::RBrace);
-        Statement::Model(ModelDef { name, fields })
+        let end = self.previous_span.end;
+
+        Statement {
+            kind: StatementKind::Model(ModelDef { name, fields }),
+            span: Span::new(start, end),
+        }
     }
 
     fn parse_role_stmt(&mut self) -> Statement {
+        let start = self.current_span.start;
+
         if self.in_function {
             panic!("Syntax Error: 'role' can only be declared in global scope");
         }
@@ -1799,7 +2246,12 @@ impl Parser {
             self.consume_newlines();
         }
         self.expect(Token::RBrace);
-        Statement::Role(RoleDef { name, methods })
+        let end = self.previous_span.end;
+
+        Statement {
+            kind: StatementKind::Role(RoleDef { name, methods }),
+            span: Span::new(start, end),
+        }
     }
 
     fn parse_extend_target_type(&mut self) -> Type {
@@ -1846,6 +2298,7 @@ impl Parser {
     }
 
     fn parse_extend_stmt(&mut self) -> Statement {
+        let start = self.current_span.start;
         self.advance(); // consume 'extend'
 
         let target = self.parse_extend_target_type();
@@ -1867,12 +2320,17 @@ impl Parser {
             methods.push(method);
             self.consume_newlines();
         }
-        self.expect(Token::RBrace);
 
-        Statement::Extend {
-            target,
-            role,
-            methods,
+        self.expect(Token::RBrace);
+        let end = self.previous_span.end;
+
+        Statement {
+            kind: StatementKind::Extend {
+                target,
+                role,
+                methods,
+            },
+            span: Span::new(start, end),
         }
     }
 }
