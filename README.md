@@ -250,7 +250,7 @@ print(greeting.repeat(2)) // goodbyegoodbye
 ```
 
 ## Numbers
-There are currently no number methods, but we do have a math mod (see [below](#standard-library)).
+There are currently no number methods, but we do have a math mod (see [below](#standard-library)), or you can use the `extend` keyword to add your own (see [below](#custom-methods)).
 
 ## Arrays
 If you want to mutate arrays, be sure to declare them with `var`
@@ -420,6 +420,58 @@ const joined = tup.join(",")
 print(joined) // "10,20,30"
 ```
 
+## Custom Methods
+
+If you want to add methods to built-in types, you can use the `extend` keyword. Applies to these types:
+
+- number (generic that applies to all numeric types)
+- f64, i32, u8, etc (for specific numeric types)
+- string
+- bool
+- array
+- tuple
+- map
+- set
+
+```ngn
+extend array {
+  fn isEmpty(): bool {
+    return this.size() == 0
+  }
+}
+
+extend number {
+  fn isEven(): bool {
+    return this % 2 == 0
+  }
+
+  fn double(): number {
+    return this * 2
+  }
+}
+
+extend string {
+  fn isBlank(): bool {
+    return this.trim().length() == 0
+  }
+}
+
+fn main() {
+  [1, 2, 3].isEmpty() // false
+
+  // if using a number directly, wrap in parenthesis
+  (2).isEven() // true
+
+  const x = 2
+  x.isEven() // true
+
+  // if a number method returns the generic `number` type, you should explicitly set the result type
+  const y: i32 = x.double()
+
+  "   ".isBlank() // true
+}
+```
+
 ## Enums
 
 ngn provides two built-in enums for common patterns: `Result` and `Maybe`
@@ -505,6 +557,15 @@ fn main() {
       Active => print("Status: Active!"),
       Inactive(value) => print("Status: Inactive with reason, {value}")
     }
+}
+```
+
+## `loop`
+Run the statement block indefinitely. Use `break` to exit the loop.
+```ngn
+loop {
+  statement
+  statement
 }
 ```
 
