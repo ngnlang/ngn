@@ -31,6 +31,7 @@ pub enum Type {
     Map(Box<Type>, Box<Type>),
     Set(Box<Type>),
     Regex,
+    Number, // Generic number type for extends
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -599,6 +600,10 @@ impl Parser {
                     "void" => {
                         self.advance();
                         Type::Void
+                    }
+                    "number" => {
+                        self.advance();
+                        Type::Number
                     }
                     "array" => {
                         self.advance();
@@ -1828,6 +1833,10 @@ impl Parser {
                     // Generic: extend all sets
                     Type::Set(Box::new(Type::Any))
                 }
+            }
+            Token::Identifier(id) if id == "number" => {
+                self.advance();
+                Type::Number
             }
             _ => {
                 // For all other types, use normal type parsing

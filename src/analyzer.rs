@@ -1719,6 +1719,7 @@ impl Analyzer {
                 | Type::U8
                 | Type::F64
                 | Type::F32
+                | Type::Number
                 | Type::Any
         )
     }
@@ -1848,6 +1849,17 @@ impl Analyzer {
             Type::Array(_) => Type::Array(Box::new(Type::Any)), // All arrays map to array<any>
             Type::Map(_, _) => Type::Map(Box::new(Type::Any), Box::new(Type::Any)), // All maps map to map<any, any>
             Type::Set(_) => Type::Set(Box::new(Type::Any)), // All sets map to set<any>
+            // All numeric types map to Number for extend number { }
+            Type::I64
+            | Type::I32
+            | Type::I16
+            | Type::I8
+            | Type::U64
+            | Type::U32
+            | Type::U16
+            | Type::U8
+            | Type::F64
+            | Type::F32 => Type::Number,
             _ => ty.clone(),
         }
     }

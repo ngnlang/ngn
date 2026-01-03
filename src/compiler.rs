@@ -825,6 +825,7 @@ impl Compiler {
                     crate::parser::Type::State(_) => "state".to_string(),
                     crate::parser::Type::Map(_, _) => "map".to_string(),
                     crate::parser::Type::Set(_) => "set".to_string(),
+                    crate::parser::Type::Number => "number".to_string(),
                     _ => "".to_string(),
                 };
 

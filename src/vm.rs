@@ -1,10 +1,10 @@
-use std::collections::VecDeque;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::io::Write;
-use crate::value::{Value, Channel, Closure, Function, EnumData, ObjectData};
 use crate::bytecode::OpCode;
+use crate::value::{Channel, Closure, EnumData, Function, ObjectData, Value};
 use regex::Regex as RegexLib;
+use std::collections::HashMap;
+use std::collections::VecDeque;
+use std::io::Write;
+use std::sync::{Arc, Mutex};
 
 /// Stores the globals for a single module
 pub struct ModuleContext {
@@ -18,13 +18,15 @@ pub struct ModuleRegistry {
 
 impl ModuleRegistry {
     pub fn new() -> Self {
-        Self { modules: HashMap::new() }
+        Self {
+            modules: HashMap::new(),
+        }
     }
-    
+
     pub fn register(&mut self, id: usize, globals: Vec<Value>) {
         self.modules.insert(id, ModuleContext { globals });
     }
-    
+
     pub fn get_globals(&self, id: usize) -> Option<&Vec<Value>> {
         self.modules.get(&id).map(|m| &m.globals)
     }
@@ -38,7 +40,7 @@ pub struct CallFrame {
     pub closure: Option<Box<Closure>>,
     pub dest_reg: Option<u16>,
     pub update_state: Option<Arc<Mutex<Value>>>,
-    pub home_globals: Option<Arc<Vec<Value>>>,  // Saved home globals for restoration on return
+    pub home_globals: Option<Arc<Vec<Value>>>, // Saved home globals for restoration on return
 }
 
 pub enum FiberStatus {
@@ -59,7 +61,7 @@ pub struct Fiber {
     pub status: FiberStatus,
     pub completion_channel: Option<Channel>,
     pub return_value: Option<Value>,
-    pub home_globals: Option<Arc<Vec<Value>>>,  // Current function's home module globals
+    pub home_globals: Option<Arc<Vec<Value>>>, // Current function's home module globals
 }
 
 impl Fiber {
@@ -112,7 +114,11 @@ impl Fiber {
     pub fn expect_string_const(&self, idx: usize) -> String {
         match &self.constants[idx] {
             Value::String(s) => s.clone(),
-            other => panic!("Internal Error: Expected String constant at index {}, found {}", idx, other.type_name()),
+            other => panic!(
+                "Internal Error: Expected String constant at index {}, found {}",
+                idx,
+                other.type_name()
+            ),
         }
     }
 
@@ -120,11 +126,21 @@ impl Fiber {
     pub fn expect_tuple_const(&self, idx: usize) -> &Vec<Value> {
         match &self.constants[idx] {
             Value::Tuple(t) => t,
-            other => panic!("Internal Error: Expected Tuple constant at index {}, found {}", idx, other.type_name()),
+            other => panic!(
+                "Internal Error: Expected Tuple constant at index {}, found {}",
+                idx,
+                other.type_name()
+            ),
         }
     }
 
-    pub fn run_step(&mut self, globals: &mut Vec<Value>, custom_methods: &Arc<Mutex<std::collections::HashMap<String, std::collections::HashMap<String, Value>>>>) -> FiberStatus {
+    pub fn run_step(
+        &mut self,
+        globals: &mut Vec<Value>,
+        custom_methods: &Arc<
+            Mutex<std::collections::HashMap<String, std::collections::HashMap<String, Value>>>,
+        >,
+    ) -> FiberStatus {
         if self.ip >= self.instructions.len() {
             if let Some(chan) = &self.completion_channel {
                 chan.buffer.lock().unwrap().push_back(Value::Void);
@@ -146,12 +162,12 @@ impl Fiber {
                 self.set_reg_at(dest, val);
             }
             OpCode::MakeRegex(dest, idx) => {
-                 let val = self.constants[idx].clone();
-                 if let Value::String(pattern) = val {
-                     self.set_reg_at(dest, Value::Regex(pattern));
-                 } else {
-                     panic!("Runtime Error: MakeRegex expects string constant");
-                 }
+                let val = self.constants[idx].clone();
+                if let Value::String(pattern) = val {
+                    self.set_reg_at(dest, Value::Regex(pattern));
+                } else {
+                    panic!("Runtime Error: MakeRegex expects string constant");
+                }
             }
             OpCode::AssignVar(dest, src) => {
                 let val = self.get_reg_at(src);
@@ -242,7 +258,10 @@ impl Fiber {
                 if let (Value::Numeric(n1), Value::Numeric(n2)) = (l.clone(), r.clone()) {
                     self.set_reg_at(dest, Value::Bool(n1.greater_than(n2)));
                 } else {
-                    panic!("Runtime Error: GreaterThan expects numeric types, got {:?} and {:?}", l, r);
+                    panic!(
+                        "Runtime Error: GreaterThan expects numeric types, got {:?} and {:?}",
+                        l, r
+                    );
                 }
             }
             OpCode::Negate(dest, src) => {
@@ -285,7 +304,13 @@ impl Fiber {
                     }
                     Value::Closure(closure) => {
                         let func = closure.function.clone();
-                        self.invoke_function(&func, Some(closure), Some(dest), arg_start, arg_count);
+                        self.invoke_function(
+                            &func,
+                            Some(closure),
+                            Some(dest),
+                            arg_start,
+                            arg_count,
+                        );
                     }
                     _ => panic!("Runtime Error: Can only call functions and closures"),
                 }
@@ -299,15 +324,15 @@ impl Fiber {
                         for i in 0..arg_count {
                             args.push(self.get_reg_at(arg_start + i as u16));
                         }
-                        
+
                         // Dispatch to the appropriate toolbox function
                         let result = match id {
-                            1 => crate::toolbox::math::abs(args),      // NATIVE_ABS
-                            2 => crate::toolbox::test::assert(args),   // NATIVE_ASSERT
-                            3 => crate::toolbox::math::round(args),    // NATIVE_ROUND
+                            1 => crate::toolbox::math::abs(args),    // NATIVE_ABS
+                            2 => crate::toolbox::test::assert(args), // NATIVE_ASSERT
+                            3 => crate::toolbox::math::round(args),  // NATIVE_ROUND
                             _ => panic!("Runtime Error: Unknown native function ID: {}", id),
                         };
-                        
+
                         match result {
                             Ok(val) => self.set_reg_at(dest, val),
                             Err(e) => panic!("Runtime Error: {}", e),
@@ -318,7 +343,13 @@ impl Fiber {
                     }
                     Value::Closure(closure) => {
                         let func = closure.function.clone();
-                        self.invoke_function(&func, Some(closure), Some(dest), arg_start, arg_count);
+                        self.invoke_function(
+                            &func,
+                            Some(closure),
+                            Some(dest),
+                            arg_start,
+                            arg_count,
+                        );
                     }
                     _ => {
                         panic!("Runtime Error: Global {} is not a function: {:?}", idx, val);
@@ -367,13 +398,16 @@ impl Fiber {
             OpCode::IterNext(dest, iter_reg, jump_offset) => {
                 let collection = self.get_reg_at(iter_reg);
                 let index_val = self.get_reg_at(iter_reg + 1);
-                
+
                 if let Value::Numeric(crate::value::Number::I64(idx)) = index_val {
                     match collection {
                         Value::Array(items) => {
                             if (idx as usize) < items.len() {
                                 self.set_reg_at(dest, items[idx as usize].clone());
-                                self.set_reg_at(iter_reg + 1, Value::Numeric(crate::value::Number::I64(idx + 1)));
+                                self.set_reg_at(
+                                    iter_reg + 1,
+                                    Value::Numeric(crate::value::Number::I64(idx + 1)),
+                                );
                             } else {
                                 self.ip = jump_offset;
                             }
@@ -381,7 +415,10 @@ impl Fiber {
                         Value::Tuple(items) => {
                             if (idx as usize) < items.len() {
                                 self.set_reg_at(dest, items[idx as usize].clone());
-                                self.set_reg_at(iter_reg + 1, Value::Numeric(crate::value::Number::I64(idx + 1)));
+                                self.set_reg_at(
+                                    iter_reg + 1,
+                                    Value::Numeric(crate::value::Number::I64(idx + 1)),
+                                );
                             } else {
                                 self.ip = jump_offset;
                             }
@@ -399,7 +436,10 @@ impl Fiber {
                                 }
                             }
                         }
-                        _ => panic!("Runtime Error: IterNext on non-collection: {:?}", collection),
+                        _ => panic!(
+                            "Runtime Error: IterNext on non-collection: {:?}",
+                            collection
+                        ),
                     }
                 } else {
                     panic!("Runtime Error: IterNext on invalid index: {:?}", index_val);
@@ -418,7 +458,7 @@ impl Fiber {
                     if let Some(dest) = frame.dest_reg {
                         self.set_reg_at(dest, result.clone());
                     }
-                        
+
                     if let Some(state) = frame.update_state {
                         *state.lock().unwrap() = result;
                     }
@@ -439,7 +479,7 @@ impl Fiber {
                     self.ip = frame.ip;
                     self.fp = frame.fp;
                     self.current_closure = frame.closure;
-                    self.home_globals = frame.home_globals;  // Restore home globals context
+                    self.home_globals = frame.home_globals; // Restore home globals context
                     if let Some(dest) = frame.dest_reg {
                         self.set_reg_at(dest, Value::Void);
                     }
@@ -479,24 +519,34 @@ impl Fiber {
             OpCode::CreateEnum(dest, names_idx, start, count) => {
                 let names = if let Value::Tuple(v) = &self.constants[names_idx] {
                     v
-                } else { panic!("Internal Error: Invalid names tuple for CreateEnum"); };
-                
-                let enum_name = if let Value::String(s) = &names[0] { s.clone() } else { panic!("..."); };
-                let variant_name = if let Value::String(s) = &names[1] { s.clone() } else { panic!("..."); };
-                
+                } else {
+                    panic!("Internal Error: Invalid names tuple for CreateEnum");
+                };
+
+                let enum_name = if let Value::String(s) = &names[0] {
+                    s.clone()
+                } else {
+                    panic!("...");
+                };
+                let variant_name = if let Value::String(s) = &names[1] {
+                    s.clone()
+                } else {
+                    panic!("...");
+                };
+
                 let data = if count > 0 {
                     Some(Box::new(self.get_reg_at(start)))
                 } else {
                     None
                 };
-                
+
                 self.set_reg_at(dest, EnumData::into_value(enum_name, variant_name, data));
             }
             OpCode::IsVariant(dest, src, enum_idx, variant_idx) => {
                 let val = self.get_reg_at(src);
                 let target_enum = self.expect_string_const(enum_idx);
                 let target_variant = self.expect_string_const(variant_idx);
-                
+
                 if let Value::Enum(e) = val {
                     // If target_enum is empty, only match on variant name (shorthand syntax)
                     let matches = if target_enum.is_empty() {
@@ -522,15 +572,22 @@ impl Fiber {
                 }
             }
             OpCode::MakeClosure(dest, func_idx, upvalue_start, upvalue_count) => {
-                let func = if let Value::Function(f) = &self.constants[func_idx] { f.clone() } else { panic!("..."); };
+                let func = if let Value::Function(f) = &self.constants[func_idx] {
+                    f.clone()
+                } else {
+                    panic!("...");
+                };
                 let mut upvalues = Vec::new();
                 for i in 0..upvalue_count {
                     upvalues.push(self.get_reg_at(upvalue_start + i as u16));
                 }
-                self.set_reg_at(dest, Value::Closure(Box::new(Closure {
-                    function: func,
-                    upvalues,
-                })));
+                self.set_reg_at(
+                    dest,
+                    Value::Closure(Box::new(Closure {
+                        function: func,
+                        upvalues,
+                    })),
+                );
             }
             OpCode::GetUpvalue(dest, idx) => {
                 if let Some(closure) = &self.current_closure {
@@ -542,7 +599,7 @@ impl Fiber {
             OpCode::GetIndex(dest, obj_reg, index_reg) => {
                 let obj = self.get_reg_at(obj_reg);
                 let index = self.get_reg_at(index_reg);
-                
+
                 match (obj, index) {
                     (Value::Array(items), Value::Numeric(crate::value::Number::I64(idx))) => {
                         if idx < 0 || idx >= items.len() as i64 {
@@ -583,7 +640,7 @@ impl Fiber {
             OpCode::Send(chan_reg, val_reg) => {
                 let chan_val = self.get_reg_at(chan_reg);
                 let val = self.get_reg_at(val_reg);
-                
+
                 if let Value::Channel(chan) = chan_val {
                     if *chan.is_closed.lock().unwrap() {
                         panic!("Runtime Error: Send to closed channel");
@@ -592,7 +649,7 @@ impl Fiber {
                     if buffer.len() < chan.capacity {
                         buffer.push_back(val);
                     } else {
-                        self.ip -= 1; 
+                        self.ip -= 1;
                         return FiberStatus::Suspended;
                     }
                 } else {
@@ -661,7 +718,7 @@ impl Fiber {
                     let current_val = state.lock().unwrap().clone();
                     let arg_start = self.stack.len() as u16;
                     self.stack.push(current_val);
-                    
+
                     let func = closure.function.clone();
                     self.invoke_function(&func, Some(closure), None, arg_start, 1);
                     if let Some(frame) = self.frames.last_mut() {
@@ -674,7 +731,9 @@ impl Fiber {
             OpCode::ReceiveCount(dest, chan_reg, count_reg) => {
                 let chan_val = self.get_reg_at(chan_reg);
                 let count_val = self.get_reg_at(count_reg);
-                if let (Value::Channel(chan), Value::Numeric(crate::value::Number::I64(count))) = (chan_val, count_val) {
+                if let (Value::Channel(chan), Value::Numeric(crate::value::Number::I64(count))) =
+                    (chan_val, count_val)
+                {
                     let mut buffer = chan.buffer.lock().unwrap();
                     if buffer.len() >= count as usize {
                         let mut res = Vec::new();
@@ -684,7 +743,9 @@ impl Fiber {
                         self.set_reg_at(dest, Value::Array(res));
                     } else {
                         if *chan.is_closed.lock().unwrap() {
-                            panic!("Runtime Error: ReceiveCount from closed channel with insufficient data");
+                            panic!(
+                                "Runtime Error: ReceiveCount from closed channel with insufficient data"
+                            );
                         }
                         self.ip -= 1;
                         return FiberStatus::Suspended;
@@ -698,17 +759,19 @@ impl Fiber {
                 if let Value::Channel(chan) = chan_val {
                     let mut buffer = chan.buffer.lock().unwrap();
                     if let Some(val) = buffer.pop_front() {
-                        self.set_reg_at(dest, EnumData::into_value(
-                            "Maybe".to_string(),
-                            "Value".to_string(),
-                            Some(Box::new(val)),
-                        ));
+                        self.set_reg_at(
+                            dest,
+                            EnumData::into_value(
+                                "Maybe".to_string(),
+                                "Value".to_string(),
+                                Some(Box::new(val)),
+                            ),
+                        );
                     } else {
-                         self.set_reg_at(dest, EnumData::into_value(
-                            "Maybe".to_string(),
-                            "Null".to_string(),
-                            None,
-                        ));
+                        self.set_reg_at(
+                            dest,
+                            EnumData::into_value("Maybe".to_string(), "Null".to_string(), None),
+                        );
                     }
                 } else {
                     panic!("Runtime Error: ReceiveMaybe on non-channel");
@@ -725,15 +788,26 @@ impl Fiber {
             OpCode::CallMethod(dest, obj_reg, method_idx, arg_start, arg_count) => {
                 let obj = self.get_reg_at(obj_reg);
                 let method_name = self.expect_string_const(method_idx);
-                
+
                 // Check custom methods from 'extend'
                 let type_name = obj.type_name();
                 let mut custom_method = None;
                 {
                     let methods_map = custom_methods.lock().unwrap();
+                    // First try exact type
                     if let Some(target_methods) = methods_map.get(type_name) {
                         if let Some(m) = target_methods.get(&method_name) {
                             custom_method = Some(m.clone());
+                        }
+                    }
+                    // Fallback to "number" for numeric types (extend number { })
+                    if custom_method.is_none() {
+                        if let Value::Numeric(_) = &obj {
+                            if let Some(target_methods) = methods_map.get("number") {
+                                if let Some(m) = target_methods.get(&method_name) {
+                                    custom_method = Some(m.clone());
+                                }
+                            }
                         }
                     }
                 }
@@ -745,7 +819,13 @@ impl Fiber {
                         self.stack.push(self.get_reg_at(arg_start + i as u16));
                     }
                     let func = closure.function.clone();
-                    self.invoke_function(&func, Some(closure), Some(dest), new_arg_start, arg_count + 1);
+                    self.invoke_function(
+                        &func,
+                        Some(closure),
+                        Some(dest),
+                        new_arg_start,
+                        arg_count + 1,
+                    );
                     return FiberStatus::Running;
                 }
 
@@ -754,7 +834,7 @@ impl Fiber {
                 for i in 0..arg_count {
                     args.push(self.get_reg_at(arg_start + i as u16));
                 }
-                
+
                 // Dispatch to appropriate method implementation (non-mutating)
                 let result = self.call_builtin_method(obj, &method_name, args);
                 self.set_reg_at(dest, result);
@@ -768,9 +848,20 @@ impl Fiber {
                 let mut custom_method = None;
                 {
                     let methods_map = custom_methods.lock().unwrap();
+                    // First try exact type
                     if let Some(target_methods) = methods_map.get(type_name) {
                         if let Some(m) = target_methods.get(&method_name) {
                             custom_method = Some(m.clone());
+                        }
+                    }
+                    // Fallback to "number" for numeric types (extend number { })
+                    if custom_method.is_none() {
+                        if let Value::Numeric(_) = &obj {
+                            if let Some(target_methods) = methods_map.get("number") {
+                                if let Some(m) = target_methods.get(&method_name) {
+                                    custom_method = Some(m.clone());
+                                }
+                            }
                         }
                     }
                 }
@@ -784,16 +875,22 @@ impl Fiber {
                     let func = closure.function.clone();
                     // We might need to write back the object if it's 'this' that changed
                     // but ngn is generally immutable except for field assignments which use SetField.
-                    self.invoke_function(&func, Some(closure), Some(dest), new_arg_start, arg_count + 1);
+                    self.invoke_function(
+                        &func,
+                        Some(closure),
+                        Some(dest),
+                        new_arg_start,
+                        arg_count + 1,
+                    );
                     return FiberStatus::Running;
                 }
-                
+
                 // Collect arguments
                 let mut args = Vec::new();
                 for i in 0..arg_count {
                     args.push(self.get_reg_at(arg_start + i as u16));
                 }
-                
+
                 // Dispatch to mutating method - returns (result, new_object)
                 let (result, new_obj) = self.call_builtin_method_mut(obj, &method_name, args);
                 self.set_reg_at(dest, result);
@@ -804,7 +901,11 @@ impl Fiber {
                 let field_names = self.expect_tuple_const(fields_idx);
                 let mut fields = std::collections::HashMap::new();
                 for i in 0..count {
-                    let field_name = if let Value::String(s) = &field_names[i as usize] { s.clone() } else { panic!("..."); };
+                    let field_name = if let Value::String(s) = &field_names[i as usize] {
+                        s.clone()
+                    } else {
+                        panic!("...");
+                    };
                     fields.insert(field_name, self.get_reg_at(start + i as u16));
                 }
                 self.set_reg_at(dest, ObjectData::into_value(model_name, fields));
@@ -828,7 +929,7 @@ impl Fiber {
                 let val = self.get_reg_at(src_reg);
                 if let Value::Object(ref mut o) = obj {
                     o.fields.insert(field_name, val);
-                    self.set_reg_at(obj_reg, obj); 
+                    self.set_reg_at(obj_reg, obj);
                 } else {
                     panic!("Runtime Error: SetField on non-object");
                 }
@@ -837,9 +938,11 @@ impl Fiber {
                 let target_type = self.expect_string_const(target_idx);
                 let method_name = self.expect_string_const(name_idx);
                 let closure = self.get_reg_at(closure_reg);
-                
+
                 let mut methods = custom_methods.lock().unwrap();
-                let target_methods = methods.entry(target_type).or_insert_with(std::collections::HashMap::new);
+                let target_methods = methods
+                    .entry(target_type)
+                    .or_insert_with(std::collections::HashMap::new);
                 target_methods.insert(method_name, closure);
             }
             OpCode::Halt => {
@@ -852,7 +955,14 @@ impl Fiber {
         FiberStatus::Running
     }
 
-    fn invoke_function(&mut self, func: &Function, closure: Option<Box<Closure>>, dest_reg: Option<u16>, arg_start: u16, _arg_count: u8) {
+    fn invoke_function(
+        &mut self,
+        func: &Function,
+        closure: Option<Box<Closure>>,
+        dest_reg: Option<u16>,
+        arg_start: u16,
+        _arg_count: u8,
+    ) {
         let frame = CallFrame {
             instructions: self.instructions.clone(),
             constants: self.constants.clone(),
@@ -864,22 +974,22 @@ impl Fiber {
             home_globals: self.home_globals.clone(),
         };
         self.frames.push(frame);
-        
+
         self.fp = self.fp + arg_start as usize;
         let needed = self.fp + func.reg_count;
         if self.stack.len() < needed {
             self.stack.resize(needed, Value::Void);
         }
-        
+
         self.instructions = func.instructions.clone();
         self.constants = func.constants.clone();
         self.ip = 0;
         self.current_closure = closure;
-        
+
         // Switch to the function's home globals context
         self.home_globals = func.home_globals.clone();
     }
-    
+
     /// Dispatch built-in method calls on arrays, strings, tuples, etc.
     fn call_builtin_method(&self, obj: Value, method: &str, args: Vec<Value>) -> Value {
         match obj {
@@ -888,18 +998,29 @@ impl Fiber {
             Value::Tuple(t) => self.tuple_method(&t, method, args),
             Value::Map(map) => self.map_method(map, method, args),
             Value::Set(set) => self.set_method(set, method, args),
-            _ => panic!("Runtime Error: Cannot call method '{}' on {:?}", method, obj),
+            _ => panic!(
+                "Runtime Error: Cannot call method '{}' on {:?}",
+                method, obj
+            ),
         }
     }
 
     /// Dispatch mutating built-in method calls. Returns (result, modified_object).
-    fn call_builtin_method_mut(&self, obj: Value, method: &str, args: Vec<Value>) -> (Value, Value) {
+    fn call_builtin_method_mut(
+        &self,
+        obj: Value,
+        method: &str,
+        args: Vec<Value>,
+    ) -> (Value, Value) {
         match obj {
             Value::Array(arr) => self.array_method_mut(arr, method, args),
             Value::String(s) => self.string_method_mut(s, method, args),
             Value::Map(map) => self.map_method_mut(map, method, args),
             Value::Set(set) => self.set_method_mut(set, method, args),
-            _ => panic!("Runtime Error: Cannot call mutating method '{}' on {:?}", method, obj),
+            _ => panic!(
+                "Runtime Error: Cannot call mutating method '{}' on {:?}",
+                method, obj
+            ),
         }
     }
 
@@ -908,35 +1029,68 @@ impl Fiber {
         match method {
             "size" => Value::Numeric(crate::value::Number::I64(arr.len() as i64)),
             "copy" => {
-                let start = if !args.is_empty() { self.to_usize(&args[0]).unwrap_or(0) } else { 0 };
-                let end = if args.len() > 1 { self.to_usize(&args[1]).unwrap_or(arr.len()) } else { arr.len() };
-                if start > end || end > arr.len() { panic!("Range out of bounds"); }
+                let start = if !args.is_empty() {
+                    self.to_usize(&args[0]).unwrap_or(0)
+                } else {
+                    0
+                };
+                let end = if args.len() > 1 {
+                    self.to_usize(&args[1]).unwrap_or(arr.len())
+                } else {
+                    arr.len()
+                };
+                if start > end || end > arr.len() {
+                    panic!("Range out of bounds");
+                }
                 Value::Array(arr[start..end].to_vec())
             }
-            "each" => panic!("Runtime Error: each() method not yet implemented in v2 (try 'for' loop instead)"),
-            _ => panic!("Runtime Error: Unknown non-mutating array method '{}'", method),
+            "each" => panic!(
+                "Runtime Error: each() method not yet implemented in v2 (try 'for' loop instead)"
+            ),
+            _ => panic!(
+                "Runtime Error: Unknown non-mutating array method '{}'",
+                method
+            ),
         }
     }
 
     /// Array mutating methods: push, pull, slice, splice
-    fn array_method_mut(&self, mut arr: Vec<Value>, method: &str, args: Vec<Value>) -> (Value, Value) {
+    fn array_method_mut(
+        &self,
+        mut arr: Vec<Value>,
+        method: &str,
+        args: Vec<Value>,
+    ) -> (Value, Value) {
         match method {
             "push" => {
-                if args.is_empty() { panic!("push() requires item"); }
+                if args.is_empty() {
+                    panic!("push() requires item");
+                }
                 let item = args[0].clone();
                 if args.len() > 1 {
-                    let idx = self.to_usize(&args[1]).expect("push() index must be integer");
-                    if idx > arr.len() { panic!("push() index out of bounds"); }
+                    let idx = self
+                        .to_usize(&args[1])
+                        .expect("push() index must be integer");
+                    if idx > arr.len() {
+                        panic!("push() index out of bounds");
+                    }
                     arr.insert(idx, item);
                 } else {
                     arr.push(item);
                 }
-                (Value::Numeric(crate::value::Number::I64(arr.len() as i64)), Value::Array(arr))
+                (
+                    Value::Numeric(crate::value::Number::I64(arr.len() as i64)),
+                    Value::Array(arr),
+                )
             }
             "pull" => {
                 let removed = if args.len() > 0 {
-                    let idx = self.to_usize(&args[0]).expect("pull() index must be integer");
-                    if idx >= arr.len() { panic!("pull() index out of bounds"); }
+                    let idx = self
+                        .to_usize(&args[0])
+                        .expect("pull() index must be integer");
+                    if idx >= arr.len() {
+                        panic!("pull() index out of bounds");
+                    }
                     arr.remove(idx)
                 } else {
                     arr.pop().expect("pull() from empty array")
@@ -944,20 +1098,42 @@ impl Fiber {
                 (removed, Value::Array(arr))
             }
             "slice" => {
-                let start = self.to_usize(&args[0]).expect("slice() start must be an integer");
-                let end = if args.len() > 1 { self.to_usize(&args[1]).expect("slice() stop must be an integer") } else { arr.len() };
-                if start > end || end > arr.len() { panic!("Range out of bounds"); }
+                let start = self
+                    .to_usize(&args[0])
+                    .expect("slice() start must be an integer");
+                let end = if args.len() > 1 {
+                    self.to_usize(&args[1])
+                        .expect("slice() stop must be an integer")
+                } else {
+                    arr.len()
+                };
+                if start > end || end > arr.len() {
+                    panic!("Range out of bounds");
+                }
                 let removed: Vec<Value> = arr.drain(start..end).collect();
                 (Value::Array(removed), Value::Array(arr))
             }
             "splice" => {
-                let items = if let Value::Array(items) = &args[0] { items.clone() } else { panic!("splice() expects an array as first argument") };
-                let start = if args.len() > 1 { self.to_usize(&args[1]).unwrap_or(arr.len()) } else { arr.len() };
-                if start > arr.len() { panic!("Index out of bounds"); }
+                let items = if let Value::Array(items) = &args[0] {
+                    items.clone()
+                } else {
+                    panic!("splice() expects an array as first argument")
+                };
+                let start = if args.len() > 1 {
+                    self.to_usize(&args[1]).unwrap_or(arr.len())
+                } else {
+                    arr.len()
+                };
+                if start > arr.len() {
+                    panic!("Index out of bounds");
+                }
                 for (i, item) in items.into_iter().enumerate() {
                     arr.insert(start + i, item);
                 }
-                (Value::Numeric(crate::value::Number::I64(arr.len() as i64)), Value::Array(arr))
+                (
+                    Value::Numeric(crate::value::Number::I64(arr.len() as i64)),
+                    Value::Array(arr),
+                )
             }
             _ => panic!("Runtime Error: Unknown mutating array method '{}'", method),
         }
@@ -968,9 +1144,19 @@ impl Fiber {
         match method {
             "length" => Value::Numeric(crate::value::Number::I64(s.len() as i64)),
             "index" => {
-                if args.is_empty() { panic!("index() requires search pattern"); }
-                let pattern = if let Value::String(p) = &args[0] { p } else { panic!("index() expects string pattern") };
-                let start = if args.len() > 1 { self.to_usize(&args[1]).unwrap_or(0) } else { 0 };
+                if args.is_empty() {
+                    panic!("index() requires search pattern");
+                }
+                let pattern = if let Value::String(p) = &args[0] {
+                    p
+                } else {
+                    panic!("index() expects string pattern")
+                };
+                let start = if args.len() > 1 {
+                    self.to_usize(&args[1]).unwrap_or(0)
+                } else {
+                    0
+                };
                 if start >= s.len() {
                     Value::Numeric(crate::value::Number::I64(-1))
                 } else {
@@ -981,49 +1167,79 @@ impl Fiber {
                 }
             }
             "includes" => {
-                if args.is_empty() { panic!("includes() requires search pattern"); }
-                let search = if let Value::String(p) = &args[0] { p } else { panic!("includes() expects string") };
+                if args.is_empty() {
+                    panic!("includes() requires search pattern");
+                }
+                let search = if let Value::String(p) = &args[0] {
+                    p
+                } else {
+                    panic!("includes() expects string")
+                };
                 Value::Bool(s.contains(search.as_str()))
             }
             "starts" => {
-                if args.is_empty() { panic!("starts() requires prefix"); }
-                let prefix = if let Value::String(p) = &args[0] { p } else { panic!("starts() expects string") };
+                if args.is_empty() {
+                    panic!("starts() requires prefix");
+                }
+                let prefix = if let Value::String(p) = &args[0] {
+                    p
+                } else {
+                    panic!("starts() expects string")
+                };
                 Value::Bool(s.starts_with(prefix.as_str()))
             }
             "ends" => {
-                if args.is_empty() { panic!("ends() requires suffix"); }
-                let suffix = if let Value::String(p) = &args[0] { p } else { panic!("ends() expects string") };
+                if args.is_empty() {
+                    panic!("ends() requires suffix");
+                }
+                let suffix = if let Value::String(p) = &args[0] {
+                    p
+                } else {
+                    panic!("ends() expects string")
+                };
                 Value::Bool(s.ends_with(suffix.as_str()))
             }
             "split" => {
                 if args.is_empty() {
-                    let parts: Vec<Value> = s.chars().map(|c| Value::String(c.to_string())).collect();
+                    let parts: Vec<Value> =
+                        s.chars().map(|c| Value::String(c.to_string())).collect();
                     Value::Array(parts)
                 } else if let Value::String(delim) = &args[0] {
-                    let parts: Vec<Value> = s.split(delim.as_str()).map(|part| Value::String(part.to_string())).collect();
+                    let parts: Vec<Value> = s
+                        .split(delim.as_str())
+                        .map(|part| Value::String(part.to_string()))
+                        .collect();
                     Value::Array(parts)
                 } else {
                     panic!("split() argument must be string");
                 }
             }
             "replace" => {
-                if args.len() < 2 { panic!("replace() requires search and replacement patterns"); }
-                let replacement = if let Value::String(s) = &args[1] { s } else { panic!("replace() expects string replacement") };
+                if args.len() < 2 {
+                    panic!("replace() requires search and replacement patterns");
+                }
+                let replacement = if let Value::String(s) = &args[1] {
+                    s
+                } else {
+                    panic!("replace() expects string replacement")
+                };
 
                 match &args[0] {
-                    Value::String(search) => Value::String(s.replacen(search.as_str(), replacement.as_str(), 1)),
+                    Value::String(search) => {
+                        Value::String(s.replacen(search.as_str(), replacement.as_str(), 1))
+                    }
                     Value::Regex(pattern_str) => {
-                         let (pattern, flags) = if pattern_str.starts_with("(?") {
-                             let end = pattern_str.find(')').expect("Invalid regex format");
-                             let flags = &pattern_str[2..end];
-                             let rest = &pattern_str[end+1..];
-                             (rest, flags)
+                        let (pattern, flags) = if pattern_str.starts_with("(?") {
+                            let end = pattern_str.find(')').expect("Invalid regex format");
+                            let flags = &pattern_str[2..end];
+                            let rest = &pattern_str[end + 1..];
+                            (rest, flags)
                         } else {
-                             (pattern_str.as_str(), "")
+                            (pattern_str.as_str(), "")
                         };
-                        
+
                         let is_global = flags.contains('g');
-                        
+
                         // Reconstruct pattern with standard flags (excluding 'g')
                         let standard_flags: String = flags.chars().filter(|&c| c != 'g').collect();
                         let final_pattern = if standard_flags.is_empty() {
@@ -1033,35 +1249,52 @@ impl Fiber {
                         };
 
                         match RegexLib::new(&final_pattern) {
-                             Ok(re) => {
-                                 let result = if is_global {
-                                     re.replace_all(s, replacement.as_str())
-                                 } else {
-                                     re.replace(s, replacement.as_str())
-                                 };
-                                 Value::String(result.to_string())
-                             },
-                             Err(e) => panic!("Invalid regex '{}': {}", final_pattern, e),
+                            Ok(re) => {
+                                let result = if is_global {
+                                    re.replace_all(s, replacement.as_str())
+                                } else {
+                                    re.replace(s, replacement.as_str())
+                                };
+                                Value::String(result.to_string())
+                            }
+                            Err(e) => panic!("Invalid regex '{}': {}", final_pattern, e),
                         }
-                    },
+                    }
                     _ => panic!("replace() expects string or regex search pattern"),
                 }
             }
             "copy" => {
-                let start = if !args.is_empty() { self.to_usize(&args[0]).unwrap_or(0) } else { 0 };
-                let end = if args.len() > 1 { self.to_usize(&args[1]).unwrap_or(s.len()) } else { s.len() };
-                if start > end || end > s.len() { panic!("Range out of bounds"); }
+                let start = if !args.is_empty() {
+                    self.to_usize(&args[0]).unwrap_or(0)
+                } else {
+                    0
+                };
+                let end = if args.len() > 1 {
+                    self.to_usize(&args[1]).unwrap_or(s.len())
+                } else {
+                    s.len()
+                };
+                if start > end || end > s.len() {
+                    panic!("Range out of bounds");
+                }
                 Value::String(s[start..end].to_string())
             }
             "upper" => Value::String(s.to_uppercase()),
             "lower" => Value::String(s.to_lowercase()),
             "trim" => Value::String(s.trim().to_string()),
             "repeat" => {
-                if args.is_empty() { panic!("repeat() requires count"); }
-                let count = self.to_usize(&args[0]).expect("repeat() expects integer count");
+                if args.is_empty() {
+                    panic!("repeat() requires count");
+                }
+                let count = self
+                    .to_usize(&args[0])
+                    .expect("repeat() expects integer count");
                 Value::String(s.repeat(count))
             }
-            _ => panic!("Runtime Error: Unknown non-mutating string method '{}'", method),
+            _ => panic!(
+                "Runtime Error: Unknown non-mutating string method '{}'",
+                method
+            ),
         }
     }
 
@@ -1069,9 +1302,18 @@ impl Fiber {
     fn string_method_mut(&self, s: String, method: &str, args: Vec<Value>) -> (Value, Value) {
         match method {
             "slice" => {
-                let start = self.to_usize(&args[0]).expect("slice() start must be integer");
-                let end = if args.len() > 1 { self.to_usize(&args[1]).expect("slice() stop must be integer") } else { s.len() };
-                if start > end || end > s.len() { panic!("Range out of bounds"); }
+                let start = self
+                    .to_usize(&args[0])
+                    .expect("slice() start must be integer");
+                let end = if args.len() > 1 {
+                    self.to_usize(&args[1])
+                        .expect("slice() stop must be integer")
+                } else {
+                    s.len()
+                };
+                if start > end || end > s.len() {
+                    panic!("Range out of bounds");
+                }
                 let removed = s[start..end].to_string();
                 let mut new_s = s;
                 new_s.replace_range(start..end, "");
@@ -1086,12 +1328,16 @@ impl Fiber {
         match method {
             "size" => Value::Numeric(crate::value::Number::I64(t.len() as i64)),
             "includes" => {
-                if args.is_empty() { panic!("includes() requires a value to search for"); }
+                if args.is_empty() {
+                    panic!("includes() requires a value to search for");
+                }
                 let target = &args[0];
                 Value::Bool(t.iter().any(|v| v.is_equal(target)))
             }
             "index" => {
-                if args.is_empty() { panic!("index() requires a value to search for"); }
+                if args.is_empty() {
+                    panic!("index() requires a value to search for");
+                }
                 let target = &args[0];
                 for (i, v) in t.iter().enumerate() {
                     if v.is_equal(target) {
@@ -1104,25 +1350,46 @@ impl Fiber {
                 if t.is_empty() {
                     return Value::Array(Vec::new());
                 }
-                
+
                 // Type consistency check
                 let first_val = &t[0];
                 for (i, val) in t.iter().enumerate().skip(1) {
                     if !self.is_same_basic_type(first_val, val) {
-                        panic!("Runtime Error: Cannot convert mixed-type tuple to array (element {} {:?} differs from first element {:?})", i, val, first_val);
+                        panic!(
+                            "Runtime Error: Cannot convert mixed-type tuple to array (element {} {:?} differs from first element {:?})",
+                            i, val, first_val
+                        );
                     }
                 }
                 Value::Array(t.to_vec())
             }
             "copy" => {
-                let start = if !args.is_empty() { self.to_usize(&args[0]).expect("copy() start must be integer") } else { 0 };
-                let end = if args.len() > 1 { self.to_usize(&args[1]).expect("copy() stop must be integer") } else { t.len() };
-                if start > end || end > t.len() { panic!("Range out of bounds"); }
+                let start = if !args.is_empty() {
+                    self.to_usize(&args[0])
+                        .expect("copy() start must be integer")
+                } else {
+                    0
+                };
+                let end = if args.len() > 1 {
+                    self.to_usize(&args[1])
+                        .expect("copy() stop must be integer")
+                } else {
+                    t.len()
+                };
+                if start > end || end > t.len() {
+                    panic!("Range out of bounds");
+                }
                 Value::Tuple(t[start..end].to_vec())
             }
             "join" => {
-                let delim = if args.is_empty() { "" } else {
-                    if let Value::String(s) = &args[0] { s.as_str() } else { panic!("join() separator must be string") }
+                let delim = if args.is_empty() {
+                    ""
+                } else {
+                    if let Value::String(s) = &args[0] {
+                        s.as_str()
+                    } else {
+                        panic!("join() separator must be string")
+                    }
                 };
                 let parts: Vec<String> = t.iter().map(|v| format!("{}", v)).collect();
                 Value::String(parts.join(delim))
@@ -1138,39 +1405,62 @@ impl Fiber {
             (Value::Bool(_), Value::Bool(_)) => true,
             (Value::Array(_), Value::Array(_)) => true, // Could be stricter but for now variants match
             (Value::Tuple(_), Value::Tuple(_)) => true,
-            (Value::Enum(e1), Value::Enum(e2)) => e1.enum_name == e2.enum_name && e1.variant_name == e2.variant_name,
+            (Value::Enum(e1), Value::Enum(e2)) => {
+                e1.enum_name == e2.enum_name && e1.variant_name == e2.variant_name
+            }
             (Value::Void, Value::Void) => true,
             _ => false,
         }
     }
 
     ///Map non-mutating methods: size, has, get
-    fn map_method(&self, map: std::collections::HashMap<Value, Value>, method: &str, args: Vec<Value>) -> Value {
+    fn map_method(
+        &self,
+        map: std::collections::HashMap<Value, Value>,
+        method: &str,
+        args: Vec<Value>,
+    ) -> Value {
         match method {
             "size" => Value::Numeric(crate::value::Number::I64(map.len() as i64)),
             "has" => {
-                if args.is_empty() { panic!("has() requires a key"); }
+                if args.is_empty() {
+                    panic!("has() requires a key");
+                }
                 Value::Bool(map.contains_key(&args[0]))
             }
             "get" => {
-                if args.is_empty() { panic!("get() requires a key"); }
+                if args.is_empty() {
+                    panic!("get() requires a key");
+                }
                 map.get(&args[0]).cloned().unwrap_or(Value::Void)
             }
-            _ => panic!("Runtime Error: Unknown non-mutating map method '{}'", method),
+            _ => panic!(
+                "Runtime Error: Unknown non-mutating map method '{}'",
+                method
+            ),
         }
     }
 
     /// Map mutating methods: set, remove
-    fn map_method_mut(&self, mut map: std::collections::HashMap<Value, Value>, method: &str, args: Vec<Value>) -> (Value, Value) {
+    fn map_method_mut(
+        &self,
+        mut map: std::collections::HashMap<Value, Value>,
+        method: &str,
+        args: Vec<Value>,
+    ) -> (Value, Value) {
         match method {
             "set" => {
-                if args.len() < 2 { panic!("set() requires key and value"); }
+                if args.len() < 2 {
+                    panic!("set() requires key and value");
+                }
                 map.insert(args[0].clone(), args[1].clone());
                 // Return the map itself for chaining
                 (Value::Map(map.clone()), Value::Map(map))
             }
             "remove" => {
-                if args.is_empty() { panic!("remove() requires a key"); }
+                if args.is_empty() {
+                    panic!("remove() requires a key");
+                }
                 let removed = map.remove(&args[0]).unwrap_or(Value::Void);
                 (removed, Value::Map(map))
             }
@@ -1179,28 +1469,47 @@ impl Fiber {
     }
 
     /// Set non-mutating methods: size, has
-    fn set_method(&self, set: std::collections::HashSet<Value>, method: &str, args: Vec<Value>) -> Value {
+    fn set_method(
+        &self,
+        set: std::collections::HashSet<Value>,
+        method: &str,
+        args: Vec<Value>,
+    ) -> Value {
         match method {
             "size" => Value::Numeric(crate::value::Number::I64(set.len() as i64)),
             "has" => {
-                if args.is_empty() { panic!("has() requires a value"); }
+                if args.is_empty() {
+                    panic!("has() requires a value");
+                }
                 Value::Bool(set.contains(&args[0]))
             }
-            _ => panic!("Runtime Error: Unknown non-mutating set method '{}'", method),
+            _ => panic!(
+                "Runtime Error: Unknown non-mutating set method '{}'",
+                method
+            ),
         }
     }
 
     /// Set mutating methods: add, remove
-    fn set_method_mut(&self, mut set: std::collections::HashSet<Value>, method: &str, args: Vec<Value>) -> (Value, Value) {
+    fn set_method_mut(
+        &self,
+        mut set: std::collections::HashSet<Value>,
+        method: &str,
+        args: Vec<Value>,
+    ) -> (Value, Value) {
         match method {
             "add" => {
-                if args.is_empty() { panic!("add() requires a value"); }
+                if args.is_empty() {
+                    panic!("add() requires a value");
+                }
                 set.insert(args[0].clone());
                 // Return the set itself for chaining
                 (Value::Set(set.clone()), Value::Set(set))
             }
             "remove" => {
-                if args.is_empty() { panic!("remove() requires a value"); }
+                if args.is_empty() {
+                    panic!("remove() requires a value");
+                }
                 let was_removed = set.remove(&args[0]);
                 (Value::Bool(was_removed), Value::Set(set))
             }
@@ -1212,7 +1521,11 @@ impl Fiber {
     fn to_usize(&self, val: &Value) -> Option<usize> {
         match val {
             Value::Numeric(crate::value::Number::I64(n)) => {
-                if *n >= 0 { Some(*n as usize) } else { None }
+                if *n >= 0 {
+                    Some(*n as usize)
+                } else {
+                    None
+                }
             }
             _ => None,
         }
@@ -1220,10 +1533,11 @@ impl Fiber {
 }
 
 pub struct VM {
-    pub globals: Vec<Value>,  // Main module globals
+    pub globals: Vec<Value>, // Main module globals
     pub fibers: VecDeque<Fiber>,
     pub current_fiber: Option<Fiber>,
-    pub custom_methods: Arc<Mutex<std::collections::HashMap<String, std::collections::HashMap<String, Value>>>>,
+    pub custom_methods:
+        Arc<Mutex<std::collections::HashMap<String, std::collections::HashMap<String, Value>>>>,
     pub last_value: Option<Value>,
 }
 
@@ -1233,7 +1547,7 @@ impl VM {
             name: "main_wrapper".to_string(),
             instructions: Arc::new(instructions),
             constants: Arc::new(constants),
-            home_globals: None,  // Main module uses VM.globals directly
+            home_globals: None, // Main module uses VM.globals directly
             param_count: 0,
             param_ownership: Vec::new(),
             reg_count,
@@ -1241,7 +1555,7 @@ impl VM {
         };
         let main_fiber = Fiber::new_main(main_func);
         let globals = vec![Value::Void; 1024];
-        
+
         Self {
             globals,
             fibers: VecDeque::new(),
@@ -1281,7 +1595,7 @@ impl VM {
                     self.current_fiber = Some(fiber);
                 }
             }
-            
+
             if self.current_fiber.is_none() && !self.fibers.is_empty() {
                 self.current_fiber = self.fibers.pop_front();
             }
