@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use ngn::lexer::{Lexer, Token};
+use ngn::lexer::{Lexer, Token, Span};
 
 #[derive(Debug)]
 struct Backend {
@@ -18,7 +18,7 @@ fn modifier_to_bit(modifier: &str) -> u32 {
         "declaration" => 1 << 0,
         "readonly" => 1 << 1,
         "static" => 1 << 2,
-        "mutable" => 1 << 3,
+        "defaultLibrary" => 1 << 3,
         _ => 0,
     }
 }
@@ -38,41 +38,46 @@ fn get_semantic_type(
     let is_method_call = matches!(prev_token, Some(Token::Period)) 
         && matches!(next_token, Some(Token::LParen));
 
-    // We calculate this first so we can return it in the tuple
     let mut modifiers = vec![];
 
-    // Declaration check
-    if let Some(Token::Var | Token::Const | Token::Static) = prev_token {
+    // Declaration check - determine if we are in a declaration
+    if let Some(Token::Const | Token::Static) = prev_token {
+        if matches!(token, Token::Identifier(_)) {
+            modifiers.push("declaration");
+            modifiers.push("readonly");
+        }
+    } else if let Some(Token::Var) = prev_token {
         if matches!(token, Token::Identifier(_)) {
             modifiers.push("declaration");
         }
     }
 
-    // Readonly check based on the token itself
+    // Modifiers for the tokens themselves
     match token {
-        Token::Const | Token::Fn | Token::Static 
-        | Token::Var | Token::Bool(_) => {
+        Token::Var | Token::Const | Token::Static => {
+            modifiers.push("declaration");
+        }
+        Token::Bool(_) => {
             modifiers.push("readonly");
         },
-        Token::Identifier(name) if name == "this" => {
+        Token::This => {
             modifiers.push("readonly");
+        }
+        Token::Echo | Token::Print | Token::Thread | Token::Channel | Token::Sleep 
+            | Token::State | Token::Map | Token::Set => {
+            modifiers.push("defaultLibrary");
         }
         _ => {}
     }
 
-    let mod_bitset = modifiers
-        .iter()
-        .map(|m| modifier_to_bit(m))
-        .fold(0, |acc, bit| acc | bit);
-
     let token_type = match token {
         // Keywords
-        Token::Break | Token::Enum | Token::Extend | Token::If 
-            | Token::Match | Token::Model 
-            | Token::Next | Token::Return 
-            | Token::Role | Token::While | Token::Loop | Token::For | Token::In | Token::Once
-            | Token::With | Token::Var | Token::Const | Token::Static | Token::Fn
-            | Token::Import | Token::From | Token::As | Token::Export | Token::Default => 0,
+        Token::Var | Token::Const | Token::Static | Token::Break | Token::Enum 
+            | Token::Extend | Token::If | Token::Match | Token::Model 
+            | Token::Next | Token::Return | Token::Role | Token::While 
+            | Token::Loop | Token::For | Token::In | Token::Once
+            | Token::With | Token::Fn
+            | Token::Import | Token::From | Token::As | Token::Export | Token::Default | Token::This => 0, // keyword
 
         Token::Float(_) | Token::Number(_) => 1,  // number
         Token::StringStart | Token::StringEnd | Token::StringPart(_) => 2,  // string
@@ -81,17 +86,17 @@ fn get_semantic_type(
             | Token::LBrace | Token::RBrace | Token::Colon | Token::Comma 
             | Token::Period | Token::DoubleColon => 6,
         Token::Echo | Token::Print | Token::Thread | Token::Channel | Token::Sleep 
-            | Token::State | Token::Map | Token::Set => 10,  // builtin
+            | Token::State | Token::Map | Token::Set => 4, // function
         Token::Identifier(_) => {
             if prev_is_class_keyword || is_likely_class {
-                12  // class
+                9  // class
             } else if matches!(next_token, Some(Token::LParen)) || is_method_call {
-                4  // function (call)
+                4  // function
             } else {
-                3  // variable (reference)
+                3  // variable
             }
         }
-        Token::Bool(_) => 11, // boolean
+        Token::Bool(_) => 0, // keyword (for fallback)
 
         // Operators
         Token::Power | Token::EqualEqual | Token::NotEqual | Token::LessThanEqual | Token::GreaterThanEqual
@@ -101,11 +106,15 @@ fn get_semantic_type(
         | Token::PercentEqual | Token::StarStarEqual | Token::CaretEqual
         | Token::FatArrow | Token::LArrow | Token::Pipe | Token::Bang => 5,
 
-        Token::Regex(_) => 9,
+        Token::Regex(_) => 10,
         Token::InterpolationStart | Token::InterpolationEnd => 3, // variable-like for braces
-        Token::This => 0, // keyword
         _ => 3,
     };
+
+    let mod_bitset = modifiers
+        .iter()
+        .map(|m| modifier_to_bit(m))
+        .fold(0, |acc, bit| acc | bit);
 
     (token_type, mod_bitset)
 }
@@ -123,25 +132,23 @@ impl LanguageServer for Backend {
                         SemanticTokensOptions {
                             legend: SemanticTokensLegend {
                                 token_types: vec![
-                                    "keyword".into(), // 0
-                                    "number".into(), // 1
-                                    "string".into(), // 2
-                                    "variable".into(), // 3
-                                    "function".into(), // 4
-                                    "operator".into(), // 5
-                                    "punctuation".into(), // 6
-                                    "comment".into(), // 7
-                                    "type".into(), // 8
-                                    "regex".into(), // 9
-                                    "builtin".into(), // 10
-                                    "boolean".into(), // 11
-                                    "class".into(), // 12
+                                    "keyword".into(),    // 0
+                                    "number".into(),     // 1
+                                    "string".into(),     // 2
+                                    "variable".into(),   // 3
+                                    "function".into(),   // 4
+                                    "operator".into(),   // 5
+                                    "punctuation".into(),// 6
+                                    "comment".into(),    // 7
+                                    "type".into(),       // 8
+                                    "class".into(),      // 9
+                                    "regexp".into(),     // 10
                                 ],
                                 token_modifiers: vec![
-                                    "declaration".into(),
-                                    "readonly".into(),
-                                    "static".into(),
-                                    "mutable".into(),
+                                    "declaration".into(),    // 0
+                                    "readonly".into(),       // 1
+                                    "static".into(),         // 2
+                                    "defaultLibrary".into(), // 3
                                 ],
                             },
                             full: Some(SemanticTokensFullOptions::Bool(true)),
@@ -176,11 +183,112 @@ impl LanguageServer for Backend {
 
     async fn semantic_tokens_full(
         &self,
-        _params: SemanticTokensParams,
+        params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>> {
-        // TODO: Re-implement semantic tokens with proper position tracking
-        // For now, disable semantic tokens and rely on TextMate grammar
-        Ok(None)
+        let uri = params.text_document.uri.to_string();
+    
+        let documents = self.documents.read().await;
+        let text = match documents.get(&uri) {
+            Some(t) => t.clone(),
+            None => return Ok(None),
+        };
+        drop(documents);
+        
+        // Collect all tokens with their spans
+        let mut lexer = Lexer::new(&text);
+        let mut tokens_with_spans: Vec<(Token, Span)> = Vec::new();
+        
+        loop {
+            let (token, span) = lexer.next_token_with_span();
+            if token == Token::EOF {
+                break;
+            }
+            tokens_with_spans.push((token, span));
+        }
+        
+        // Build line/column index from the source (character-based for LSP)
+        let mut line_starts = vec![0];
+        let mut char_count = 0;
+        for (i, c) in text.char_indices() {
+            char_count += 1;
+            if c == '\n' {
+                line_starts.push(char_count);
+            }
+        }
+
+        // Helper to convert byte offset to (line, character_offset)
+        let byte_to_line_col = |byte_offset: usize| -> (u32, u32) {
+            let mut current_line = 0;
+            let mut current_line_start_byte = 0;
+            let mut line_count = 0;
+            
+            for (i, c) in text.char_indices() {
+                if i >= byte_offset {
+                    break;
+                }
+                if c == '\n' {
+                    line_count += 1;
+                    current_line_start_byte = i + 1;
+                }
+            }
+            
+            // Re-calculate character offset in the line
+            let line_text = &text[current_line_start_byte..byte_offset];
+            let char_offset = line_text.chars().count();
+            
+            (line_count, char_offset as u32)
+        };
+        
+        let mut semantic_tokens = Vec::new();
+        let mut prev_line = 0u32;
+        let mut prev_char = 0u32;
+        
+        for i in 0..tokens_with_spans.len() {
+            let (ref token, span) = tokens_with_spans[i];
+            let prev_token = if i > 0 { Some(&tokens_with_spans[i - 1].0) } else { None };
+            let next_token = tokens_with_spans.get(i + 1).map(|(t, _)| t);
+
+            // Skip newlines in semantic tokens
+            if matches!(token, Token::Newline) {
+                continue;
+            }
+
+            let (line, char) = byte_to_line_col(span.start);
+            
+            let delta_line = line - prev_line;
+            let delta_start = if delta_line == 0 {
+                char - prev_char
+            } else {
+                char
+            };
+
+            let (token_type, token_modifiers_bitset) = get_semantic_type(
+                token, 
+                prev_token, 
+                next_token
+            );
+            
+            let token_text = &text[span.start..span.end];
+            let length = token_text.chars().count() as u32;
+            
+            semantic_tokens.push(SemanticToken {
+                delta_line,
+                delta_start,
+                length,
+                token_type,
+                token_modifiers_bitset
+            });
+            
+            prev_line = line;
+            prev_char = char;
+        }
+
+        eprintln!("Generated {} semantic tokens for {}", semantic_tokens.len(), uri);
+        
+        Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
+            result_id: None,
+            data: semantic_tokens,
+        })))
     }
 
     async fn shutdown(&self) -> Result<()> {

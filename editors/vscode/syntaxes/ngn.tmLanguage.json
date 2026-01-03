@@ -8,16 +8,19 @@
       "include": "#strings"
     },
     {
+      "include": "#interpolation"
+    },
+    {
       "include": "#keywords"
+    },
+    {
+      "include": "#numbers"
     },
     {
       "include": "#builtins"
     },
     {
       "include": "#booleans"
-    },
-    {
-      "include": "#numbers"
     },
     {
       "include": "#operators"
@@ -71,49 +74,47 @@
         }
       ]
     },
-    "keywords": {
-      "patterns": [
-        {
-          "match": "\\b(fn|return|if|else|while|loop|for|in|match|next|break|once|var|const|static|import|from|as|export|default|enum|model|role|extend|with|this)\\b",
-          "name": "keyword.control.ngn"
-        }
-      ]
-    },
-    "builtins": {
-      "patterns": [
-        {
-          "match": "\\b(print|echo|sleep|thread|channel|state|map|set)\\b",
-          "name": "support.function.builtin.ngn"
-        }
-      ]
-    },
-    "booleans": {
-      "patterns": [
-        {
-          "match": "\\b(true|false)\\b",
-          "name": "constant.language.boolean.ngn"
-        }
-      ]
-    },
-    "numbers": {
-      "patterns": [
-        {
-          "match": "\\b[0-9]+\\.[0-9]+\\b",
-          "name": "constant.numeric.float.ngn"
-        },
-        {
-          "match": "\\b[0-9]+\\b",
-          "name": "constant.numeric.integer.ngn"
-        }
-      ]
-    },
-    "operators": {
-      "patterns": [
-        {
-          "match": "(=>|<-|==|!=|<=|>=|\\+\\+|--|\\+=|-=|\\*=|/=|%=)",
-          "name": "keyword.operator.ngn"
-        }
-      ]
-    }
+    "patterns": [
+      {
+        "match": "\\b(var|const|static|fn|return|if|else|while|loop|for|in|match|next|break|once|import|from|as|export|default|enum|model|role|extend|with|this)\\b",
+        "name": "keyword.control.ngn"
+      }
+    ]
+  },
+  "builtins": {
+    "patterns": [
+      {
+        "match": "\\b(print|echo|sleep|thread|channel|state|map|set)\\b",
+        "name": "support.function.builtin.ngn"
+      }
+    ]
+  },
+  "booleans": {
+    "patterns": [
+      {
+        "match": "\\b(true|false)\\b",
+        "name": "constant.language.boolean.ngn"
+      }
+    ]
+  },
+  "numbers": {
+    "patterns": [
+      {
+        "match": "\\b[0-9]+\\.[0-9]+\\b",
+        "name": "constant.numeric.float.ngn"
+      },
+      {
+        "match": "\\b[0-9]+\\b",
+        "name": "constant.numeric.integer.ngn"
+      }
+    ]
+  },
+  "operators": {
+    "patterns": [
+      {
+        "match": "(=>|<-|==|!=|<=|>=|\\+\\+|--|\\+=|-=|\\*=|/=|%=)",
+        "name": "keyword.operator.ngn"
+      }
+    ]
   }
 }

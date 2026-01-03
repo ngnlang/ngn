@@ -27,7 +27,20 @@
         "scopeName": "source.ngn",
         "path": "./syntaxes/ngn.tmLanguage.json"
       }
-    ]
+    ],
+    "configurationDefaults": {
+      "[ngn]": {
+        "editor.semanticHighlighting.enabled": true
+      },
+      "editor.semanticTokenColorCustomizations": {
+        "rules": {
+          "keyword.declaration:ngn": "#569CD6",
+          "keyword.readonly:ngn": "#569CD6",
+          "function.defaultLibrary:ngn": "#4EC9B0",
+          "variable.readonly:ngn": "#7BB5E6"
+        }
+      }
+    }
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
