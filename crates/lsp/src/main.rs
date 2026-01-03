@@ -28,6 +28,7 @@ fn get_semantic_type(
     token: &Token,
     prev_token: Option<&Token>,
     next_token: Option<&Token>,
+    is_constant: bool,
 ) -> (u32, u32) {
     let prev_is_class_keyword = matches!(prev_token, 
         Some(Token::Enum | Token::Model | Token::Role | Token::Extend | Token::With));
@@ -66,6 +67,11 @@ fn get_semantic_type(
         Token::Echo | Token::Print | Token::Thread | Token::Channel | Token::Sleep 
             | Token::State | Token::Map | Token::Set => {
             modifiers.push("defaultLibrary");
+        }
+        Token::Identifier(_) => {
+            if is_constant {
+                modifiers.push("readonly");
+            }
         }
         _ => {}
     }
@@ -206,6 +212,9 @@ impl LanguageServer for Backend {
             tokens_with_spans.push((token, span));
         }
         
+        // Scope-based constant tracking
+        let mut scopes: Vec<std::collections::HashSet<String>> = vec![std::collections::HashSet::new()]; // Global scope
+
         // Build line/column index from the source (character-based for LSP)
         let mut line_starts = vec![0];
         let mut char_count = 0;
@@ -262,13 +271,92 @@ impl LanguageServer for Backend {
                 char
             };
 
+            // Handle Scopes
+            match token {
+                Token::LBrace => {
+                    scopes.push(std::collections::HashSet::new());
+                }
+                Token::RBrace => {
+                    if scopes.len() > 1 {
+                        scopes.pop();
+                    }
+                }
+                Token::Identifier(name) => {
+                    // Check if declaration of const/static
+                    if let Some(Token::Const | Token::Static) = prev_token {
+                         if let Some(current_scope) = scopes.last_mut() {
+                             current_scope.insert(name.clone());
+                         }
+                    }
+                    // Handle variable shadowing (remove from current scope if var)
+                    else if let Some(Token::Var) = prev_token {
+                         if let Some(current_scope) = scopes.last_mut() {
+                             current_scope.remove(name);
+                         }
+                    }
+                }
+                _ => {}
+            }
+
+            // Determine if current identifier is a constant lookup
+            let mut is_constant = false;
+            if let Token::Identifier(name) = token {
+                // Determine if declaration (in which case modifiers handle it) or usage
+                let is_decl = matches!(prev_token, Some(Token::Const | Token::Static | Token::Var));
+                if !is_decl {
+                    // Look up in scopes from top to bottom
+                    for scope in scopes.iter().rev() {
+                        if scope.contains(name) {
+                            is_constant = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
             let (token_type, token_modifiers_bitset) = get_semantic_type(
                 token, 
                 prev_token, 
-                next_token
+                next_token,
+                is_constant
             );
             
             let token_text = &text[span.start..span.end];
+            
+            // Special handling for Regex with flags (split into regex body + flags)
+            if let Token::Regex(content) = token {
+                if let Some(last_slash_idx) = content.rfind('/') {
+                    if last_slash_idx < content.len() - 1 {
+                        // We have flags
+                        let body_len = (text[span.start..(span.start + last_slash_idx + 1)].chars().count()) as u32;
+                        let flags_len = (text[(span.start + last_slash_idx + 1)..span.end].chars().count()) as u32;
+                        
+                        // Emit body (regexp)
+                        semantic_tokens.push(SemanticToken {
+                            delta_line,
+                            delta_start,
+                            length: body_len,
+                            token_type: 10, // regexp
+                            token_modifiers_bitset: 0,
+                        });
+                        
+                        // Emit flags (keyword.control or similar)
+                        semantic_tokens.push(SemanticToken {
+                            delta_line: 0,
+                            delta_start: body_len,
+                            length: flags_len,
+                            token_type: 0,  // keyword
+                            token_modifiers_bitset: 0,
+                        });
+                        
+                        // Update tracking for next token in loop
+                        prev_line = line;
+                        prev_char = char + body_len + flags_len; // Approx advance, though loop resets this
+                        continue;
+                    }
+                }
+            }
+
             let length = token_text.chars().count() as u32;
             
             semantic_tokens.push(SemanticToken {
