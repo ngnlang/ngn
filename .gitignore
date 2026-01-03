@@ -1,5 +1,5 @@
 /target
 *.ngn
 *.mod
-ngn
-main
+node_modules/
+editors/vscode/out/

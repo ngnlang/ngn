@@ -1,0 +1,46 @@
+{
+  "name": "vscode-ngn",
+  "displayName": "ngn",
+  "description": "Language support for NGN",
+  "version": "0.0.1",
+  "publisher": "ngnlang",
+  "engines": {
+    "vscode": "^1.106.0"
+  },
+  "main": "./out/extension",
+  "contributes": {
+    "languages": [
+      {
+        "id": "ngn",
+        "aliases": [
+          "ngn"
+        ],
+        "extensions": [
+          ".ngn"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "ngn",
+        "scopeName": "source.ngn",
+        "path": "./syntaxes/ngn.tmLanguage.json"
+      }
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/vscode": "^1.106.0",
+    "@vscode/vsce": "^2.20.0",
+    "typescript": "^5.9.3"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -watch -p ."
+  }
+}
