@@ -9,8 +9,12 @@ fn main() {
     let out_dir = env::var("OUT_DIR").unwrap();
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
 
-    // Look for pre-built runtime in target/embed/
+    // Look for pre-built runtime in workspace target/embed/
     let runtime_path = PathBuf::from(&manifest_dir)
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .join("target")
         .join("embed")
         .join("runtime_binary");
