@@ -66,7 +66,9 @@ fn get_semantic_type(
         }
         Token::Echo | Token::Print | Token::Thread | Token::Channel | Token::Sleep 
             | Token::State | Token::Map | Token::Set => {
-            modifiers.push("defaultLibrary");
+            if !matches!(prev_token, Some(Token::Period)) {
+                modifiers.push("defaultLibrary");
+            }
         }
         Token::Identifier(_) => {
             if is_constant {
