@@ -120,6 +120,34 @@ impl Analyzer {
         analyzer.register_enum(&result_enum, Span::default());
         analyzer.register_enum(&maybe_enum, Span::default());
 
+        // Built-in Request model for HTTP
+        analyzer.models.insert(
+            "Request".to_string(),
+            ModelDef {
+                name: "Request".to_string(),
+                fields: vec![
+                    ("method".to_string(), Type::String),
+                    ("path".to_string(), Type::String),
+                    ("query".to_string(), Type::String),
+                    ("headers".to_string(), Type::Any),
+                    ("body".to_string(), Type::String),
+                ],
+            },
+        );
+
+        // Built-in Response model for HTTP
+        analyzer.models.insert(
+            "Response".to_string(),
+            ModelDef {
+                name: "Response".to_string(),
+                fields: vec![
+                    ("status".to_string(), Type::I64),
+                    ("headers".to_string(), Type::Any),
+                    ("body".to_string(), Type::String),
+                ],
+            },
+        );
+
         analyzer
     }
 
@@ -584,6 +612,14 @@ impl Analyzer {
                             ("math", "sin") => Type::Function {
                                 params: vec![Type::F64],
                                 return_type: Box::new(Type::F64),
+                            },
+                            ("http", "serve") => Type::Function {
+                                params: vec![Type::I64, Type::Any], // port, handler
+                                return_type: Box::new(Type::Void),
+                            },
+                            ("http", "serve_tls") => Type::Function {
+                                params: vec![Type::I64, Type::Any, Type::String, Type::String], // port, handler, cert, key
+                                return_type: Box::new(Type::Void),
                             },
                             _ => Type::Function {
                                 params: vec![Type::Any],

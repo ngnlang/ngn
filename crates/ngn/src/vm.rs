@@ -325,6 +325,80 @@ impl Fiber {
                             args.push(self.get_reg_at(arg_start + i as u16));
                         }
 
+                        // Handle serve specially - it blocks forever and needs thread-safe globals
+                        if id == 4 || id == 5 || id == 6 {
+                            // NATIVE_SERVE, NATIVE_SERVE_TLS, or NATIVE_SERVE_ASYNC
+                            if args.is_empty() {
+                                panic!(
+                                    "Runtime Error: serve requires at least 2 arguments (port, handler)"
+                                );
+                            }
+
+                            let port = match &args[0] {
+                                Value::Numeric(crate::value::Number::I64(p)) => *p as u16,
+                                Value::Numeric(crate::value::Number::I32(p)) => *p as u16,
+                                _ => panic!("Runtime Error: serve port must be a number"),
+                            };
+
+                            let handler = args
+                                .get(1)
+                                .cloned()
+                                .expect("Runtime Error: serve requires a handler function");
+
+                            // Wrap globals and custom_methods in Arc<Mutex> for thread safety
+                            let shared_globals = Arc::new(Mutex::new(globals.clone()));
+                            let shared_methods = custom_methods.clone();
+
+                            if id == 4 {
+                                // HTTP (sync thread pool)
+                                if let Err(e) = crate::toolbox::http::serve(
+                                    port,
+                                    handler,
+                                    shared_globals,
+                                    shared_methods,
+                                ) {
+                                    panic!("Runtime Error: {}", e);
+                                }
+                            } else if id == 6 {
+                                // HTTP (async tokio)
+                                if let Err(e) = crate::toolbox::http::serve_async(
+                                    port,
+                                    handler,
+                                    shared_globals,
+                                    shared_methods,
+                                ) {
+                                    panic!("Runtime Error: {}", e);
+                                }
+                            } else {
+                                // HTTPS (id == 5)
+                                let cert = match args.get(2) {
+                                    Some(Value::String(s)) => s.clone(),
+                                    _ => panic!(
+                                        "Runtime Error: serve_tls requires cert path as 3rd arg"
+                                    ),
+                                };
+                                let key = match args.get(3) {
+                                    Some(Value::String(s)) => s.clone(),
+                                    _ => panic!(
+                                        "Runtime Error: serve_tls requires key path as 4th arg"
+                                    ),
+                                };
+                                if let Err(e) = crate::toolbox::http::serve_tls(
+                                    port,
+                                    handler,
+                                    &cert,
+                                    &key,
+                                    shared_globals,
+                                    shared_methods,
+                                ) {
+                                    panic!("Runtime Error: {}", e);
+                                }
+                            }
+                            // serve never returns (blocks forever), but just in case:
+                            self.set_reg_at(dest, Value::Void);
+                            return FiberStatus::Finished;
+                        }
+
                         // Dispatch to the appropriate toolbox function
                         let result = match id {
                             1 => crate::toolbox::math::abs(args),    // NATIVE_ABS

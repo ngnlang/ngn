@@ -577,14 +577,28 @@ impl Compiler {
             }
             ExprKind::ModelInstance { name, fields } => {
                 let model_name_idx = self.add_constant(Value::String(name.clone()));
-                let start_reg = self.reg_top;
+                // Collect field names and compile values into consecutive registers
                 let mut field_names = Vec::new();
-                for (f_name, f_expr) in fields {
+                for (f_name, _) in fields {
                     field_names.push(Value::String(f_name.clone()));
-                    self.compile_expr(f_expr);
                 }
-                let count = (self.reg_top - start_reg) as u8;
                 let fields_idx = self.add_constant(Value::Tuple(field_names));
+
+                // Use compile_args-like pattern for correct consecutive register placement
+                let start_reg = self.reg_top;
+                for (i, (_, f_expr)) in fields.iter().enumerate() {
+                    let expected_reg = start_reg + i as u16;
+                    let result_reg = self.compile_expr(f_expr);
+                    if result_reg != expected_reg {
+                        self.instructions
+                            .push(OpCode::Move(expected_reg, result_reg));
+                    }
+                    if self.reg_top <= expected_reg {
+                        self.reg_top = expected_reg + 1;
+                    }
+                }
+
+                let count = fields.len() as u8;
                 let dest = self.alloc_reg();
                 self.instructions.push(OpCode::CreateObject(
                     dest,
