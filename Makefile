@@ -1,10 +1,14 @@
 # Build ngn with embedded runtime
 # Usage: make release
 
-.PHONY: release clean runtime lsp all
+.PHONY: release clean runtime lsp all bench
 
 # Build everything
 all: release lsp
+
+# Run benchmarks
+bench:
+	cargo run --release -p ngn --bin bench
 
 # Build the minimal runtime first, then the full ngn with embedded runtime
 release: runtime
