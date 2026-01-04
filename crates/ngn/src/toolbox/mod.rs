@@ -7,7 +7,6 @@ pub const NATIVE_ASSERT: u16 = 2;
 pub const NATIVE_ROUND: u16 = 3;
 pub const NATIVE_SERVE: u16 = 4;
 pub const NATIVE_SERVE_TLS: u16 = 5;
-pub const NATIVE_SERVE_ASYNC: u16 = 6;
 
 use std::{collections::HashMap, path::Path};
 
@@ -72,7 +71,6 @@ pub fn get_native_id(module: &str, name: &str) -> Option<u16> {
         ("math", "round") => Some(NATIVE_ROUND),
         ("http", "serve") => Some(NATIVE_SERVE),
         ("http", "serve_tls") => Some(NATIVE_SERVE_TLS),
-        ("http", "serve_async") => Some(NATIVE_SERVE_ASYNC),
         _ => None,
     }
 }

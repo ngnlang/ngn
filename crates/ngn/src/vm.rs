@@ -326,8 +326,8 @@ impl Fiber {
                         }
 
                         // Handle serve specially - it blocks forever and needs thread-safe globals
-                        if id == 4 || id == 5 || id == 6 {
-                            // NATIVE_SERVE, NATIVE_SERVE_TLS, or NATIVE_SERVE_ASYNC
+                        if id == 4 || id == 5 {
+                            // NATIVE_SERVE or NATIVE_SERVE_TLS
                             if args.is_empty() {
                                 panic!(
                                     "Runtime Error: serve requires at least 2 arguments (port, handler)"
@@ -350,18 +350,8 @@ impl Fiber {
                             let shared_methods = custom_methods.clone();
 
                             if id == 4 {
-                                // HTTP (sync thread pool)
-                                if let Err(e) = crate::toolbox::http::serve(
-                                    port,
-                                    handler,
-                                    shared_globals,
-                                    shared_methods,
-                                ) {
-                                    panic!("Runtime Error: {}", e);
-                                }
-                            } else if id == 6 {
                                 // HTTP (async tokio)
-                                if let Err(e) = crate::toolbox::http::serve_async(
+                                if let Err(e) = crate::toolbox::http::serve(
                                     port,
                                     handler,
                                     shared_globals,

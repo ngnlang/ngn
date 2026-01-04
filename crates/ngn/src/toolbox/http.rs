@@ -1,17 +1,13 @@
 //! HTTP Server module for ngn toolbox
 //!
-//! Provides a simple HTTP server that can be started with `serve(port, handler)`
+//! Provides a high-performance async HTTP server that can be started with `serve(port, handler)`
 //! where handler is a function or closure that takes a Request and returns a Response.
-//!
-//! Also provides `serve_async(port, handler)` for high-performance async I/O using tokio.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader as TokioBufReader};
 use tokio::net::{TcpListener as TokioTcpListener, TcpStream as TokioTcpStream};
@@ -279,145 +275,142 @@ fn call_handler_closure(
     })
 }
 
-/// Start an HTTP server on the given port
+/// Start a high-performance HTTP server on the given port
 /// This function blocks until Ctrl+C is pressed, then gracefully shuts down
-/// Uses a fixed thread pool for handling requests (much faster than thread-per-request)
+/// Uses async tokio runtime for maximum performance
 pub fn serve(
     port: u16,
     handler: Value,
     globals: Arc<Mutex<Vec<Value>>>,
     custom_methods: Arc<Mutex<HashMap<String, HashMap<String, Value>>>>,
 ) -> Result<(), String> {
-    // Bind to IPv4
+    // Build tokio runtime with optimized settings
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(num_cpus::get())
+        .max_blocking_threads(1024) // Large pool for fiber execution
+        .enable_all()
+        .build()
+        .map_err(|e| format!("Failed to create tokio runtime: {}", e))?;
+
+    // Clone globals once - handlers shouldn't mutate global state
+    let globals_snapshot = globals.lock().unwrap().clone();
+    let methods_snapshot = custom_methods.lock().unwrap().clone();
+
+    runtime.block_on(
+        async move { serve_inner(port, handler, globals_snapshot, methods_snapshot).await },
+    )
+}
+
+async fn serve_inner(
+    port: u16,
+    handler: Value,
+    globals: Vec<Value>,
+    custom_methods: HashMap<String, HashMap<String, Value>>,
+) -> Result<(), String> {
     let addr = format!("0.0.0.0:{}", port);
-    let listener =
-        TcpListener::bind(&addr).map_err(|e| format!("Failed to bind to {}: {}", addr, e))?;
+    let listener = TokioTcpListener::bind(&addr)
+        .await
+        .map_err(|e| format!("Failed to bind to {}: {}", addr, e))?;
 
-    // Set non-blocking mode for graceful shutdown
-    listener
-        .set_nonblocking(true)
-        .map_err(|e| format!("Failed to set non-blocking: {}", e))?;
-
-    // Determine worker pool size (default: number of CPU cores)
-    let num_workers = num_cpus::get();
     println!(
-        "HTTP server listening on http://localhost:{} ({} workers)",
-        port, num_workers
+        "HTTP server listening on http://localhost:{} (async, {} workers)",
+        port,
+        num_cpus::get()
     );
 
-    // Shutdown flag and active request counter
-    let shutdown = Arc::new(AtomicBool::new(false));
-    let active_requests = Arc::new(AtomicUsize::new(0));
+    // Wrap in Arc for sharing across tasks (no Mutex needed - read-only)
+    let globals = Arc::new(globals);
+    let custom_methods = Arc::new(custom_methods);
 
-    // Create work channel (bounded to prevent memory explosion under load)
-    let (sender, receiver) = crossbeam_channel::bounded::<TcpStream>(1024);
+    // Accept loop with graceful shutdown
+    loop {
+        tokio::select! {
+            result = listener.accept() => {
+                match result {
+                    Ok((stream, _)) => {
+                        let handler = handler.clone();
+                        let globals = globals.clone();
+                        let custom_methods = custom_methods.clone();
 
-    // Set up Ctrl+C handler
-    let shutdown_flag = shutdown.clone();
-    ctrlc::set_handler(move || {
-        println!("\nShutting down server...");
-        shutdown_flag.store(true, Ordering::SeqCst);
-    })
-    .map_err(|e| format!("Failed to set Ctrl+C handler: {}", e))?;
-
-    // Spawn worker threads
-    let mut workers = Vec::with_capacity(num_workers);
-    for _ in 0..num_workers {
-        let receiver = receiver.clone();
-        let handler = handler.clone();
-        let globals = globals.clone();
-        let custom_methods = custom_methods.clone();
-        let shutdown = shutdown.clone();
-        let active = active_requests.clone();
-
-        let worker = thread::spawn(move || {
-            // Each worker loops receiving connections from the channel
-            while !shutdown.load(Ordering::Relaxed) {
-                match receiver.recv_timeout(Duration::from_millis(100)) {
-                    Ok(stream) => {
-                        active.fetch_add(1, Ordering::SeqCst);
-                        handle_connection(
-                            stream,
-                            handler.clone(),
-                            globals.clone(),
-                            custom_methods.clone(),
-                        );
-                        active.fetch_sub(1, Ordering::SeqCst);
+                        // Spawn async task for each connection
+                        tokio::spawn(async move {
+                            handle_connection_async_fast(stream, handler, globals, custom_methods).await;
+                        });
                     }
-                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                        // Check shutdown flag and continue
-                        continue;
-                    }
-                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
-                        // Channel closed, exit worker
-                        break;
+                    Err(e) => {
+                        eprintln!("Connection error: {}", e);
                     }
                 }
             }
-        });
-        workers.push(worker);
-    }
-
-    // Accept connections in a loop and dispatch to workers
-    while !shutdown.load(Ordering::SeqCst) {
-        match listener.accept() {
-            Ok((stream, _)) => {
-                // Send to worker pool (non-blocking with bounded channel)
-                if let Err(e) = sender.try_send(stream) {
-                    match e {
-                        crossbeam_channel::TrySendError::Full(_) => {
-                            // Queue full - this is backpressure, could log or drop
-                            eprintln!("Warning: Worker queue full, dropping connection");
-                        }
-                        crossbeam_channel::TrySendError::Disconnected(_) => {
-                            break;
-                        }
-                    }
-                }
-            }
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                // No connections ready, sleep briefly and check shutdown flag
-                thread::sleep(Duration::from_millis(1));
-            }
-            Err(e) => {
-                if !shutdown.load(Ordering::SeqCst) {
-                    eprintln!("Connection error: {}", e);
-                }
+            _ = tokio::signal::ctrl_c() => {
+                println!("\nShutting down server...");
+                break;
             }
         }
-    }
-
-    // Drop sender to signal workers to exit
-    drop(sender);
-
-    // Wait for workers to finish (with timeout)
-    let wait_start = std::time::Instant::now();
-    let timeout = Duration::from_secs(30);
-
-    for worker in workers {
-        let remaining = timeout.saturating_sub(wait_start.elapsed());
-        if remaining.is_zero() {
-            println!("Timeout waiting for workers, forcing shutdown");
-            break;
-        }
-        let _ = worker.join();
-    }
-
-    // Wait for any remaining active requests
-    while active_requests.load(Ordering::SeqCst) > 0 {
-        if wait_start.elapsed() > timeout {
-            let remaining = active_requests.load(Ordering::SeqCst);
-            println!(
-                "Timeout waiting for {} active requests, forcing shutdown",
-                remaining
-            );
-            break;
-        }
-        thread::sleep(Duration::from_millis(100));
     }
 
     println!("Server stopped gracefully");
     Ok(())
+}
+
+/// Handle a single HTTP connection asynchronously (optimized - zero-lock)
+async fn handle_connection_async_fast(
+    mut stream: TokioTcpStream,
+    handler: Value,
+    globals: Arc<Vec<Value>>,
+    custom_methods: Arc<HashMap<String, HashMap<String, Value>>>,
+) {
+    // Parse request asynchronously
+    let request = match parse_request_async(&mut stream).await {
+        Some(req) => req,
+        None => return,
+    };
+
+    // Execute handler in blocking thread pool (Fiber is sync)
+    let response = tokio::task::spawn_blocking(move || {
+        // Clone globals for this handler (cheap - they're mostly small)
+        let mutex_globals = Arc::new(Mutex::new((*globals).clone()));
+        let mutex_methods = Arc::new(Mutex::new((*custom_methods).clone()));
+
+        match handler {
+            Value::Function(func) => {
+                call_handler_function(&func, request, mutex_globals, mutex_methods)
+            }
+            Value::Closure(closure) => {
+                call_handler_closure(&closure, request, mutex_globals, mutex_methods)
+            }
+            _ => {
+                let mut fields = std::collections::HashMap::new();
+                fields.insert(
+                    "status".to_string(),
+                    Value::Numeric(crate::value::Number::I64(500)),
+                );
+                fields.insert(
+                    "body".to_string(),
+                    Value::String("Internal Server Error: Handler not callable".to_string()),
+                );
+                fields.insert("headers".to_string(), Value::Map(HashMap::new()));
+                ObjectData::into_value("Response".to_string(), fields)
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        let mut fields = std::collections::HashMap::new();
+        fields.insert(
+            "status".to_string(),
+            Value::Numeric(crate::value::Number::I64(500)),
+        );
+        fields.insert(
+            "body".to_string(),
+            Value::String("Handler panicked".to_string()),
+        );
+        fields.insert("headers".to_string(), Value::Map(HashMap::new()));
+        ObjectData::into_value("Response".to_string(), fields)
+    });
+
+    // Write response asynchronously
+    write_response_async(&mut stream, &response).await;
 }
 
 /// Start an HTTPS server with TLS
@@ -630,128 +623,6 @@ async fn write_response_async(stream: &mut TokioTcpStream, response: &Value) {
 
     let _ = stream.write_all(response_str.as_bytes()).await;
     let _ = stream.flush().await;
-}
-
-/// Start a high-performance async HTTP server using tokio
-/// This provides much better performance than the sync thread pool version
-pub fn serve_async(
-    port: u16,
-    handler: Value,
-    globals: Arc<Mutex<Vec<Value>>>,
-    custom_methods: Arc<Mutex<HashMap<String, HashMap<String, Value>>>>,
-) -> Result<(), String> {
-    // Build tokio runtime
-    let runtime = tokio::runtime::Runtime::new()
-        .map_err(|e| format!("Failed to create tokio runtime: {}", e))?;
-
-    runtime.block_on(async move { serve_async_inner(port, handler, globals, custom_methods).await })
-}
-
-async fn serve_async_inner(
-    port: u16,
-    handler: Value,
-    globals: Arc<Mutex<Vec<Value>>>,
-    custom_methods: Arc<Mutex<HashMap<String, HashMap<String, Value>>>>,
-) -> Result<(), String> {
-    let addr = format!("0.0.0.0:{}", port);
-    let listener = TokioTcpListener::bind(&addr)
-        .await
-        .map_err(|e| format!("Failed to bind to {}: {}", addr, e))?;
-
-    println!(
-        "HTTP server listening on http://localhost:{} (async/tokio)",
-        port
-    );
-
-    // Shutdown flag
-    let shutdown = Arc::new(AtomicBool::new(false));
-    let shutdown_flag = shutdown.clone();
-
-    // Set up Ctrl+C handler
-    tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.ok();
-        println!("\nShutting down server...");
-        shutdown_flag.store(true, Ordering::SeqCst);
-    });
-
-    // Accept loop
-    while !shutdown.load(Ordering::Relaxed) {
-        tokio::select! {
-            result = listener.accept() => {
-                match result {
-                    Ok((stream, _)) => {
-                        let handler = handler.clone();
-                        let globals = globals.clone();
-                        let custom_methods = custom_methods.clone();
-
-                        // Spawn async task for each connection
-                        tokio::spawn(async move {
-                            handle_connection_async(stream, handler, globals, custom_methods).await;
-                        });
-                    }
-                    Err(e) => {
-                        eprintln!("Connection error: {}", e);
-                    }
-                }
-            }
-            _ = tokio::time::sleep(Duration::from_millis(100)) => {
-                // Check shutdown flag periodically
-            }
-        }
-    }
-
-    println!("Server stopped gracefully");
-    Ok(())
-}
-
-/// Handle a single HTTP connection asynchronously
-async fn handle_connection_async(
-    mut stream: TokioTcpStream,
-    handler: Value,
-    globals: Arc<Mutex<Vec<Value>>>,
-    custom_methods: Arc<Mutex<HashMap<String, HashMap<String, Value>>>>,
-) {
-    // Parse request asynchronously
-    let request = match parse_request_async(&mut stream).await {
-        Some(req) => req,
-        None => return,
-    };
-
-    // Execute handler in blocking thread pool (Fiber is sync)
-    let response = tokio::task::spawn_blocking(move || match handler {
-        Value::Function(func) => call_handler_function(&func, request, globals, custom_methods),
-        Value::Closure(closure) => call_handler_closure(&closure, request, globals, custom_methods),
-        _ => {
-            let mut fields = std::collections::HashMap::new();
-            fields.insert(
-                "status".to_string(),
-                Value::Numeric(crate::value::Number::I64(500)),
-            );
-            fields.insert(
-                "body".to_string(),
-                Value::String("Internal Server Error: Handler not callable".to_string()),
-            );
-            fields.insert("headers".to_string(), Value::Map(HashMap::new()));
-            ObjectData::into_value("Response".to_string(), fields)
-        }
-    })
-    .await
-    .unwrap_or_else(|_| {
-        let mut fields = std::collections::HashMap::new();
-        fields.insert(
-            "status".to_string(),
-            Value::Numeric(crate::value::Number::I64(500)),
-        );
-        fields.insert(
-            "body".to_string(),
-            Value::String("Handler panicked".to_string()),
-        );
-        fields.insert("headers".to_string(), Value::Map(HashMap::new()));
-        ObjectData::into_value("Response".to_string(), fields)
-    });
-
-    // Write response asynchronously
-    write_response_async(&mut stream, &response).await;
 }
 
 use super::ToolboxModule;
