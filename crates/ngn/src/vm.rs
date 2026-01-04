@@ -134,6 +134,27 @@ impl Fiber {
         }
     }
 
+    /// Run up to max_steps instructions, returning early if fiber completes or suspends.
+    /// Returns (final_status, steps_executed) to enable cooperative async execution.
+    pub fn run_steps(
+        &mut self,
+        globals: &mut Vec<Value>,
+        custom_methods: &Arc<
+            Mutex<std::collections::HashMap<String, std::collections::HashMap<String, Value>>>,
+        >,
+        max_steps: usize,
+    ) -> (FiberStatus, usize) {
+        for step in 0..max_steps {
+            let status = self.run_step(globals, custom_methods);
+            match status {
+                FiberStatus::Running => continue,
+                _ => return (status, step + 1),
+            }
+        }
+        // Reached max_steps, still running
+        (FiberStatus::Running, max_steps)
+    }
+
     pub fn run_step(
         &mut self,
         globals: &mut Vec<Value>,
