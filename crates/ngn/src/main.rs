@@ -188,12 +188,6 @@ fn main() {
         } else if let StatementKind::ImportDefault { name, source } = &stmt.kind {
             // Load the module
             let exports = load_module(source, &base_path, &mut module_cache);
-            println!(
-                "DEBUG: Importing default from {} as {}. Exports keys: {:?}",
-                source,
-                name,
-                exports.keys()
-            );
 
             if let Some(val) = exports.get("default") {
                 let const_idx = compiler.add_constant(val.clone());
