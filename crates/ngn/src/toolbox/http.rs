@@ -20,7 +20,7 @@ async fn call_handler_async(
     closure: &Closure,
     request: Value,
     globals: Arc<Vec<Value>>,
-    custom_methods: Arc<HashMap<String, HashMap<String, Value>>>,
+    shared_methods: Arc<Mutex<HashMap<String, HashMap<String, Value>>>>,
 ) -> Value {
     const BATCH_SIZE: usize = 100; // Run 100 instructions before yielding
 
@@ -32,7 +32,7 @@ async fn call_handler_async(
 
     // Clone globals for this handler (each handler gets its own copy)
     let mut handler_globals = (*globals).clone();
-    let shared_methods = Arc::new(Mutex::new((*custom_methods).clone()));
+    // Reuse the shared methods Arc directly (no clone needed!)
 
     // Run fiber with cooperative yielding
     loop {
@@ -117,9 +117,10 @@ async fn serve_inner(
         num_cpus::get()
     );
 
-    // Wrap in Arc for sharing across tasks (no Mutex needed - read-only)
+    // Wrap in Arc for sharing across tasks
     let globals = Arc::new(globals);
-    let custom_methods = Arc::new(custom_methods);
+    // Wrap in Arc<Mutex> once - shared by ALL requests (no per-request clone!)
+    let custom_methods = Arc::new(Mutex::new(custom_methods));
 
     // Accept loop with graceful shutdown
     loop {
@@ -157,7 +158,7 @@ async fn handle_connection_async_fast(
     mut stream: TokioTcpStream,
     handler: Value,
     globals: Arc<Vec<Value>>,
-    custom_methods: Arc<HashMap<String, HashMap<String, Value>>>,
+    custom_methods: Arc<Mutex<HashMap<String, HashMap<String, Value>>>>,
 ) {
     use tokio::time::{Duration, timeout};
 
@@ -208,7 +209,7 @@ async fn execute_handler(
     handler: &Value,
     request: Value,
     globals: &Arc<Vec<Value>>,
-    custom_methods: &Arc<HashMap<String, HashMap<String, Value>>>,
+    custom_methods: &Arc<Mutex<HashMap<String, HashMap<String, Value>>>>,
 ) -> Value {
     match handler {
         Value::Function(func) => {
@@ -317,7 +318,8 @@ async fn serve_tls_inner(
 
     // Wrap in Arc for sharing across tasks
     let globals = Arc::new(globals);
-    let custom_methods = Arc::new(custom_methods);
+    // Wrap in Arc<Mutex> once - shared by ALL requests
+    let custom_methods = Arc::new(Mutex::new(custom_methods));
 
     // Accept loop with graceful shutdown
     loop {
@@ -364,7 +366,7 @@ async fn handle_tls_connection_async<S>(
     mut stream: tokio_rustls::server::TlsStream<S>,
     handler: Value,
     globals: Arc<Vec<Value>>,
-    custom_methods: Arc<HashMap<String, HashMap<String, Value>>>,
+    custom_methods: Arc<Mutex<HashMap<String, HashMap<String, Value>>>>,
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
