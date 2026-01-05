@@ -152,30 +152,74 @@ async fn serve_inner(
     Ok(())
 }
 
-/// Handle a single HTTP connection asynchronously (Phase 2: cooperative yielding)
+/// Handle a single HTTP connection asynchronously with Keep-Alive support
 async fn handle_connection_async_fast(
     mut stream: TokioTcpStream,
     handler: Value,
     globals: Arc<Vec<Value>>,
     custom_methods: Arc<HashMap<String, HashMap<String, Value>>>,
 ) {
-    // Parse request asynchronously
-    let request = match parse_request_async(&mut stream).await {
-        Some(req) => req,
-        None => return,
-    };
+    use tokio::time::{Duration, timeout};
 
-    // Execute handler with cooperative yielding (no blocking threads!)
-    let response = match handler {
+    // Keep-Alive: handle multiple requests on the same connection
+    const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(30);
+    const MAX_REQUESTS_PER_CONNECTION: usize = 100;
+
+    let mut request_count = 0;
+
+    loop {
+        request_count += 1;
+
+        // Limit requests per connection to prevent resource exhaustion
+        if request_count > MAX_REQUESTS_PER_CONNECTION {
+            break;
+        }
+
+        // Parse request with timeout for idle connections
+        let request = match timeout(
+            KEEP_ALIVE_TIMEOUT,
+            parse_request_async_keepalive(&mut stream),
+        )
+        .await
+        {
+            Ok(Some((req, should_close))) => {
+                if should_close {
+                    // Client requested connection close, handle this last request
+                    let response = execute_handler(&handler, req, &globals, &custom_methods).await;
+                    write_response_async_keepalive(&mut stream, &response, true).await;
+                    break;
+                }
+                req
+            }
+            Ok(None) => break, // Connection closed or parse error
+            Err(_) => break,   // Timeout - close idle connection
+        };
+
+        // Execute handler
+        let response = execute_handler(&handler, request, &globals, &custom_methods).await;
+
+        // Write response with keep-alive
+        write_response_async_keepalive(&mut stream, &response, false).await;
+    }
+}
+
+/// Execute the handler for a request
+async fn execute_handler(
+    handler: &Value,
+    request: Value,
+    globals: &Arc<Vec<Value>>,
+    custom_methods: &Arc<HashMap<String, HashMap<String, Value>>>,
+) -> Value {
+    match handler {
         Value::Function(func) => {
             let closure = Closure {
                 function: func.clone(),
                 upvalues: vec![],
             };
-            call_handler_async(&closure, request, globals, custom_methods).await
+            call_handler_async(&closure, request, globals.clone(), custom_methods.clone()).await
         }
         Value::Closure(closure) => {
-            call_handler_async(&closure, request, globals, custom_methods).await
+            call_handler_async(closure, request, globals.clone(), custom_methods.clone()).await
         }
         _ => {
             let mut fields = std::collections::HashMap::new();
@@ -190,10 +234,7 @@ async fn handle_connection_async_fast(
             fields.insert("headers".to_string(), Value::Map(HashMap::new()));
             ObjectData::into_value("Response".to_string(), fields)
         }
-    };
-
-    // Write response asynchronously
-    write_response_async(&mut stream, &response).await;
+    }
 }
 
 /// Start a high-performance HTTPS server with TLS
@@ -457,19 +498,29 @@ async fn handle_tls_connection_async<S>(
         _ => "OK",
     };
 
-    let mut response_str = format!("HTTP/1.1 {} {}\r\n", status, status_text);
+    // Pre-allocate with estimated capacity
+    let header_count = if let Value::Map(h) = &resp_headers {
+        h.len()
+    } else {
+        0
+    };
+    let estimated_size = 128 + header_count * 64 + resp_body.len();
+    let mut response_str = String::with_capacity(estimated_size);
+
+    use std::fmt::Write;
+    let _ = write!(response_str, "HTTP/1.1 {} {}\r\n", status, status_text);
 
     // Add headers
     if let Value::Map(h) = resp_headers {
         for (k, v) in h {
             if let (Value::String(key), Value::String(val)) = (k, v) {
-                response_str.push_str(&format!("{}: {}\r\n", key, val));
+                let _ = write!(response_str, "{}: {}\r\n", key, val);
             }
         }
     }
 
     // Add content-length and body
-    response_str.push_str(&format!("Content-Length: {}\r\n", resp_body.len()));
+    let _ = write!(response_str, "Content-Length: {}\r\n", resp_body.len());
     response_str.push_str("Connection: close\r\n");
     response_str.push_str("\r\n");
     response_str.push_str(&resp_body);
@@ -479,11 +530,12 @@ async fn handle_tls_connection_async<S>(
 }
 
 // ============================================================================
-// Async Helper Functions
+// Async Helper Functions (Keep-Alive)
 // ============================================================================
 
-/// Parse an HTTP request from an async TCP stream
-async fn parse_request_async(stream: &mut TokioTcpStream) -> Option<Value> {
+/// Parse HTTP request with Keep-Alive awareness
+/// Returns (Request, should_close) where should_close indicates if client wants to close connection
+async fn parse_request_async_keepalive(stream: &mut TokioTcpStream) -> Option<(Value, bool)> {
     let mut reader = TokioBufReader::new(stream);
 
     // Read request line
@@ -500,6 +552,14 @@ async fn parse_request_async(stream: &mut TokioTcpStream) -> Option<Value> {
     let method = parts[0].to_string();
     let full_path = parts[1].to_string();
 
+    // Detect HTTP version for default keep-alive behavior
+    let http_version = if parts.len() >= 3 {
+        parts[2]
+    } else {
+        "HTTP/1.0"
+    };
+    let default_keepalive = http_version == "HTTP/1.1"; // HTTP/1.1 defaults to keep-alive
+
     // Split path and query
     let (path, query) = if let Some(idx) = full_path.find('?') {
         (full_path[..idx].to_string(), full_path[idx..].to_string())
@@ -510,6 +570,7 @@ async fn parse_request_async(stream: &mut TokioTcpStream) -> Option<Value> {
     // Read headers
     let mut headers: HashMap<Value, Value> = HashMap::new();
     let mut content_length: usize = 0;
+    let mut connection_close = !default_keepalive;
 
     loop {
         let mut line = String::new();
@@ -525,6 +586,9 @@ async fn parse_request_async(stream: &mut TokioTcpStream) -> Option<Value> {
             let value = trimmed[idx + 1..].trim().to_string();
             if key == "content-length" {
                 content_length = value.parse().unwrap_or(0);
+            }
+            if key == "connection" {
+                connection_close = value.eq_ignore_ascii_case("close");
             }
             headers.insert(Value::String(key), Value::String(value));
         }
@@ -546,11 +610,20 @@ async fn parse_request_async(stream: &mut TokioTcpStream) -> Option<Value> {
     fields.insert("headers".to_string(), Value::Map(headers));
     fields.insert("body".to_string(), Value::String(body));
 
-    Some(ObjectData::into_value("Request".to_string(), fields))
+    Some((
+        ObjectData::into_value("Request".to_string(), fields),
+        connection_close,
+    ))
 }
 
-/// Write HTTP response to async stream
-async fn write_response_async(stream: &mut TokioTcpStream, response: &Value) {
+/// Write HTTP response with Keep-Alive header
+async fn write_response_async_keepalive(
+    stream: &mut TokioTcpStream,
+    response: &Value,
+    close_connection: bool,
+) {
+    use std::fmt::Write;
+
     let (status, headers, body) = if let Value::Object(obj) = response {
         let status = match obj.fields.get("status") {
             Some(Value::Numeric(n)) => match n {
@@ -586,21 +659,35 @@ async fn write_response_async(stream: &mut TokioTcpStream, response: &Value) {
         _ => "OK",
     };
 
-    let mut response_str = format!("HTTP/1.1 {} {}\r\n", status, status_text);
-    response_str.push_str("Connection: close\r\n");
+    // Pre-allocate with estimated capacity
+    let estimated_size = 128 + headers.len() * 64 + body.len();
+    let mut response_str = String::with_capacity(estimated_size);
+
+    let _ = write!(response_str, "HTTP/1.1 {} {}\r\n", status, status_text);
+
+    // Set Connection header based on whether we should close
+    if close_connection {
+        response_str.push_str("Connection: close\r\n");
+    } else {
+        response_str.push_str("Connection: keep-alive\r\n");
+    }
 
     let mut has_content_length = false;
     for (k, v) in &headers {
         if let (Value::String(key), Value::String(val)) = (k, v) {
-            if key.to_lowercase() == "content-length" {
+            if key.eq_ignore_ascii_case("content-length") {
                 has_content_length = true;
             }
-            response_str.push_str(&format!("{}: {}\r\n", key, val));
+            // Skip if user tried to set Connection header (we control it)
+            if key.eq_ignore_ascii_case("connection") {
+                continue;
+            }
+            let _ = write!(response_str, "{}: {}\r\n", key, val);
         }
     }
 
     if !has_content_length {
-        response_str.push_str(&format!("Content-Length: {}\r\n", body.len()));
+        let _ = write!(response_str, "Content-Length: {}\r\n", body.len());
     }
 
     response_str.push_str("\r\n");
