@@ -447,6 +447,8 @@ pub struct Function {
     // Index of the param in this list matches the index in the function's local env
     // bool = true if it's an owned parameter (<)
     pub param_ownership: Vec<bool>,
+    pub param_types: Vec<crate::parser::Type>, // Type of each parameter
+    pub return_type: crate::parser::Type,      // Return type of the function
     pub reg_count: usize,
     pub upvalues: Vec<crate::compiler::Upvalue>,
 }

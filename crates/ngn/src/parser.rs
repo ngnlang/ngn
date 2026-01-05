@@ -1,6 +1,6 @@
 use crate::lexer::{Lexer, Span, Token};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Type {
     I64,
     I32,

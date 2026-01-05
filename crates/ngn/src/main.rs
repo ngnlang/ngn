@@ -148,39 +148,30 @@ fn main() {
                     compiler.reg_top = compiler.temp_start;
 
                     // Register with Semantic Analyzer
-                    // We need to reconstruct a basic Symbol from the Value
+                    // Use the stored type info from the Function
                     let symbol = if let Value::Function(f) = &val {
-                        let params = f.param_ownership.iter().map(|_| Type::Any).collect();
                         Symbol {
                             ty: Type::Function {
-                                params,
-                                return_type: Box::new(Type::Void), // Unknown
+                                params: f.param_types.clone(),
+                                return_type: Box::new(f.return_type.clone()),
                             },
                             is_mutable: false,
                         }
                     } else if let Value::Closure(c) = &val {
-                        let params = c
-                            .function
-                            .param_ownership
-                            .iter()
-                            .map(|_| Type::Any)
-                            .collect();
                         Symbol {
                             ty: Type::Function {
-                                params,
-                                return_type: Box::new(Type::Void), // Unknown
+                                params: c.function.param_types.clone(),
+                                return_type: Box::new(c.function.return_type.clone()),
                             },
                             is_mutable: false,
                         }
                     } else {
                         Symbol {
                             is_mutable: false,
-                            ty: Type::Void, // Unknown
+                            ty: Type::Any, // Unknown type for non-function values
                         }
                     };
                     analyzer.define_global(bind_name.clone(), symbol);
-                    // For now, analyzer might be blind to types unless we return them too.
-                    // This task focuses on Runtime Correctness (Global Collision).
                 } else {
                     panic!("Import Error: '{}' is not exported from '{}'", name, source);
                 }
@@ -217,32 +208,25 @@ fn main() {
                 compiler.reg_top = compiler.temp_start;
 
                 let symbol = if let Value::Function(f) = &val {
-                    let params = f.param_ownership.iter().map(|_| Type::Any).collect();
                     Symbol {
                         ty: Type::Function {
-                            params,
-                            return_type: Box::new(Type::Void),
+                            params: f.param_types.clone(),
+                            return_type: Box::new(f.return_type.clone()),
                         },
                         is_mutable: false,
                     }
                 } else if let Value::Closure(c) = &val {
-                    let params = c
-                        .function
-                        .param_ownership
-                        .iter()
-                        .map(|_| Type::Any)
-                        .collect();
                     Symbol {
                         ty: Type::Function {
-                            params,
-                            return_type: Box::new(Type::Void),
+                            params: c.function.param_types.clone(),
+                            return_type: Box::new(c.function.return_type.clone()),
                         },
                         is_mutable: false,
                     }
                 } else {
                     Symbol {
                         is_mutable: false,
-                        ty: Type::Void,
+                        ty: Type::Any, // Unknown type for non-function values
                     }
                 };
                 analyzer.define_global(name.clone(), symbol);

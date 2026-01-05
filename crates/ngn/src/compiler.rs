@@ -356,7 +356,7 @@ impl Compiler {
             ExprKind::Closure {
                 params,
                 body,
-                return_type: _,
+                return_type,
             } => {
                 let (func, upvalues) = {
                     let global_table = self.global_table.clone();
@@ -373,11 +373,13 @@ impl Compiler {
                     sub_compiler.next_index = 0;
 
                     let mut param_ownership = Vec::new();
+                    let mut param_types = Vec::new();
                     for param in params {
                         let p_idx = sub_compiler.next_index;
                         sub_compiler.symbol_table.insert(param.name.clone(), p_idx);
                         sub_compiler.next_index += 1;
                         param_ownership.push(param.is_owned);
+                        param_types.push(param.ty.clone().unwrap_or(crate::parser::Type::Any));
                     }
 
                     sub_compiler.temp_start = sub_compiler.next_index as u16;
@@ -396,6 +398,8 @@ impl Compiler {
                         home_globals: None, // Set by VM at load time
                         param_count: params.len(),
                         param_ownership,
+                        param_types,
+                        return_type: return_type.clone().unwrap_or(crate::parser::Type::Void),
                         reg_count: sub_compiler.max_reg as usize,
                         upvalues: captured_upvalues.clone(),
                     };
@@ -853,7 +857,11 @@ impl Compiler {
 
                 for method in methods {
                     if let StatementKind::Function {
-                        name, params, body, ..
+                        name,
+                        params,
+                        body,
+                        return_type,
+                        ..
                     } = method.kind
                     {
                         let mut method_params = vec![crate::parser::Parameter {
@@ -864,7 +872,12 @@ impl Compiler {
                         }];
                         method_params.extend(params);
 
-                        let func = self.compile_function_helper(name.clone(), method_params, body);
+                        let func = self.compile_function_helper(
+                            name.clone(),
+                            method_params,
+                            body,
+                            return_type,
+                        );
                         let func_idx = self.add_constant(Value::Function(Box::new(func)));
                         let closure_reg = self.alloc_reg();
                         self.instructions
@@ -896,9 +909,13 @@ impl Compiler {
                 self.reg_top = self.temp_start;
             }
             StatementKind::Function {
-                name, params, body, ..
+                name,
+                params,
+                body,
+                return_type,
+                ..
             } => {
-                let func = self.compile_function_helper(name.clone(), params, body);
+                let func = self.compile_function_helper(name.clone(), params, body, return_type);
 
                 // Check if the function captures upvalues
                 let upvalue_count = func.upvalues.len();
@@ -1483,6 +1500,7 @@ impl Compiler {
         name: String,
         params: Vec<crate::parser::Parameter>,
         body: Vec<Statement>,
+        return_type: Option<crate::parser::Type>,
     ) -> Function {
         let mut sub_compiler = Compiler::new(Some(self));
         sub_compiler.is_global = false;
@@ -1501,11 +1519,13 @@ impl Compiler {
         sub_compiler.next_index = 0;
 
         let mut param_ownership = Vec::new();
+        let mut param_types = Vec::new();
         for param in &params {
             let p_idx = sub_compiler.next_index;
             sub_compiler.symbol_table.insert(param.name.clone(), p_idx);
             sub_compiler.next_index += 1;
             param_ownership.push(param.is_owned);
+            param_types.push(param.ty.clone().unwrap_or(crate::parser::Type::Any));
         }
 
         sub_compiler.temp_start = sub_compiler.next_index as u16;
@@ -1527,6 +1547,8 @@ impl Compiler {
             home_globals: None, // Set by VM at load time
             param_count: param_ownership.len(),
             param_ownership,
+            param_types,
+            return_type: return_type.unwrap_or(crate::parser::Type::Void),
             reg_count: sub_compiler.max_reg as usize,
             upvalues: sub_compiler.upvalues,
         }

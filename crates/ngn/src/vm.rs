@@ -1635,6 +1635,8 @@ impl VM {
             home_globals: None, // Main module uses VM.globals directly
             param_count: 0,
             param_ownership: Vec::new(),
+            param_types: Vec::new(),
+            return_type: crate::parser::Type::Void,
             reg_count,
             upvalues: Vec::new(),
         };
