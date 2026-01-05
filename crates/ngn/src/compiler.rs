@@ -614,6 +614,41 @@ impl Compiler {
                 self.reg_top = dest + 1;
                 dest
             }
+            ExprKind::Object(fields) => {
+                // Anonymous object literal - use "__anon__" as type name
+                let model_name_idx = self.add_constant(Value::String("__anon__".to_string()));
+
+                let mut field_names = Vec::new();
+                for (f_name, _) in fields {
+                    field_names.push(Value::String(f_name.clone()));
+                }
+                let fields_idx = self.add_constant(Value::Tuple(field_names));
+
+                let start_reg = self.reg_top;
+                for (i, (_, f_expr)) in fields.iter().enumerate() {
+                    let expected_reg = start_reg + i as u16;
+                    let result_reg = self.compile_expr(f_expr);
+                    if result_reg != expected_reg {
+                        self.instructions
+                            .push(OpCode::Move(expected_reg, result_reg));
+                    }
+                    if self.reg_top <= expected_reg {
+                        self.reg_top = expected_reg + 1;
+                    }
+                }
+
+                let count = fields.len() as u8;
+                let dest = self.alloc_reg();
+                self.instructions.push(OpCode::CreateObject(
+                    dest,
+                    model_name_idx,
+                    fields_idx,
+                    start_reg,
+                    count,
+                ));
+                self.reg_top = dest + 1;
+                dest
+            }
             ExprKind::FieldAccess { object, field } => {
                 let obj_reg = self.compile_expr(object);
                 let field_idx = self.add_constant(Value::String(field.clone()));

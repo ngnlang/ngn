@@ -1132,6 +1132,13 @@ impl Analyzer {
                     Type::Any
                 }
             }
+            ExprKind::Object(fields) => {
+                // Anonymous object literal - just check field expressions
+                for (_, f_val_expr) in fields {
+                    self.check_expression(f_val_expr);
+                }
+                Type::Any
+            }
             ExprKind::FieldAccess { object, field } => {
                 let obj_ty = self.check_expression(object);
                 match obj_ty {

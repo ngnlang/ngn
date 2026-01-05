@@ -225,6 +225,7 @@ pub enum ExprKind {
     Map(Type, Type),
     Set(Type),
     This,
+    Object(Vec<(String, Expr)>), // Anonymous object literal: { key: value }
     Error(String),
 }
 
@@ -1233,6 +1234,31 @@ impl Parser {
                 }
             }
             Token::LBracket => self.parse_array_literal(),
+            Token::LBrace => {
+                // Anonymous object literal: { key: value, ... }
+                let start = self.current_span.start;
+                self.advance(); // consume '{'
+                self.consume_newlines();
+
+                let mut fields = Vec::new();
+                while self.current_token != Token::RBrace && self.current_token != Token::EOF {
+                    let field_name = self.expect_identifier();
+                    self.expect(Token::Colon);
+                    let value = self.parse_expression();
+                    fields.push((field_name, value));
+                    if self.current_token == Token::Comma {
+                        self.advance();
+                    }
+                    self.consume_newlines();
+                }
+                self.expect(Token::RBrace);
+                let end = self.previous_span.end;
+
+                Expr {
+                    kind: ExprKind::Object(fields),
+                    span: Span::new(start, end),
+                }
+            }
             Token::Pipe => self.parse_closure(),
             Token::Thread => {
                 let start = self.current_span.start;
@@ -1493,6 +1519,7 @@ impl Parser {
                 | Token::StringStart
                 | Token::LParen
                 | Token::LBracket
+                | Token::LBrace
                 | Token::Thread
                 | Token::LArrow
                 | Token::Channel
