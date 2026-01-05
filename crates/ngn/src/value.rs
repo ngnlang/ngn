@@ -749,7 +749,12 @@ impl fmt::Display for Value {
                 write!(f, "{}", *val)
             }
             Value::Object(o) => {
-                write!(f, "{} {{", o.model_name)?;
+                // For anonymous objects, don't show the __anon__ prefix
+                if o.model_name == "__anon__" {
+                    write!(f, "{{")?;
+                } else {
+                    write!(f, "{} {{", o.model_name)?;
+                }
                 let mut first = true;
                 for (name, val) in &o.fields {
                     if !first {
