@@ -157,6 +157,34 @@ impl Analyzer {
         }
     }
 
+    /// Check if a type has a method with the given name
+    pub fn has_method(&self, ty: &Type, method_name: &str) -> bool {
+        // Check custom_methods for both exact type and generic type
+        let generic_ty = self.generic_type(ty);
+
+        if let Some(methods) = self.custom_methods.get(&generic_ty) {
+            if methods.contains_key(method_name) {
+                return true;
+            }
+        }
+        if let Some(methods) = self.custom_methods.get(ty) {
+            if methods.contains_key(method_name) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Look up a variable's type from the symbol table
+    pub fn lookup_variable_type(&self, name: &str) -> Option<Type> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(sym) = scope.get(name) {
+                return Some(sym.ty.clone());
+            }
+        }
+        None
+    }
+
     pub fn analyze(&mut self, statements: &[Statement]) -> Result<(), Vec<Diagnostic>> {
         // Pass 1a: Collect all top-level types (Enums, Models, Roles)
         for stmt in statements {

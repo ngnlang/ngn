@@ -2,7 +2,7 @@ use ngn::analyzer::{Analyzer, Symbol};
 use ngn::bytecode::OpCode;
 use ngn::compiler::Compiler;
 use ngn::lexer::{Lexer, Span, Token};
-use ngn::parser::{Expr, Parser, Statement, StatementKind, Type};
+use ngn::parser::{Expr, ExprKind, Parser, Statement, StatementKind, Type};
 use ngn::value::Value;
 use ngn::vm::VM;
 use std::collections::HashMap;
@@ -54,11 +54,12 @@ fn main() {
     // 1. Load the source code
     let source = fs::read_to_string(filename).expect(&format!("Could not read file: {}", filename));
 
-    // Pre-check: Ensure fn main() exists before full parsing
-    // This gives a clearer error than "const can only be used inside functions"
-    {
+    // Pre-check: Ensure either fn main() OR export default exists
+    // This gives a clearer error than later compile errors
+    let (found_main, found_export_default) = {
         let mut check_lexer = Lexer::new(&source);
         let mut found_main = false;
+        let mut found_export_default = false;
         let mut current = check_lexer.next_token();
 
         while current != Token::EOF {
@@ -67,18 +68,30 @@ fn main() {
                 if let Token::Identifier(name) = &current {
                     if name == "main" {
                         found_main = true;
-                        break;
                     }
+                }
+            }
+            if current == Token::Export {
+                current = check_lexer.next_token();
+                if current == Token::Default {
+                    found_export_default = true;
                 }
             }
             current = check_lexer.next_token();
         }
+        (found_main, found_export_default)
+    };
 
-        if !found_main {
-            eprintln!("ngn Error: Entry point files must define a fn main() function");
-            eprintln!("  Hint: Wrap your code in 'fn main() {{ ... }}'");
-            std::process::exit(1);
-        }
+    if found_main && found_export_default {
+        eprintln!("ngn Error: Cannot have both fn main() and export default");
+        eprintln!("  Use fn main() for normal apps, or export default for HTTP servers");
+        std::process::exit(1);
+    }
+
+    if !found_main && !found_export_default {
+        eprintln!("ngn Error: Entry point files must define fn main() or export default");
+        eprintln!("  Hint: For HTTP servers, use: export default api");
+        std::process::exit(1);
     }
 
     let lexer = Lexer::new(&source);
@@ -242,6 +255,32 @@ fn main() {
         }
     }
 
+    // 2a. Handle export default (transform to __default__ declaration)
+    let mut default_export_expr_kind: Option<ExprKind> = None;
+    let mut processed_statements: Vec<Statement> = Vec::new();
+
+    for stmt in statements {
+        if let StatementKind::ExportDefault(expr) = &stmt.kind {
+            // Track the expression kind for later type resolution
+            default_export_expr_kind = Some(expr.kind.clone());
+
+            // Transform to __default__ declaration
+            processed_statements.push(Statement {
+                kind: StatementKind::Declaration {
+                    name: "__default__".to_string(),
+                    is_mutable: false,
+                    is_static: true,
+                    value: expr.clone(),
+                    declared_type: None,
+                },
+                span: stmt.span,
+            });
+        } else {
+            processed_statements.push(stmt);
+        }
+    }
+    let statements = processed_statements;
+
     // 3. Semantic Analysis (Static Type Checking)
     if let Err(errors) = analyzer.analyze(&statements) {
         for err in errors {
@@ -249,6 +288,25 @@ fn main() {
         }
         std::process::exit(1);
     }
+
+    // 3a. Now resolve the export type and check for fetch method
+    let is_http_server = if let Some(expr_kind) = &default_export_expr_kind {
+        let export_type = match expr_kind {
+            // For Variable reference, look up its type in the analyzer
+            ExprKind::Variable(name) => analyzer.lookup_variable_type(name),
+            // For direct ModelInstance, use the model name
+            ExprKind::ModelInstance { name, .. } => Some(Type::Model(name.clone())),
+            _ => None,
+        };
+
+        if let Some(ty) = export_type {
+            analyzer.has_method(&ty, "fetch")
+        } else {
+            false
+        }
+    } else {
+        false
+    };
 
     // 3. PASS ONE: Register all function names in the symbol table
     // (We don't compile them yet, just reserve their slots)
@@ -275,11 +333,20 @@ fn main() {
     match command.as_str() {
         "run" => {
             let mut final_instructions = compiler.instructions.clone();
-            if let Some(&main_idx) = compiler.global_table.get("main") {
+
+            if is_http_server {
+                // HTTP server mode: emit ServeHttp with __default__ handler
+                if let Some(&default_idx) = compiler.global_table.get("__default__") {
+                    final_instructions.push(OpCode::ServeHttp(default_idx));
+                    final_instructions.push(OpCode::Halt);
+                } else {
+                    panic!("ngn Error: export default not compiled correctly");
+                }
+            } else if let Some(&main_idx) = compiler.global_table.get("main") {
                 final_instructions.push(OpCode::CallGlobal(0, main_idx, 0, 0));
                 final_instructions.push(OpCode::Halt);
             } else {
-                panic!("ngn Error: No main() function defined!");
+                panic!("ngn Error: No main() function or HTTP handler defined!");
             }
 
             let mut my_vm = VM::new(final_instructions, compiler.constants, compiler.next_index);
@@ -289,8 +356,13 @@ fn main() {
             let output_name = filename.replace(".ngn", "");
             let mut final_instructions = compiler.instructions.clone();
 
-            // Add the bootstrap call to main
-            if let Some(&main_idx) = compiler.global_table.get("main") {
+            // Add the bootstrap call (main or ServeHttp)
+            if is_http_server {
+                if let Some(&default_idx) = compiler.global_table.get("__default__") {
+                    final_instructions.push(OpCode::ServeHttp(default_idx));
+                    final_instructions.push(OpCode::Halt);
+                }
+            } else if let Some(&main_idx) = compiler.global_table.get("main") {
                 final_instructions.push(OpCode::CallGlobal(0, main_idx, 0, 0));
                 final_instructions.push(OpCode::Halt);
             }

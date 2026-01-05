@@ -1030,6 +1030,93 @@ impl Fiber {
                     .or_insert_with(std::collections::HashMap::new);
                 target_methods.insert(method_name, closure);
             }
+            OpCode::ServeHttp(handler_idx) => {
+                // Get the handler object from globals
+                let handler = globals[handler_idx].clone();
+
+                // Extract config from handler.config field
+                let (port, tls_cert, tls_key) = if let Value::Object(obj) = &handler {
+                    if let Some(Value::Object(config)) = obj.fields.get("config") {
+                        let port = match config.fields.get("port") {
+                            Some(Value::Numeric(n)) => match n {
+                                crate::value::Number::I64(v) => *v as u16,
+                                crate::value::Number::I32(v) => *v as u16,
+                                _ => 3000,
+                            },
+                            _ => 3000,
+                        };
+                        let (cert, key) = match config.fields.get("tls") {
+                            Some(Value::Object(tls)) => {
+                                let cert = tls.fields.get("cert").and_then(|v| {
+                                    if let Value::String(s) = v {
+                                        Some(s.clone())
+                                    } else {
+                                        None
+                                    }
+                                });
+                                let key = tls.fields.get("key").and_then(|v| {
+                                    if let Value::String(s) = v {
+                                        Some(s.clone())
+                                    } else {
+                                        None
+                                    }
+                                });
+                                (cert, key)
+                            }
+                            _ => (None, None),
+                        };
+                        (port, cert, key)
+                    } else {
+                        (3000, None, None)
+                    }
+                } else {
+                    (3000, None, None)
+                };
+
+                // Get the fetch method from custom_methods
+                let handler_type = if let Value::Object(obj) = &handler {
+                    obj.model_name.clone()
+                } else {
+                    "".to_string()
+                };
+
+                let fetch_method = {
+                    let methods = custom_methods.lock().unwrap();
+                    methods
+                        .get(&handler_type)
+                        .and_then(|m| m.get("fetch"))
+                        .cloned()
+                };
+
+                if let Some(fetch_closure) = fetch_method {
+                    use crate::toolbox::http;
+
+                    let globals_arc = std::sync::Arc::new(std::sync::Mutex::new(globals.clone()));
+                    let methods_arc = custom_methods.clone();
+
+                    if let (Some(cert), Some(key)) = (tls_cert, tls_key) {
+                        if let Err(e) = http::serve_tls(
+                            port,
+                            fetch_closure,
+                            &cert,
+                            &key,
+                            globals_arc,
+                            methods_arc,
+                        ) {
+                            eprintln!("HTTPS Server Error: {}", e);
+                        }
+                    } else {
+                        if let Err(e) = http::serve(port, fetch_closure, globals_arc, methods_arc) {
+                            eprintln!("HTTP Server Error: {}", e);
+                        }
+                    }
+                } else {
+                    eprintln!("ngn Error: No fetch method found on exported handler");
+                }
+
+                self.status = FiberStatus::Finished;
+                return FiberStatus::Finished;
+            }
             OpCode::Halt => {
                 self.status = FiberStatus::Finished;
                 return FiberStatus::Finished;
