@@ -719,6 +719,36 @@ impl Fiber {
                     panic!("Runtime Error: Spawn expects a closure");
                 }
             }
+            OpCode::Fetch(dest, url_reg) => {
+                let url_val = self.get_reg_at(url_reg);
+                if let Value::String(url) = url_val {
+                    // Create a channel for the result
+                    let chan = Channel {
+                        name: "fetch_result".to_string(),
+                        buffer: Arc::new(Mutex::new(VecDeque::new())),
+                        capacity: 1,
+                        is_closed: Arc::new(Mutex::new(false)),
+                    };
+
+                    let chan_clone = chan.clone();
+
+                    // Spawn native thread to perform fetch
+                    std::thread::spawn(move || {
+                        let result = match reqwest::blocking::get(&url) {
+                            Ok(response) => match response.text() {
+                                Ok(body) => Value::String(body),
+                                Err(e) => Value::String(format!("Error: {}", e)),
+                            },
+                            Err(e) => Value::String(format!("Error: {}", e)),
+                        };
+                        chan_clone.buffer.lock().unwrap().push_back(result);
+                    });
+
+                    self.set_reg_at(dest, Value::Channel(chan));
+                } else {
+                    panic!("Runtime Error: fetch() expects a string URL");
+                }
+            }
             OpCode::Yield => {
                 return FiberStatus::Suspended;
             }

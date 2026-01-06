@@ -67,6 +67,7 @@ pub enum OpCode {
 
     // Concurrency
     Spawn(u16, u16), // (DestChannelReg, ClosureReg)
+    Fetch(u16, u16), // (DestChannelReg, UrlReg)
     Yield,
     Send(u16, u16),              // (ChannelReg, ValueReg)
     Receive(u16, u16),           // (DestReg, ChannelReg)

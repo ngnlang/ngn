@@ -278,6 +278,13 @@ impl Compiler {
                         self.instructions.push(OpCode::Sleep(reg));
                         return reg;
                     }
+                    "fetch" => {
+                        let url_reg = self.compile_expr(&args[0]);
+                        let dest = self.alloc_reg();
+                        self.instructions.push(OpCode::Fetch(dest, url_reg));
+                        self.reg_top = dest + 1;
+                        return dest;
+                    }
                     _ => {}
                 }
 

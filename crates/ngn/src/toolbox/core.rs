@@ -5,7 +5,7 @@ use crate::parser::Type;
 
 /// All core global names - these are auto-injected into every module
 pub const GLOBAL_NAMES: &[&str] = &[
-    "print", "echo", "sleep", "thread", "state", "channel", "json", "map", "set",
+    "print", "echo", "sleep", "thread", "state", "channel", "json", "map", "set", "fetch",
 ];
 
 /// Type definition for a global symbol
@@ -35,6 +35,13 @@ pub fn get_type(name: &str) -> Option<GlobalDef> {
         }),
         "json" => Some(GlobalDef {
             ty: Type::Json,
+            is_mutable: false,
+        }),
+        "fetch" => Some(GlobalDef {
+            ty: Type::Function {
+                params: vec![Type::String],
+                return_type: Box::new(Type::Channel(Box::new(Type::String))),
+            },
             is_mutable: false,
         }),
         // thread, state, channel, map, set are expression-level keywords
