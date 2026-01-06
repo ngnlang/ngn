@@ -674,6 +674,28 @@ impl Compiler {
                 }
             }
             ExprKind::MethodCall(obj_expr, method, args) => {
+                // Special case for json.parse() and json.stringify()
+                if let ExprKind::Variable(var_name) = &obj_expr.kind {
+                    if var_name == "json" {
+                        let dest = self.alloc_reg();
+                        match method.as_str() {
+                            "parse" => {
+                                let arg_reg = self.compile_expr(&args[0]);
+                                self.instructions.push(OpCode::JsonParse(dest, arg_reg));
+                                self.reg_top = dest + 1;
+                                return dest;
+                            }
+                            "stringify" => {
+                                let arg_reg = self.compile_expr(&args[0]);
+                                self.instructions.push(OpCode::JsonStringify(dest, arg_reg));
+                                self.reg_top = dest + 1;
+                                return dest;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
                 let obj_reg = self.compile_expr(obj_expr);
                 let dest = self.alloc_reg();
 

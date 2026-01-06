@@ -1117,6 +1117,29 @@ impl Fiber {
                 self.status = FiberStatus::Finished;
                 return FiberStatus::Finished;
             }
+            OpCode::JsonParse(dest_reg, src_reg) => {
+                let src_val = self.get_reg_at(src_reg);
+                if let Value::String(json_str) = src_val {
+                    match serde_json::from_str::<serde_json::Value>(&json_str) {
+                        Ok(json) => {
+                            self.set_reg_at(dest_reg, Value::from_json(json));
+                        }
+                        Err(e) => {
+                            eprintln!("JSON parse error: {}", e);
+                            self.set_reg_at(dest_reg, Value::Void);
+                        }
+                    }
+                } else {
+                    eprintln!("json.parse expects a string argument");
+                    self.set_reg_at(dest_reg, Value::Void);
+                }
+            }
+            OpCode::JsonStringify(dest_reg, src_reg) => {
+                let src_val = self.get_reg_at(src_reg);
+                let json = src_val.to_json();
+                let json_str = serde_json::to_string(&json).unwrap_or_else(|_| "null".to_string());
+                self.set_reg_at(dest_reg, Value::String(json_str));
+            }
             OpCode::Halt => {
                 self.status = FiberStatus::Finished;
                 return FiberStatus::Finished;

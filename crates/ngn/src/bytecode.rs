@@ -109,4 +109,8 @@ pub enum OpCode {
 
     // HTTP Server (for export default with fetch method)
     ServeHttp(usize), // (GlobalIndex) - starts HTTP server with handler from global
+
+    // JSON
+    JsonParse(u16, u16),     // (DestReg, StringReg) - parses JSON string to value
+    JsonStringify(u16, u16), // (DestReg, ValueReg) - converts value to JSON string
 }

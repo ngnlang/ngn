@@ -74,6 +74,15 @@ impl Analyzer {
             },
         );
 
+        // Built-in json module
+        global_scope.insert(
+            "json".to_string(),
+            Symbol {
+                ty: Type::Json,
+                is_mutable: false,
+            },
+        );
+
         // Built-in Result
         let result_enum = EnumDef {
             name: "Result".to_string(),
@@ -1936,6 +1945,15 @@ impl Analyzer {
                             Type::Any
                         }
                     },
+
+                    // Allow method calls on Type::Json (for json.parse, json.stringify)
+                    Type::Json => {
+                        // Check arguments but return Any since parse returns dynamic data
+                        for arg in args {
+                            self.check_expression(arg);
+                        }
+                        Type::Any
+                    }
 
                     _ => {
                         self.add_error(

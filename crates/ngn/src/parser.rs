@@ -32,6 +32,7 @@ pub enum Type {
     Set(Box<Type>),
     Regex,
     Number, // Generic number type for extends
+    Json,   // Built-in json module type
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -862,3 +862,86 @@ impl std::cmp::PartialEq for Value {
 }
 
 impl std::cmp::Eq for Value {} // Value is Eq because is_equal handles all cases properly
+
+// JSON Conversion Functions
+impl Value {
+    /// Convert Value to serde_json::Value for JSON.stringify
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            Value::Void => serde_json::Value::Null,
+            Value::Bool(b) => serde_json::Value::Bool(*b),
+            Value::String(s) => serde_json::Value::String(s.clone()),
+            Value::Numeric(n) => match n {
+                Number::I64(v) => serde_json::json!(*v),
+                Number::I32(v) => serde_json::json!(*v),
+                Number::I16(v) => serde_json::json!(*v),
+                Number::I8(v) => serde_json::json!(*v),
+                Number::U64(v) => serde_json::json!(*v),
+                Number::U32(v) => serde_json::json!(*v),
+                Number::U16(v) => serde_json::json!(*v),
+                Number::U8(v) => serde_json::json!(*v),
+                Number::F64(v) => serde_json::json!(*v),
+                Number::F32(v) => serde_json::json!(*v),
+            },
+            Value::Array(arr) => {
+                serde_json::Value::Array(arr.iter().map(|v| v.to_json()).collect())
+            }
+            Value::Tuple(tup) => {
+                serde_json::Value::Array(tup.iter().map(|v| v.to_json()).collect())
+            }
+            Value::Object(obj) => {
+                let mut map = serde_json::Map::new();
+                for (k, v) in &obj.fields {
+                    map.insert(k.clone(), v.to_json());
+                }
+                serde_json::Value::Object(map)
+            }
+            Value::Map(m) => {
+                let mut map = serde_json::Map::new();
+                for (k, v) in m.iter() {
+                    if let Value::String(key) = k {
+                        map.insert(key.clone(), v.to_json());
+                    }
+                }
+                serde_json::Value::Object(map)
+            }
+            Value::Set(s) => {
+                // Set serializes to JSON array
+                serde_json::Value::Array(s.iter().map(|v| v.to_json()).collect())
+            }
+            // Non-serializable types become null
+            _ => serde_json::Value::Null,
+        }
+    }
+
+    /// Convert serde_json::Value to Value for JSON.parse
+    pub fn from_json(json: serde_json::Value) -> Value {
+        match json {
+            serde_json::Value::Null => Value::Void,
+            serde_json::Value::Bool(b) => Value::Bool(b),
+            serde_json::Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    Value::Numeric(Number::I64(i))
+                } else if let Some(f) = n.as_f64() {
+                    Value::Numeric(Number::F64(f))
+                } else {
+                    Value::Void
+                }
+            }
+            serde_json::Value::String(s) => Value::String(s),
+            serde_json::Value::Array(arr) => {
+                Value::Array(arr.into_iter().map(Value::from_json).collect())
+            }
+            serde_json::Value::Object(map) => {
+                let fields: std::collections::HashMap<String, Value> = map
+                    .into_iter()
+                    .map(|(k, v)| (k, Value::from_json(v)))
+                    .collect();
+                Value::Object(Box::new(ObjectData {
+                    model_name: "__anon__".to_string(),
+                    fields,
+                }))
+            }
+        }
+    }
+}
