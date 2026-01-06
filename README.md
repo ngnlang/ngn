@@ -1328,3 +1328,37 @@ You can import in different ways:
 
 ### tbx::test
 - `assert`: assert that a condition is true
+
+### tbx::http
+Create an HTTP server.
+
+- `serve`: create an HTTP server
+```ngn
+import { serve } from "tbx::http"
+
+fn handleRequest(req: Request): Response {
+  return Response {
+    status: 200,
+    headers: map<string, string>(),
+    body: "Hello from ngn HTTP server! Path: ${req.path}"
+  }
+}
+
+fn main() {
+  print("Starting HTTP server on port 3000...")
+  serve(3000, handleRequest)
+}
+```
+
+- default export with fetch method (serve called under the hood)
+```ngn
+fn fetch(req: Request): Response {
+  return Response {
+    status: 200,
+    body: "Hello from export-based API!",
+    headers: map<string, string>()
+  }
+}
+
+export default { fetch: fetch }
+```
