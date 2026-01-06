@@ -118,6 +118,7 @@ pub struct Lexer {
     mode_stack: Vec<LexMode>,
     brace_stack: Vec<usize>,
     last_token: Option<Token>,
+    string_quote: char, // Tracks which quote started the current string (' or ")
 }
 
 impl Lexer {
@@ -139,6 +140,7 @@ impl Lexer {
             mode_stack: vec![LexMode::Normal],
             brace_stack: vec![0],
             last_token: None,
+            string_quote: '\0',
         }
     }
 
@@ -208,8 +210,9 @@ impl Lexer {
             return self.read_identifier();
         }
 
-        if ch == '"' {
+        if ch == '"' || ch == '\'' {
             self.cursor += 1;
+            self.string_quote = ch; // Track which quote started the string
             self.mode_stack.push(LexMode::String);
             return Token::StringStart;
         }
@@ -475,17 +478,19 @@ impl Lexer {
 
     fn read_string_part(&mut self) -> Token {
         let mut string = String::new();
+        let quote = self.string_quote; // Get the quote that started this string
         while self.cursor < self.source.len() {
             let ch = self.source[self.cursor];
-            match ch {
-                '"' => {
-                    if !string.is_empty() {
-                        return Token::StringPart(string);
-                    }
-                    self.cursor += 1;
-                    self.mode_stack.pop();
-                    return Token::StringEnd;
+            // Check if this is the matching closing quote
+            if ch == quote {
+                if !string.is_empty() {
+                    return Token::StringPart(string);
                 }
+                self.cursor += 1;
+                self.mode_stack.pop();
+                return Token::StringEnd;
+            }
+            match ch {
                 '{' => {
                     if !string.is_empty() {
                         return Token::StringPart(string);
@@ -505,6 +510,7 @@ impl Lexer {
                             'r' => string.push('\r'),
                             '\\' => string.push('\\'),
                             '"' => string.push('"'),
+                            '\'' => string.push('\''),
                             '{' => string.push('{'),
                             _ => string.push(next),
                         }
