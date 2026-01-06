@@ -113,13 +113,13 @@ print("World")
 ## String Interpolation
 ```ngn
 const x = 5
-print("x plus 1 is {x + 1}") // x plus 1 is 6
+print("x plus 1 is ${x + 1}") // x plus 1 is 6
 
 const greeting = "world"
-print("Hello, {greeting}!") // Hello, world!
+print("Hello, ${greeting}!") // Hello, world!
 
-// you can escape the first brace if you need to actually print them
-print("hello \{x}") // hello {x}
+// you can escape if needed
+print("hello \${x}") // hello ${x}
 ```
 
 ## Strings
