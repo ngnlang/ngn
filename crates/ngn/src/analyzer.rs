@@ -1175,6 +1175,8 @@ impl Analyzer {
                             Type::Any
                         }
                     }
+                    // Allow field access on Type::Any (e.g., json.parse results)
+                    Type::Any => Type::Any,
                     _ => {
                         self.add_error(
                             format!(
