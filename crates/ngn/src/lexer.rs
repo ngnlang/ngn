@@ -491,14 +491,21 @@ impl Lexer {
                 return Token::StringEnd;
             }
             match ch {
-                '{' => {
-                    if !string.is_empty() {
-                        return Token::StringPart(string);
+                '$' => {
+                    // Check if this is ${} interpolation
+                    if self.cursor + 1 < self.source.len() && self.source[self.cursor + 1] == '{' {
+                        if !string.is_empty() {
+                            return Token::StringPart(string);
+                        }
+                        self.cursor += 2; // consume both $ and {
+                        self.mode_stack.push(LexMode::Normal);
+                        self.brace_stack.push(0);
+                        return Token::InterpolationStart;
+                    } else {
+                        // Just a regular $ character
+                        string.push(ch);
+                        self.cursor += 1;
                     }
-                    self.cursor += 1;
-                    self.mode_stack.push(LexMode::Normal);
-                    self.brace_stack.push(0);
-                    return Token::InterpolationStart;
                 }
                 '\\' => {
                     self.cursor += 1;
@@ -511,7 +518,7 @@ impl Lexer {
                             '\\' => string.push('\\'),
                             '"' => string.push('"'),
                             '\'' => string.push('\''),
-                            '{' => string.push('{'),
+                            '$' => string.push('$'), // Escape $ to prevent interpolation
                             _ => string.push(next),
                         }
                         self.cursor += 1;
