@@ -122,6 +122,21 @@ print("Hello, ${greeting}!") // Hello, world!
 print("hello \${x}") // hello ${x}
 ```
 
+## json
+
+### parse
+```ngn
+const data = json.parse('{"name": "ngn"}')
+print(data.name) // ngn
+```
+
+### stringify
+```ngn
+const data = { name: "ngn" }
+const str = json.stringify(data)
+print(str) // {"name": "ngn"}
+```
+
 ## Strings
 
 ### `length()`
@@ -418,6 +433,20 @@ const tup = (10, 20, 30)
 const joined = tup.join(",")
 
 print(joined) // "10,20,30"
+```
+
+## Objects
+You can create raw objects using the `{}` syntax and access their properties using the dot notation.
+```ngn
+const person = {
+  name: "John",
+  age: 30,
+  isStudent: false
+}
+
+print(person.name) // John
+print(person.age) // 30
+print(person.isStudent) // false
 ```
 
 ## Custom Methods
