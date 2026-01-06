@@ -128,6 +128,20 @@ impl Analyzer {
             },
         );
 
+        // Built-in FetchOptions model for fetch()
+        analyzer.models.insert(
+            "FetchOptions".to_string(),
+            ModelDef {
+                name: "FetchOptions".to_string(),
+                fields: vec![
+                    ("method".to_string(), Type::String),
+                    ("headers".to_string(), Type::Any), // accepts map or object literal
+                    ("body".to_string(), Type::String),
+                    ("timeout".to_string(), Type::I64),
+                ],
+            },
+        );
+
         analyzer
     }
 

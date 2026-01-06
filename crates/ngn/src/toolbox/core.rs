@@ -39,7 +39,7 @@ pub fn get_type(name: &str) -> Option<GlobalDef> {
         }),
         "fetch" => Some(GlobalDef {
             ty: Type::Function {
-                params: vec![Type::String],
+                params: vec![Type::String, Type::Model("FetchOptions".to_string())],
                 return_type: Box::new(Type::Channel(Box::new(Type::String))),
             },
             is_mutable: false,

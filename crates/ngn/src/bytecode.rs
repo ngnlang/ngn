@@ -66,8 +66,8 @@ pub enum OpCode {
     GetUpvalue(u16, u16),             // (DestReg, UpvalueIndex)
 
     // Concurrency
-    Spawn(u16, u16), // (DestChannelReg, ClosureReg)
-    Fetch(u16, u16), // (DestChannelReg, UrlReg)
+    Spawn(u16, u16),      // (DestChannelReg, ClosureReg)
+    Fetch(u16, u16, u16), // (DestChannelReg, UrlReg, OptionsReg) - OptionsReg=u16::MAX means no options
     Yield,
     Send(u16, u16),              // (ChannelReg, ValueReg)
     Receive(u16, u16),           // (DestReg, ChannelReg)

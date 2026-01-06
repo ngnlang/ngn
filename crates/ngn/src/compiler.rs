@@ -280,8 +280,14 @@ impl Compiler {
                     }
                     "fetch" => {
                         let url_reg = self.compile_expr(&args[0]);
+                        let options_reg = if args.len() > 1 {
+                            self.compile_expr(&args[1])
+                        } else {
+                            u16::MAX // Sentinel value for "no options"
+                        };
                         let dest = self.alloc_reg();
-                        self.instructions.push(OpCode::Fetch(dest, url_reg));
+                        self.instructions
+                            .push(OpCode::Fetch(dest, url_reg, options_reg));
                         self.reg_top = dest + 1;
                         return dest;
                     }

@@ -719,9 +719,56 @@ impl Fiber {
                     panic!("Runtime Error: Spawn expects a closure");
                 }
             }
-            OpCode::Fetch(dest, url_reg) => {
+            OpCode::Fetch(dest, url_reg, options_reg) => {
                 let url_val = self.get_reg_at(url_reg);
                 if let Value::String(url) = url_val {
+                    // Parse options if provided
+                    let mut method = "GET".to_string();
+                    let mut body: Option<String> = None;
+                    let mut headers: Vec<(String, String)> = Vec::new();
+                    let mut timeout_ms: u64 = 30000; // Default 30s
+
+                    if options_reg != u16::MAX {
+                        let options_val = self.get_reg_at(options_reg);
+                        if let Value::Object(opts) = options_val {
+                            // method
+                            if let Some(Value::String(m)) = opts.fields.get("method") {
+                                method = m.to_uppercase();
+                            }
+                            // body
+                            if let Some(Value::String(b)) = opts.fields.get("body") {
+                                body = Some(b.clone());
+                            }
+                            // timeout
+                            if let Some(Value::Numeric(n)) = opts.fields.get("timeout") {
+                                timeout_ms = match n {
+                                    crate::value::Number::I64(v) => *v as u64,
+                                    crate::value::Number::I32(v) => *v as u64,
+                                    crate::value::Number::U64(v) => *v,
+                                    _ => 30000,
+                                };
+                            }
+                            // headers (accepts Map<String, String> or object literal)
+                            match opts.fields.get("headers") {
+                                Some(Value::Map(h)) => {
+                                    for (k, v) in h {
+                                        if let (Value::String(key), Value::String(val)) = (k, v) {
+                                            headers.push((key.clone(), val.clone()));
+                                        }
+                                    }
+                                }
+                                Some(Value::Object(obj)) => {
+                                    for (key, val) in &obj.fields {
+                                        if let Value::String(v) = val {
+                                            headers.push((key.clone(), v.clone()));
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+
                     // Create a channel for the result
                     let chan = Channel {
                         name: "fetch_result".to_string(),
@@ -734,9 +781,35 @@ impl Fiber {
 
                     // Spawn native thread to perform fetch
                     std::thread::spawn(move || {
-                        let result = match reqwest::blocking::get(&url) {
+                        let client = reqwest::blocking::Client::builder()
+                            .timeout(std::time::Duration::from_millis(timeout_ms))
+                            .build()
+                            .unwrap_or_else(|_| reqwest::blocking::Client::new());
+
+                        let mut request = match method.as_str() {
+                            "GET" => client.get(&url),
+                            "POST" => client.post(&url),
+                            "PUT" => client.put(&url),
+                            "DELETE" => client.delete(&url),
+                            "PATCH" => client.patch(&url),
+                            "HEAD" => client.head(&url),
+                            "OPTIONS" => client.request(reqwest::Method::OPTIONS, &url),
+                            _ => client.get(&url),
+                        };
+
+                        // Add headers
+                        for (key, val) in headers {
+                            request = request.header(&key, &val);
+                        }
+
+                        // Add body if present
+                        if let Some(b) = body {
+                            request = request.body(b);
+                        }
+
+                        let result = match request.send() {
                             Ok(response) => match response.text() {
-                                Ok(body) => Value::String(body),
+                                Ok(text) => Value::String(text),
                                 Err(e) => Value::String(format!("Error: {}", e)),
                             },
                             Err(e) => Value::String(format!("Error: {}", e)),
