@@ -1261,9 +1261,21 @@ impl Parser {
 
                 let mut fields = Vec::new();
                 while self.current_token != Token::RBrace && self.current_token != Token::EOF {
+                    let field_start = self.current_span.start;
                     let field_name = self.expect_identifier();
-                    self.expect(Token::Colon);
-                    let value = self.parse_expression();
+
+                    // Check if this is shorthand syntax: { field } instead of { field: value }
+                    let value = if self.current_token == Token::Colon {
+                        self.advance(); // consume ':'
+                        self.parse_expression()
+                    } else {
+                        // Shorthand: use the identifier as both field name and variable reference
+                        Expr {
+                            kind: ExprKind::Variable(field_name.clone()),
+                            span: Span::new(field_start, self.previous_span.end),
+                        }
+                    };
+
                     fields.push((field_name, value));
                     if self.current_token == Token::Comma {
                         self.advance();
