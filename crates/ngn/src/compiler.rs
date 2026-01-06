@@ -141,12 +141,13 @@ impl Compiler {
         self.enums.insert("Result".to_string(), result_enum);
         self.enums.insert("Maybe".to_string(), maybe_enum);
 
-        // Standard Functions (handled as special opcodes, not CallGlobal)
-        // These entries are just for name resolution in the compiler
-        self.global_table.insert("print".to_string(), 0);
-        self.global_table.insert("echo".to_string(), 1);
-        self.global_table.insert("sleep".to_string(), 2);
-        self.next_index = 3;
+        // Standard globals (sourced from toolbox::core for organizational clarity)
+        // These are handled as special opcodes, not CallGlobal
+        use crate::toolbox::core::GLOBAL_NAMES;
+        for (i, name) in GLOBAL_NAMES.iter().enumerate() {
+            self.global_table.insert(name.to_string(), i);
+        }
+        self.next_index = GLOBAL_NAMES.len();
     }
 
     // Helper to add a constant and return its index

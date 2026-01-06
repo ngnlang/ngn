@@ -40,48 +40,19 @@ impl Analyzer {
     pub fn new() -> Self {
         let mut global_scope = HashMap::new();
 
-        // Register Built-ins
-        global_scope.insert(
-            "print".to_string(),
-            Symbol {
-                ty: Type::Function {
-                    params: vec![Type::Any],
-                    return_type: Box::new(Type::Void),
-                },
-                is_mutable: false,
-            },
-        );
-
-        global_scope.insert(
-            "echo".to_string(),
-            Symbol {
-                ty: Type::Function {
-                    params: vec![Type::Any],
-                    return_type: Box::new(Type::Void),
-                },
-                is_mutable: false,
-            },
-        );
-
-        global_scope.insert(
-            "sleep".to_string(),
-            Symbol {
-                ty: Type::Function {
-                    params: vec![Type::I64],
-                    return_type: Box::new(Type::Void),
-                },
-                is_mutable: false,
-            },
-        );
-
-        // Built-in json module
-        global_scope.insert(
-            "json".to_string(),
-            Symbol {
-                ty: Type::Json,
-                is_mutable: false,
-            },
-        );
+        // Register core globals from toolbox
+        use crate::toolbox::core::{GLOBAL_NAMES, get_type};
+        for name in GLOBAL_NAMES {
+            if let Some(def) = get_type(name) {
+                global_scope.insert(
+                    name.to_string(),
+                    Symbol {
+                        ty: def.ty,
+                        is_mutable: def.is_mutable,
+                    },
+                );
+            }
+        }
 
         // Built-in Result
         let result_enum = EnumDef {
