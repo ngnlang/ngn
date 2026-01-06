@@ -1073,22 +1073,23 @@ impl Fiber {
                     (3000, None, None)
                 };
 
-                // Get the fetch method from custom_methods
-                let handler_type = if let Value::Object(obj) = &handler {
-                    obj.model_name.clone()
+                let fetch_handler = if let Value::Object(obj) = &handler {
+                    if !obj.model_name.is_empty() && obj.model_name != "__anon__" {
+                        // Model instance: look up in custom_methods
+                        let methods = custom_methods.lock().unwrap();
+                        methods
+                            .get(&obj.model_name)
+                            .and_then(|m| m.get("fetch"))
+                            .cloned()
+                    } else {
+                        // Anonymous object literal: fetch is directly in fields
+                        obj.fields.get("fetch").cloned()
+                    }
                 } else {
-                    "".to_string()
+                    None
                 };
 
-                let fetch_method = {
-                    let methods = custom_methods.lock().unwrap();
-                    methods
-                        .get(&handler_type)
-                        .and_then(|m| m.get("fetch"))
-                        .cloned()
-                };
-
-                if let Some(fetch_closure) = fetch_method {
+                if let Some(fetch_handler) = fetch_handler {
                     use crate::toolbox::http;
 
                     let globals_arc = std::sync::Arc::new(std::sync::Mutex::new(globals.clone()));
@@ -1097,7 +1098,7 @@ impl Fiber {
                     if let (Some(cert), Some(key)) = (tls_cert, tls_key) {
                         if let Err(e) = http::serve_tls(
                             port,
-                            fetch_closure,
+                            fetch_handler,
                             &cert,
                             &key,
                             globals_arc,
@@ -1106,7 +1107,7 @@ impl Fiber {
                             eprintln!("HTTPS Server Error: {}", e);
                         }
                     } else {
-                        if let Err(e) = http::serve(port, fetch_closure, globals_arc, methods_arc) {
+                        if let Err(e) = http::serve(port, fetch_handler, globals_arc, methods_arc) {
                             eprintln!("HTTP Server Error: {}", e);
                         }
                     }

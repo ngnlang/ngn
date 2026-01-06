@@ -291,18 +291,16 @@ fn main() {
 
     // 3a. Now resolve the export type and check for fetch method
     let is_http_server = if let Some(expr_kind) = &default_export_expr_kind {
-        let export_type = match expr_kind {
-            // For Variable reference, look up its type in the analyzer
-            ExprKind::Variable(name) => analyzer.lookup_variable_type(name),
-            // For direct ModelInstance, use the model name
-            ExprKind::ModelInstance { name, .. } => Some(Type::Model(name.clone())),
-            _ => None,
-        };
-
-        if let Some(ty) = export_type {
-            analyzer.has_method(&ty, "fetch")
-        } else {
-            false
+        match expr_kind {
+            ExprKind::Variable(name) => analyzer
+                .lookup_variable_type(name)
+                .map(|ty| analyzer.has_method(&ty, "fetch"))
+                .unwrap_or(false),
+            ExprKind::ModelInstance { name, .. } => {
+                analyzer.has_method(&Type::Model(name.clone()), "fetch")
+            }
+            ExprKind::Object(fields) => fields.iter().any(|(key, _)| key == "fetch"),
+            _ => false,
         }
     } else {
         false
