@@ -180,6 +180,50 @@ impl Compiler {
         start_reg
     }
 
+    /// Compile a field assignment, handling nested paths by recursively writing back
+    /// For simple: `obj.field = val` -> SetField(obj_reg, field, val_reg)
+    /// For nested: `obj.a.b = val` -> Get obj.a, SetField(a_reg, b, val_reg), SetField(obj_reg, a, a_reg)
+    fn compile_field_assign(&mut self, object: &Expr, field: &str, val_reg: u16) -> u16 {
+        let field_idx = self.add_constant(Value::String(field.to_string()));
+
+        match &object.kind {
+            ExprKind::Variable(name) => {
+                // Base case: direct variable access
+                let obj_reg = self.compile_expr(object);
+                self.instructions
+                    .push(OpCode::SetField(obj_reg, field_idx, val_reg));
+
+                // Write the modified object back to the variable
+                if let Some(&idx) = self.symbol_table.get(name) {
+                    self.instructions
+                        .push(OpCode::AssignVar(idx as u16, obj_reg));
+                } else if let Some(&idx) = self.global_table.get(name) {
+                    self.instructions.push(OpCode::AssignGlobal(idx, obj_reg));
+                }
+                val_reg
+            }
+            ExprKind::FieldAccess {
+                object: parent,
+                field: parent_field,
+            } => {
+                // Nested case: get the intermediate object, modify it, then write back
+                let intermediate_reg = self.compile_expr(object);
+                self.instructions
+                    .push(OpCode::SetField(intermediate_reg, field_idx, val_reg));
+
+                // Now recursively write back this intermediate object to its parent
+                self.compile_field_assign(parent, parent_field, intermediate_reg)
+            }
+            _ => {
+                // Fallback for other cases (shouldn't happen in valid code)
+                let obj_reg = self.compile_expr(object);
+                self.instructions
+                    .push(OpCode::SetField(obj_reg, field_idx, val_reg));
+                val_reg
+            }
+        }
+    }
+
     pub fn compile_expr(&mut self, expr: &Expr) -> u16 {
         match &expr.kind {
             ExprKind::Assign { name, value } => {
@@ -198,6 +242,17 @@ impl Compiler {
                         name
                     );
                 }
+            }
+            ExprKind::FieldAssign {
+                object,
+                field,
+                value,
+            } => {
+                // Compile the value first
+                let val_reg = self.compile_expr(value);
+
+                // Handle nested field assignment by recursively writing back
+                self.compile_field_assign(object, field, val_reg)
             }
             ExprKind::Bool(b) => {
                 let dest = self.alloc_reg();

@@ -174,6 +174,11 @@ pub enum ExprKind {
         name: String,
         value: Box<Expr>,
     },
+    FieldAssign {
+        object: Box<Expr>,
+        field: String,
+        value: Box<Expr>,
+    },
     Bool(bool),
     Regex(String),
     Call {
@@ -954,17 +959,30 @@ impl Parser {
             let value = self.parse_assignment(); // Recursive for things like x = y = 10
             let end = value.span.end;
 
-            // We check if the left side was actually a variable
-            if let ExprKind::Variable(name) = expr.kind {
-                return Expr {
-                    kind: ExprKind::Assign {
-                        name,
-                        value: Box::new(value),
-                    },
-                    span: Span::new(start, end),
-                };
-            } else {
-                panic!("Syntax Error: Invalid assignment target");
+            // Check if the left side is a valid assignment target
+            match expr.kind {
+                ExprKind::Variable(name) => {
+                    return Expr {
+                        kind: ExprKind::Assign {
+                            name,
+                            value: Box::new(value),
+                        },
+                        span: Span::new(start, end),
+                    };
+                }
+                ExprKind::FieldAccess { object, field } => {
+                    return Expr {
+                        kind: ExprKind::FieldAssign {
+                            object,
+                            field,
+                            value: Box::new(value),
+                        },
+                        span: Span::new(start, end),
+                    };
+                }
+                _ => {
+                    panic!("Syntax Error: Invalid assignment target");
+                }
             }
         }
         expr

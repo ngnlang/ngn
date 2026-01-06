@@ -842,6 +842,40 @@ impl Analyzer {
                 }
                 val_type
             }
+            ExprKind::FieldAssign {
+                object,
+                field,
+                value,
+            } => {
+                // Check the object and value expressions
+                let _obj_type = self.check_expression(object);
+                let val_type = self.check_expression(value);
+
+                // Trace back to the root variable to check mutability
+                fn get_root_var(e: &Expr) -> Option<&str> {
+                    match &e.kind {
+                        ExprKind::Variable(name) => Some(name.as_str()),
+                        ExprKind::FieldAccess { object, .. } => get_root_var(object),
+                        _ => None,
+                    }
+                }
+
+                if let Some(root_name) = get_root_var(object) {
+                    if let Some(sym) = self.lookup(root_name) {
+                        if !sym.is_mutable {
+                            self.add_error(
+                                format!(
+                                    "Error: Cannot assign to field '{}' of immutable variable '{}'",
+                                    field, root_name
+                                ),
+                                expr.span,
+                            );
+                        }
+                    }
+                }
+
+                val_type
+            }
             ExprKind::Call { name, args } => {
                 let arg_types: Vec<Type> = args.iter().map(|a| self.check_expression(a)).collect();
 
