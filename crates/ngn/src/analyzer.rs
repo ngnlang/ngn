@@ -217,6 +217,7 @@ impl Analyzer {
                         name,
                         Type::Function {
                             params: param_types,
+                            optional_count: 0,
                             return_type: Box::new(ret_ty),
                         },
                         false,
@@ -263,6 +264,7 @@ impl Analyzer {
                                 name.clone(),
                                 Type::Function {
                                     params: param_types,
+                                    optional_count: 0,
                                     return_type: Box::new(ret_ty),
                                 },
                             ));
@@ -424,6 +426,7 @@ impl Analyzer {
                         name,
                         Type::Function {
                             params: param_types.clone(),
+                            optional_count: 0,
                             return_type: Box::new(actual_return_type.clone()),
                         },
                         false,
@@ -622,6 +625,7 @@ impl Analyzer {
                         let fn_type = match (module, name.as_str()) {
                             ("test", "assert") => Type::Function {
                                 params: vec![Type::Bool],
+                                optional_count: 0,
                                 return_type: Box::new(Type::Void),
                             },
                             ("math", "abs")
@@ -629,22 +633,27 @@ impl Analyzer {
                             | ("math", "floor")
                             | ("math", "ceil") => Type::Function {
                                 params: vec![Type::Any],
+                                optional_count: 0,
                                 return_type: Box::new(Type::Any),
                             },
                             ("math", "sin") => Type::Function {
                                 params: vec![Type::F64],
+                                optional_count: 0,
                                 return_type: Box::new(Type::F64),
                             },
                             ("http", "serve") => Type::Function {
                                 params: vec![Type::I64, Type::Any], // port, handler
+                                optional_count: 0,
                                 return_type: Box::new(Type::Void),
                             },
                             ("http", "serve_tls") => Type::Function {
                                 params: vec![Type::I64, Type::Any, Type::String, Type::String], // port, handler, cert, key
+                                optional_count: 0,
                                 return_type: Box::new(Type::Void),
                             },
                             _ => Type::Function {
                                 params: vec![Type::Any],
+                                optional_count: 0,
                                 return_type: Box::new(Type::Any),
                             },
                         };
@@ -721,6 +730,7 @@ impl Analyzer {
 
                 Type::Function {
                     params: param_types,
+                    optional_count: 0,
                     return_type: Box::new(actual_ret),
                 }
             }
@@ -909,19 +919,32 @@ impl Analyzer {
                     match sym.ty {
                         Type::Function {
                             params,
+                            optional_count,
                             return_type,
                         } => {
-                            if params.len() != arg_types.len() {
-                                self.add_error(
+                            let required_count = params.len() - optional_count;
+                            let args_provided = arg_types.len();
+
+                            if args_provided < required_count || args_provided > params.len() {
+                                let msg = if optional_count > 0 {
+                                    format!(
+                                        "Error: '{}' expects {}-{} arguments, got {}",
+                                        name,
+                                        required_count,
+                                        params.len(),
+                                        args_provided
+                                    )
+                                } else {
                                     format!(
                                         "Error: '{}' expects {} arguments, got {}",
                                         name,
                                         params.len(),
-                                        arg_types.len()
-                                    ),
-                                    expr.span,
-                                );
+                                        args_provided
+                                    )
+                                };
+                                self.add_error(msg, expr.span);
                             } else {
+                                // Type-check only the args that were provided
                                 for (i, (expected, actual)) in
                                     params.iter().zip(arg_types.iter()).enumerate()
                                 {
@@ -1264,6 +1287,7 @@ impl Analyzer {
                 if let Some(Type::Function {
                     params,
                     return_type,
+                    ..
                 }) = custom_method_ty
                 {
                     if args.len() != params.len() {
@@ -1762,6 +1786,7 @@ impl Analyzer {
                                 if let Type::Function {
                                     params,
                                     return_type,
+                                    ..
                                 } = closure_ty
                                 {
                                     if params.len() != 1
@@ -2172,9 +2197,11 @@ impl Analyzer {
             Type::State(inner) => Type::State(Box::new(self.normalize_type(*inner))),
             Type::Function {
                 params,
+                optional_count,
                 return_type,
             } => Type::Function {
                 params: params.into_iter().map(|p| self.normalize_type(p)).collect(),
+                optional_count,
                 return_type: Box::new(self.normalize_type(*return_type)),
             },
             Type::Generic(name, args) => {

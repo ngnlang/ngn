@@ -994,6 +994,8 @@ impl Compiler {
                             name: "this".to_string(),
                             ty: Some(target.clone()),
                             is_owned: false,
+                            is_optional: false,
+                            default_value: None,
                             span: crate::lexer::Span::default(),
                         }];
                         method_params.extend(params);

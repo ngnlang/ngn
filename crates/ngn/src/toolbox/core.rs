@@ -22,6 +22,7 @@ pub fn get_type(name: &str) -> Option<GlobalDef> {
         "print" | "echo" => Some(GlobalDef {
             ty: Type::Function {
                 params: vec![Type::Any],
+                optional_count: 0,
                 return_type: Box::new(Type::Void),
             },
             is_mutable: false,
@@ -29,6 +30,7 @@ pub fn get_type(name: &str) -> Option<GlobalDef> {
         "sleep" => Some(GlobalDef {
             ty: Type::Function {
                 params: vec![Type::I64],
+                optional_count: 0,
                 return_type: Box::new(Type::Void),
             },
             is_mutable: false,
@@ -40,6 +42,7 @@ pub fn get_type(name: &str) -> Option<GlobalDef> {
         "fetch" => Some(GlobalDef {
             ty: Type::Function {
                 params: vec![Type::String, Type::Model("FetchOptions".to_string())],
+                optional_count: 1, // Second arg is optional
                 return_type: Box::new(Type::Channel(Box::new(Type::String))),
             },
             is_mutable: false,

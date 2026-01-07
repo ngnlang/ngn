@@ -166,6 +166,7 @@ fn main() {
                         Symbol {
                             ty: Type::Function {
                                 params: f.param_types.clone(),
+                                optional_count: 0,
                                 return_type: Box::new(f.return_type.clone()),
                             },
                             is_mutable: false,
@@ -174,6 +175,7 @@ fn main() {
                         Symbol {
                             ty: Type::Function {
                                 params: c.function.param_types.clone(),
+                                optional_count: 0,
                                 return_type: Box::new(c.function.return_type.clone()),
                             },
                             is_mutable: false,
@@ -224,6 +226,7 @@ fn main() {
                     Symbol {
                         ty: Type::Function {
                             params: f.param_types.clone(),
+                            optional_count: 0,
                             return_type: Box::new(f.return_type.clone()),
                         },
                         is_mutable: false,
@@ -232,6 +235,7 @@ fn main() {
                     Symbol {
                         ty: Type::Function {
                             params: c.function.param_types.clone(),
+                            optional_count: 0,
                             return_type: Box::new(c.function.return_type.clone()),
                         },
                         is_mutable: false,

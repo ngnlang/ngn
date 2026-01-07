@@ -19,6 +19,7 @@ pub enum Type {
     Tuple(Vec<Type>),
     Function {
         params: Vec<Type>,
+        optional_count: usize, // Number of trailing optional params
         return_type: Box<Type>,
     },
     Any,
@@ -40,6 +41,8 @@ pub struct Parameter {
     pub name: String,
     pub is_owned: bool,
     pub ty: Option<Type>,
+    pub is_optional: bool,           // true if `name?` syntax
+    pub default_value: Option<Expr>, // Some if `= expr` syntax
     pub span: Span,
 }
 
@@ -340,6 +343,14 @@ impl Parser {
             let start_param = self.current_span.start;
             let param_name = self.expect_identifier();
 
+            // Check for optional marker (?)
+            let is_optional = if self.current_token == Token::Question {
+                self.advance();
+                true
+            } else {
+                false
+            };
+
             let mut ty = None;
             let mut is_owned = false;
 
@@ -353,12 +364,23 @@ impl Parser {
 
                 ty = Some(self.parse_type());
             }
+
+            // Check for default value (= expr)
+            let default_value = if self.current_token == Token::Equal {
+                self.advance();
+                Some(self.parse_expression())
+            } else {
+                None
+            };
+
             let end_param = self.previous_span.end;
 
             params.push(Parameter {
                 name: param_name,
                 is_owned,
                 ty,
+                is_optional,
+                default_value,
                 span: Span::new(start_param, end_param),
             });
 
@@ -860,6 +882,7 @@ impl Parser {
             // Bare `fn` with no type info
             return Type::Function {
                 params: vec![],
+                optional_count: 0,
                 return_type: Box::new(Type::Void),
             };
         }
@@ -880,6 +903,7 @@ impl Parser {
             // fn<return_type> means () -> return_type
             Type::Function {
                 params: vec![],
+                optional_count: 0,
                 return_type: Box::new(type_args.remove(0)),
             }
         } else {
@@ -887,6 +911,7 @@ impl Parser {
             let return_type = type_args.pop().unwrap();
             Type::Function {
                 params: type_args,
+                optional_count: 0,
                 return_type: Box::new(return_type),
             }
         }
@@ -2171,6 +2196,8 @@ impl Parser {
                     name: param_name,
                     is_owned,
                     ty,
+                    is_optional: false,
+                    default_value: None,
                     span: Span::new(p_start, p_end),
                 });
 
