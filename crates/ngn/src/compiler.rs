@@ -443,12 +443,30 @@ impl Compiler {
 
                     let mut param_ownership = Vec::new();
                     let mut param_types = Vec::new();
+                    let mut default_values = Vec::new();
+                    let mut param_is_maybe_wrapped = Vec::new();
                     for param in params {
                         let p_idx = sub_compiler.next_index;
                         sub_compiler.symbol_table.insert(param.name.clone(), p_idx);
                         sub_compiler.next_index += 1;
                         param_ownership.push(param.is_owned);
                         param_types.push(param.ty.clone().unwrap_or(crate::parser::Type::Any));
+                        param_is_maybe_wrapped.push(param.is_optional);
+
+                        // Extract default value if provided
+                        let default_val = if let Some(ref expr) = param.default_value {
+                            self.extract_literal_for_default(expr) // Returns Some(Value) for literals
+                        } else if param.is_optional {
+                            // Return Maybe::Null for optional params with no default
+                            Some(crate::value::EnumData::into_value(
+                                "Maybe".to_string(),
+                                "Null".to_string(),
+                                None,
+                            ))
+                        } else {
+                            None // Required param
+                        };
+                        default_values.push(default_val);
                     }
 
                     sub_compiler.temp_start = sub_compiler.next_index as u16;
@@ -468,6 +486,8 @@ impl Compiler {
                         param_count: params.len(),
                         param_ownership,
                         param_types,
+                        default_values,
+                        param_is_maybe_wrapped,
                         return_type: return_type.clone().unwrap_or(crate::parser::Type::Void),
                         reg_count: sub_compiler.max_reg as usize,
                         upvalues: captured_upvalues.clone(),
@@ -866,6 +886,7 @@ impl Compiler {
         }
     }
 
+    /// Extract a constant literal with size limits (for static declaration inlining)
     fn extract_constant_literal(&self, expr: &Expr) -> Option<Value> {
         match &expr.kind {
             ExprKind::Number(n) => Some(Value::Numeric(Number::I64(*n))),
@@ -897,6 +918,50 @@ impl Compiler {
                     }
                 }
                 Some(Value::Tuple(values))
+            }
+            _ => None,
+        }
+    }
+
+    /// Extract a literal for default param values (no size limits)
+    fn extract_literal_for_default(&self, expr: &Expr) -> Option<Value> {
+        match &expr.kind {
+            ExprKind::Number(n) => Some(Value::Numeric(Number::I64(*n))),
+            ExprKind::Float(n) => Some(Value::Numeric(Number::F64(*n))),
+            ExprKind::Bool(b) => Some(Value::Bool(*b)),
+            ExprKind::String(s) => Some(Value::String(s.clone())),
+            ExprKind::Array(elements) => {
+                let mut values = Vec::new();
+                for el in elements {
+                    if let Some(v) = self.extract_literal_for_default(el) {
+                        values.push(v);
+                    } else {
+                        return None;
+                    }
+                }
+                Some(Value::Array(values))
+            }
+            ExprKind::Tuple(elements) => {
+                let mut values = Vec::new();
+                for el in elements {
+                    if let Some(v) = self.extract_literal_for_default(el) {
+                        values.push(v);
+                    } else {
+                        return None;
+                    }
+                }
+                Some(Value::Tuple(values))
+            }
+            ExprKind::InterpolatedString(parts) => {
+                let mut res = String::new();
+                for part in parts {
+                    if let Some(val) = self.extract_literal_for_default(part) {
+                        res.push_str(&val.to_string());
+                    } else {
+                        return None;
+                    }
+                }
+                Some(Value::String(res))
             }
             _ => None,
         }
@@ -1648,12 +1713,30 @@ impl Compiler {
 
         let mut param_ownership = Vec::new();
         let mut param_types = Vec::new();
+        let mut default_values = Vec::new();
+        let mut param_is_maybe_wrapped = Vec::new();
         for param in &params {
             let p_idx = sub_compiler.next_index;
             sub_compiler.symbol_table.insert(param.name.clone(), p_idx);
             sub_compiler.next_index += 1;
             param_ownership.push(param.is_owned);
             param_types.push(param.ty.clone().unwrap_or(crate::parser::Type::Any));
+            param_is_maybe_wrapped.push(param.is_optional);
+
+            // Extract default value if provided
+            let default_val = if let Some(ref expr) = param.default_value {
+                self.extract_literal_for_default(expr) // Returns Some(Value) for literals
+            } else if param.is_optional {
+                // Return Maybe::Null for optional params with no default
+                Some(crate::value::EnumData::into_value(
+                    "Maybe".to_string(),
+                    "Null".to_string(),
+                    None,
+                ))
+            } else {
+                None // Required param
+            };
+            default_values.push(default_val);
         }
 
         sub_compiler.temp_start = sub_compiler.next_index as u16;
@@ -1676,6 +1759,8 @@ impl Compiler {
             param_count: param_ownership.len(),
             param_ownership,
             param_types,
+            default_values,
+            param_is_maybe_wrapped,
             return_type: return_type.unwrap_or(crate::parser::Type::Void),
             reg_count: sub_compiler.max_reg as usize,
             upvalues: sub_compiler.upvalues,

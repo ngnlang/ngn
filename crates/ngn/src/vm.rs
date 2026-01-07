@@ -1260,7 +1260,7 @@ impl Fiber {
         closure: Option<Box<Closure>>,
         dest_reg: Option<u16>,
         arg_start: u16,
-        _arg_count: u8,
+        arg_count: u8,
     ) {
         let frame = CallFrame {
             instructions: self.instructions.clone(),
@@ -1278,6 +1278,28 @@ impl Fiber {
         let needed = self.fp + func.reg_count;
         if self.stack.len() < needed {
             self.stack.resize(needed, Value::Void);
+        }
+
+        // Wrap provided args in Maybe::Value for params declared with ?
+        for i in 0..(arg_count as usize) {
+            if i < func.param_is_maybe_wrapped.len() && func.param_is_maybe_wrapped[i] {
+                let val = self.get_reg_at(i as u16);
+                let wrapped = crate::value::EnumData::into_value(
+                    "Maybe".to_string(),
+                    "Value".to_string(),
+                    Some(Box::new(val)),
+                );
+                self.set_reg_at(i as u16, wrapped);
+            }
+        }
+
+        // Fill missing arguments with default values
+        for i in (arg_count as usize)..func.param_count {
+            if i < func.default_values.len() {
+                if let Some(default_val) = &func.default_values[i] {
+                    self.set_reg_at(i as u16, default_val.clone());
+                }
+            }
         }
 
         self.instructions = func.instructions.clone();
@@ -1850,6 +1872,8 @@ impl VM {
             param_count: 0,
             param_ownership: Vec::new(),
             param_types: Vec::new(),
+            default_values: Vec::new(),
+            param_is_maybe_wrapped: Vec::new(),
             return_type: crate::parser::Type::Void,
             reg_count,
             upvalues: Vec::new(),

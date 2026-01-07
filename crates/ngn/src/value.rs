@@ -448,7 +448,9 @@ pub struct Function {
     // bool = true if it's an owned parameter (<)
     pub param_ownership: Vec<bool>,
     pub param_types: Vec<crate::parser::Type>, // Type of each parameter
-    pub return_type: crate::parser::Type,      // Return type of the function
+    pub default_values: Vec<Option<Value>>, // Default values for optional params (None = required)
+    pub param_is_maybe_wrapped: Vec<bool>, // true if param was declared with ? (needs Maybe wrapping)
+    pub return_type: crate::parser::Type,  // Return type of the function
     pub reg_count: usize,
     pub upvalues: Vec<crate::compiler::Upvalue>,
 }

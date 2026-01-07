@@ -42,7 +42,7 @@ pub struct Parameter {
     pub is_owned: bool,
     pub ty: Option<Type>,
     pub is_optional: bool,           // true if `name?` syntax
-    pub default_value: Option<Expr>, // Some if `= expr` syntax
+    pub default_value: Option<Expr>, // Value if `= expr` syntax
     pub span: Span,
 }
 

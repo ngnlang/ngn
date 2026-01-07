@@ -211,13 +211,17 @@ impl Analyzer {
                         let ty = p.ty.clone().unwrap_or(Type::Any);
                         param_types.push(self.normalize_type(ty));
                     }
+                    let optional_count = params
+                        .iter()
+                        .filter(|p| p.is_optional || p.default_value.is_some())
+                        .count();
                     let ret_ty = return_type.clone().unwrap_or(Type::Void);
                     let ret_ty = self.normalize_type(ret_ty);
                     self.define(
                         name,
                         Type::Function {
                             params: param_types,
-                            optional_count: 0,
+                            optional_count,
                             return_type: Box::new(ret_ty),
                         },
                         false,
@@ -409,6 +413,10 @@ impl Analyzer {
                         param_types.push(Type::Any);
                     }
                 }
+                let optional_count = params
+                    .iter()
+                    .filter(|p| p.is_optional || p.default_value.is_some())
+                    .count();
                 let actual_return_type = return_type.clone().unwrap_or(Type::Void);
 
                 // Check if function is already defined (from Pass 1 or previous statement)
@@ -426,7 +434,7 @@ impl Analyzer {
                         name,
                         Type::Function {
                             params: param_types.clone(),
-                            optional_count: 0,
+                            optional_count,
                             return_type: Box::new(actual_return_type.clone()),
                         },
                         false,
