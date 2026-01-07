@@ -1262,7 +1262,15 @@ impl Parser {
                 let mut fields = Vec::new();
                 while self.current_token != Token::RBrace && self.current_token != Token::EOF {
                     let field_start = self.current_span.start;
-                    let field_name = self.expect_identifier();
+
+                    // Accept either identifier or string as field name
+                    let field_name = if let Token::StringStart = self.current_token {
+                        // String key: { "Content-Type": value }
+                        self.parse_literal_string()
+                    } else {
+                        // Identifier key: { field: value }
+                        self.expect_identifier()
+                    };
 
                     // Check if this is shorthand syntax: { field } instead of { field: value }
                     let value = if self.current_token == Token::Colon {
