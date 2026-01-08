@@ -468,12 +468,12 @@ impl Analyzer {
                 then_branch,
                 else_branch,
             } => {
-                let _condition_type = self.check_expression(condition);
+                let condition_type = self.check_expression(condition);
 
                 if let Some(bind_name) = &binding {
-                    // For binding pattern: if (b = x), use Type::Any for binding
-                    // (Could be enhanced to extract inner type from Maybe enum)
-                    let unwrapped_type = Type::Any;
+                    // For binding pattern: if (var n = x), use the expression's type
+                    // Since optional params are stored with their base type, this is already unwrapped
+                    let unwrapped_type = condition_type;
 
                     // Create scope for then-branch with binding defined
                     self.enter_scope();
@@ -494,17 +494,15 @@ impl Analyzer {
                 source,
                 failure_block,
             } => {
-                self.check_expression(source);
-
-                // Use Type::Any for binding (could be enhanced for Maybe unwrap)
-                let unwrapped_type = Type::Any;
+                // Get the source expression's type (already unwrapped for optional params)
+                let source_type = self.check_expression(source);
 
                 // Check failure block
                 // TODO: validate failure_block contains return/break/continue
                 self.check_statement(failure_block);
 
-                // Define binding in current scope (survives past check statement)
-                self.define(&binding, unwrapped_type, false, source.span);
+                // Define binding in current scope with the source's type
+                self.define(&binding, source_type, false, source.span);
 
                 Type::Void
             }
