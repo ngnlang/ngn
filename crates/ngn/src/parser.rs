@@ -1720,7 +1720,18 @@ impl Parser {
             }
 
             self.expect(Token::LParen);
-            let condition = self.parse_expression();
+
+            // Check for binding pattern: (var n = expr)
+            let (condition, binding) = if self.current_token == Token::Var {
+                self.advance(); // consume 'var'
+                let bind_name = self.expect_identifier();
+                self.expect(Token::Equal);
+                let expr = self.parse_expression();
+                (expr, Some(bind_name))
+            } else {
+                (self.parse_expression(), None)
+            };
+
             self.expect(Token::RParen);
 
             // Parse statements until we hit ':' or '}'
@@ -1794,7 +1805,7 @@ impl Parser {
             Statement {
                 kind: StatementKind::If {
                     condition,
-                    binding: None,
+                    binding,
                     then_branch: Box::new(Statement {
                         kind: StatementKind::Block(then_block),
                         span: then_span,
@@ -1804,20 +1815,18 @@ impl Parser {
                 span: Span::new(start, end),
             }
         } else {
-            // Inline If: if (cond) stmt : ... OR if (b = x) stmt : ...
+            // Inline If: if (cond) stmt : ... OR if (var b = x) stmt : ...
             self.expect(Token::LParen);
 
-            // Parse the full expression first
-            let expr = self.parse_expression();
-
-            // Check if it's an assignment pattern: variable = expr
-            // Such assign is parsed as ExprKind::Assign { name, value }
-            let (condition, binding) = if let ExprKind::Assign { name, value } = expr.kind {
-                // It's a binding pattern: if (b = x)
-                (*value, Some(name))
+            // Check for binding pattern: (var n = expr)
+            let (condition, binding) = if self.current_token == Token::Var {
+                self.advance(); // consume 'var'
+                let bind_name = self.expect_identifier();
+                self.expect(Token::Equal);
+                let expr = self.parse_expression();
+                (expr, Some(bind_name))
             } else {
-                // Normal condition
-                (expr, None)
+                (self.parse_expression(), None)
             };
 
             self.expect(Token::RParen);
@@ -1858,7 +1867,18 @@ impl Parser {
         let start = self.current_span.start; // start at '('
         // Expect condition
         self.expect(Token::LParen);
-        let condition = self.parse_expression();
+
+        // Check for binding pattern: (var n = expr)
+        let (condition, binding) = if self.current_token == Token::Var {
+            self.advance(); // consume 'var'
+            let bind_name = self.expect_identifier();
+            self.expect(Token::Equal);
+            let expr = self.parse_expression();
+            (expr, Some(bind_name))
+        } else {
+            (self.parse_expression(), None)
+        };
+
         self.expect(Token::RParen);
 
         let mut then_block = Vec::new();
@@ -1926,7 +1946,7 @@ impl Parser {
         Statement {
             kind: StatementKind::If {
                 condition,
-                binding: None,
+                binding,
                 then_branch: Box::new(Statement {
                     kind: StatementKind::Block(then_block),
                     span: then_span,
@@ -1937,12 +1957,13 @@ impl Parser {
         }
     }
 
-    // Parse: check binding = source { failure_block }
+    // Parse: check var binding = source { failure_block }
     fn parse_check_stmt(&mut self) -> Statement {
         let start = self.current_span.start;
         self.advance(); // consume 'check'
 
-        // Expect: binding = source_ident
+        // Expect: var binding = source_ident
+        self.expect(Token::Var);
         let binding = self.expect_identifier();
         self.expect(Token::Equal);
 
@@ -1975,9 +1996,19 @@ impl Parser {
     fn parse_implicit_if(&mut self) -> Statement {
         let start = self.current_span.start;
         self.expect(Token::LParen);
-        let condition = self.parse_expression();
-        self.expect(Token::RParen);
 
+        // Check for binding pattern: (var n = expr)
+        let (condition, binding) = if self.current_token == Token::Var {
+            self.advance(); // consume 'var'
+            let bind_name = self.expect_identifier();
+            self.expect(Token::Equal);
+            let expr = self.parse_expression();
+            (expr, Some(bind_name))
+        } else {
+            (self.parse_expression(), None)
+        };
+
+        self.expect(Token::RParen);
         let then_stmt = self.parse_statement();
         let mut else_branch = None;
 
@@ -1998,7 +2029,7 @@ impl Parser {
         Statement {
             kind: StatementKind::If {
                 condition,
-                binding: None,
+                binding,
                 then_branch: Box::new(then_stmt),
                 else_branch,
             },

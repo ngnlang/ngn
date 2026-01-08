@@ -1290,7 +1290,7 @@ impl Compiler {
         let cond_reg = self.compile_expr(&condition);
 
         if let Some(bind_name) = binding {
-            // Maybe binding: if (b = x) { ... }
+            // Maybe binding: if (var b = x) { ... }
 
             // Emit check for Maybe::Value variant
             let check_reg = self.alloc_reg();
@@ -1299,23 +1299,27 @@ impl Compiler {
             self.instructions
                 .push(OpCode::CheckMaybeValue(check_reg, cond_reg));
 
-            let jump_false_idx = self.emit(OpCode::JumpIfFalse(check_reg, 0));
-            self.reg_top = self.temp_start;
+            // Allocate binding as a proper local variable slot
+            let bind_idx = self.next_index;
+            self.symbol_table.insert(bind_name.clone(), bind_idx);
+            self.next_index += 1;
 
-            // Extract the inner value into the binding
-            let bind_reg = self.alloc_reg();
-            self.symbol_table
-                .insert(bind_name.clone(), bind_reg as usize);
+            let jump_false_idx = self.emit(OpCode::JumpIfFalse(check_reg, 0));
+
+            // Reset temp area after binding allocation
+            self.temp_start = self.next_index as u16;
+            self.reg_top = self.temp_start;
 
             // UnwrapMaybe extracts the inner value
             self.instructions
-                .push(OpCode::UnwrapMaybe(bind_reg, cond_reg));
+                .push(OpCode::UnwrapMaybe(bind_idx as u16, cond_reg));
 
             // Compile then branch with binding available
             self.compile_statement(*then_branch);
 
-            // Clean up binding from symbol table
+            // Clean up binding from symbol table and restore next_index
             self.symbol_table.remove(&bind_name);
+            self.next_index -= 1;
 
             if let Some(else_branch) = else_branch {
                 // --- CASE: IF / ELSE ---
@@ -1363,7 +1367,7 @@ impl Compiler {
     }
 
     fn compile_check(&mut self, binding: String, source: Expr, failure_block: Box<Statement>) {
-        // check b = x { failure }
+        // check var b = x { failure }
         // If x is Null, run failure block (which must return/break)
         // Otherwise, bind unwrapped value to b for rest of scope
 
@@ -1374,8 +1378,16 @@ impl Compiler {
         self.instructions
             .push(OpCode::CheckMaybeValue(check_reg, src_reg));
 
-        // If NOT Value (i.e., Null), run failure block
+        // Allocate binding as a proper local variable slot
+        let bind_idx = self.next_index;
+        self.symbol_table.insert(binding, bind_idx);
+        self.next_index += 1;
+
+        // If not Value (i.e., Null), run failure block
         let jump_if_value_idx = self.emit(OpCode::JumpIfTrue(check_reg, 0));
+
+        // Reset temp area AFTER binding allocation
+        self.temp_start = self.next_index as u16;
         self.reg_top = self.temp_start;
 
         // Failure block runs here if Null
@@ -1385,11 +1397,9 @@ impl Compiler {
         // Patch jump to skip failure block if Value
         self.patch_jump(jump_if_value_idx);
 
-        // Extract value into binding (available for rest of outer scope)
-        let bind_reg = self.alloc_reg();
-        self.symbol_table.insert(binding, bind_reg as usize);
+        // Extract value into binding slot
         self.instructions
-            .push(OpCode::UnwrapMaybe(bind_reg, src_reg));
+            .push(OpCode::UnwrapMaybe(bind_idx as u16, src_reg));
     }
 
     fn compile_while(&mut self, condition: Expr, body: Box<Statement>, is_once: bool) {
