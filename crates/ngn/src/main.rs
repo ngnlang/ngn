@@ -293,6 +293,11 @@ fn main() {
         std::process::exit(1);
     }
 
+    // Print warnings (non-blocking)
+    for warning in &analyzer.warnings {
+        eprintln!("{}", warning);
+    }
+
     // 3a. Now resolve the export type and check for fetch method
     let is_http_server = if let Some(expr_kind) = &default_export_expr_kind {
         match expr_kind {

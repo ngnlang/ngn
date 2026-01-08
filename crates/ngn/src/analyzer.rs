@@ -26,6 +26,7 @@ impl std::fmt::Display for Diagnostic {
 pub struct Analyzer {
     scopes: Vec<HashMap<String, Symbol>>,
     pub diagnostics: Vec<Diagnostic>,
+    pub warnings: Vec<Diagnostic>,
     errors: Vec<String>, // Deprecated, removing incrementally
     current_return_type: Option<Type>,
     infer_stack: Vec<Option<Type>>,
@@ -87,6 +88,7 @@ impl Analyzer {
         let mut analyzer = Self {
             scopes: vec![global_scope],
             diagnostics: Vec::new(),
+            warnings: Vec::new(),
             errors: Vec::new(),
             current_return_type: None,
             infer_stack: Vec::new(),
@@ -310,6 +312,10 @@ impl Analyzer {
         self.diagnostics.push(Diagnostic { message, span });
     }
 
+    fn add_warning(&mut self, message: String, span: Span) {
+        self.warnings.push(Diagnostic { message, span });
+    }
+
     fn enter_scope(&mut self) {
         self.scopes.push(HashMap::new());
     }
@@ -450,6 +456,10 @@ impl Analyzer {
                     if let Some(ty) = &param.ty {
                         self.define(&param.name, ty.clone(), true, param.span);
                     } else {
+                        self.add_warning(
+                            format!("Warning: Parameter '{}' has no type annotation", param.name),
+                            param.span,
+                        );
                         self.define(&param.name, Type::Any, true, param.span);
                     }
                 }
