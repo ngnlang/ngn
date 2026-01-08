@@ -464,14 +464,48 @@ impl Analyzer {
             }
             StatementKind::If {
                 condition,
+                binding,
                 then_branch,
                 else_branch,
             } => {
-                self.check_expression(condition);
-                self.check_statement(then_branch);
+                let _condition_type = self.check_expression(condition);
+
+                if let Some(bind_name) = &binding {
+                    // For binding pattern: if (b = x), use Type::Any for binding
+                    // (Could be enhanced to extract inner type from Maybe enum)
+                    let unwrapped_type = Type::Any;
+
+                    // Create scope for then-branch with binding defined
+                    self.enter_scope();
+                    self.define(bind_name, unwrapped_type, false, condition.span);
+                    self.check_statement(then_branch);
+                    self.exit_scope();
+                } else {
+                    self.check_statement(then_branch);
+                }
+
                 if let Some(eb) = else_branch {
                     self.check_statement(eb);
                 }
+                Type::Void
+            }
+            StatementKind::Check {
+                binding,
+                source,
+                failure_block,
+            } => {
+                self.check_expression(source);
+
+                // Use Type::Any for binding (could be enhanced for Maybe unwrap)
+                let unwrapped_type = Type::Any;
+
+                // Check failure block
+                // TODO: validate failure_block contains return/break/continue
+                self.check_statement(failure_block);
+
+                // Define binding in current scope (survives past check statement)
+                self.define(&binding, unwrapped_type, false, source.span);
+
                 Type::Void
             }
             StatementKind::While {

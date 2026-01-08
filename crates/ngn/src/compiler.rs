@@ -1248,9 +1248,15 @@ impl Compiler {
             }
             StatementKind::If {
                 condition,
+                binding,
                 then_branch,
                 else_branch,
-            } => self.compile_if(condition, then_branch, else_branch),
+            } => self.compile_if(condition, binding, then_branch, else_branch),
+            StatementKind::Check {
+                binding,
+                source,
+                failure_block,
+            } => self.compile_check(binding, source, failure_block),
             StatementKind::While {
                 condition,
                 body,
@@ -1275,6 +1281,7 @@ impl Compiler {
     fn compile_if(
         &mut self,
         condition: Expr,
+        binding: Option<String>,
         then_branch: Box<Statement>,
         else_branch: Option<Box<Statement>>,
     ) {
@@ -1282,43 +1289,107 @@ impl Compiler {
         // Output: [Instructions for Condition, Push Result]
         let cond_reg = self.compile_expr(&condition);
 
-        // The Decision Point (JumpIfFalse)
-        // If condition is false, we want to SKIP the 'then' block.
-        let jump_false_idx = self.emit(OpCode::JumpIfFalse(cond_reg, 0)); // 0 is placeholder
+        if let Some(bind_name) = binding {
+            // Maybe binding: if (b = x) { ... }
+
+            // Emit check for Maybe::Value variant
+            let check_reg = self.alloc_reg();
+
+            // CheckMaybeValue returns true if it's Value variant
+            self.instructions
+                .push(OpCode::CheckMaybeValue(check_reg, cond_reg));
+
+            let jump_false_idx = self.emit(OpCode::JumpIfFalse(check_reg, 0));
+            self.reg_top = self.temp_start;
+
+            // Extract the inner value into the binding
+            let bind_reg = self.alloc_reg();
+            self.symbol_table
+                .insert(bind_name.clone(), bind_reg as usize);
+
+            // UnwrapMaybe extracts the inner value
+            self.instructions
+                .push(OpCode::UnwrapMaybe(bind_reg, cond_reg));
+
+            // Compile then branch with binding available
+            self.compile_statement(*then_branch);
+
+            // Clean up binding from symbol table
+            self.symbol_table.remove(&bind_name);
+
+            if let Some(else_branch) = else_branch {
+                // --- CASE: IF / ELSE ---
+                // Escape the 'Then' Block (Jump)
+                // If we just executed the 'then' block, we MUST skip the 'else' block.
+                // Again, we don't know how long the 'else' block is, so placeholder 0.
+                let jump_end_idx = self.emit(OpCode::Jump(0));
+
+                // Patch (Fix) the JumpIfFalse
+                // Now we are at the start of the 'else' block.
+                // We go back to 'jump_false_idx' and say:
+                // "Hey, if false, jump HERE (current instruction count)."
+                self.patch_jump(jump_false_idx);
+
+                // Compile 'Else' Block
+                self.compile_statement(*else_branch);
+
+                // Patch (Fix) the Escape Jump
+                // Now we are at the very end.
+                // We go back to 'jump_end_idx' and say:
+                // "Hey, when 'then' finishes, jump HERE (the end)."
+                self.patch_jump(jump_end_idx);
+            } else {
+                // --- CASE: IF ONLY ---
+                // Patch (Fix) the JumpIfFalse
+                // There is no else. So if false, jump straight to the end.
+                self.patch_jump(jump_false_idx);
+            }
+        } else {
+            // Normal if: condition is already a bool
+            let jump_false_idx = self.emit(OpCode::JumpIfFalse(cond_reg, 0));
+            self.reg_top = self.temp_start;
+
+            self.compile_statement(*then_branch);
+
+            if let Some(else_branch) = else_branch {
+                let jump_end_idx = self.emit(OpCode::Jump(0));
+                self.patch_jump(jump_false_idx);
+                self.compile_statement(*else_branch);
+                self.patch_jump(jump_end_idx);
+            } else {
+                self.patch_jump(jump_false_idx);
+            }
+        }
+    }
+
+    fn compile_check(&mut self, binding: String, source: Expr, failure_block: Box<Statement>) {
+        // check b = x { failure }
+        // If x is Null, run failure block (which must return/break)
+        // Otherwise, bind unwrapped value to b for rest of scope
+
+        let src_reg = self.compile_expr(&source);
+
+        // Check if it's Maybe::Value
+        let check_reg = self.alloc_reg();
+        self.instructions
+            .push(OpCode::CheckMaybeValue(check_reg, src_reg));
+
+        // If NOT Value (i.e., Null), run failure block
+        let jump_if_value_idx = self.emit(OpCode::JumpIfTrue(check_reg, 0));
         self.reg_top = self.temp_start;
 
-        // Compile 'Then' Block
-        // These instructions follow immediately. If condition was true,
-        // the VM just keeps stepping into this code.
-        self.compile_statement(*then_branch);
+        // Failure block runs here if Null
+        self.compile_statement(*failure_block);
+        // Failure block must contain return/break/continue, so execution won't reach here
 
-        if let Some(else_branch) = else_branch {
-            // --- CASE: IF / ELSE ---
-            // Escape the 'Then' Block (Jump)
-            // If we just executed the 'then' block, we MUST skip the 'else' block.
-            // Again, we don't know how long the 'else' block is, so placeholder 0.
-            let jump_end_idx = self.emit(OpCode::Jump(0));
+        // Patch jump to skip failure block if Value
+        self.patch_jump(jump_if_value_idx);
 
-            // Patch (Fix) the JumpIfFalse
-            // Now we are at the start of the 'else' block.
-            // We go back to 'jump_false_idx' and say:
-            // "Hey, if false, jump HERE (current instruction count)."
-            self.patch_jump(jump_false_idx);
-
-            // Compile 'Else' Block
-            self.compile_statement(*else_branch);
-
-            // Patch (Fix) the Escape Jump
-            // Now we are at the very end.
-            // We go back to 'jump_end_idx' and say:
-            // "Hey, when 'then' finishes, jump HERE (the end)."
-            self.patch_jump(jump_end_idx);
-        } else {
-            // --- CASE: IF ONLY ---
-            // Patch (Fix) the JumpIfFalse
-            // There is no else. So if false, jump straight to the end.
-            self.patch_jump(jump_false_idx);
-        }
+        // Extract value into binding (available for rest of outer scope)
+        let bind_reg = self.alloc_reg();
+        self.symbol_table.insert(binding, bind_reg as usize);
+        self.instructions
+            .push(OpCode::UnwrapMaybe(bind_reg, src_reg));
     }
 
     fn compile_while(&mut self, condition: Expr, body: Box<Statement>, is_once: bool) {

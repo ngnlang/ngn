@@ -120,8 +120,14 @@ pub enum StatementKind {
     Block(Vec<Statement>),
     If {
         condition: Expr,
+        binding: Option<String>, // For `if (b = x)` syntax
         then_branch: Box<Statement>,
         else_branch: Option<Box<Statement>>,
+    },
+    Check {
+        binding: String,
+        source: Expr,
+        failure_block: Box<Statement>,
     },
     While {
         condition: Expr,
@@ -597,6 +603,7 @@ impl Parser {
             Token::Loop => self.parse_loop_stmt(),
             Token::For => self.parse_for_stmt(),
             Token::Match => self.parse_match_stmt(),
+            Token::Check => self.parse_check_stmt(),
             Token::LBrace => {
                 let block = self.parse_block();
                 // parse_block returns Vec<Statement>. We must wrap it in Statement::Block
@@ -1787,6 +1794,7 @@ impl Parser {
             Statement {
                 kind: StatementKind::If {
                     condition,
+                    binding: None,
                     then_branch: Box::new(Statement {
                         kind: StatementKind::Block(then_block),
                         span: then_span,
@@ -1796,9 +1804,22 @@ impl Parser {
                 span: Span::new(start, end),
             }
         } else {
-            // Inline If: if (cond) stmt : ...
+            // Inline If: if (cond) stmt : ... OR if (b = x) stmt : ...
             self.expect(Token::LParen);
-            let condition = self.parse_expression();
+
+            // Parse the full expression first
+            let expr = self.parse_expression();
+
+            // Check if it's an assignment pattern: variable = expr
+            // Such assign is parsed as ExprKind::Assign { name, value }
+            let (condition, binding) = if let ExprKind::Assign { name, value } = expr.kind {
+                // It's a binding pattern: if (b = x)
+                (*value, Some(name))
+            } else {
+                // Normal condition
+                (expr, None)
+            };
+
             self.expect(Token::RParen);
 
             let then_stmt = self.parse_statement();
@@ -1823,6 +1844,7 @@ impl Parser {
             Statement {
                 kind: StatementKind::If {
                     condition,
+                    binding,
                     then_branch: Box::new(then_stmt),
                     else_branch,
                 },
@@ -1904,11 +1926,46 @@ impl Parser {
         Statement {
             kind: StatementKind::If {
                 condition,
+                binding: None,
                 then_branch: Box::new(Statement {
                     kind: StatementKind::Block(then_block),
                     span: then_span,
                 }),
                 else_branch,
+            },
+            span: Span::new(start, end),
+        }
+    }
+
+    // Parse: check binding = source { failure_block }
+    fn parse_check_stmt(&mut self) -> Statement {
+        let start = self.current_span.start;
+        self.advance(); // consume 'check'
+
+        // Expect: binding = source_ident
+        let binding = self.expect_identifier();
+        self.expect(Token::Equal);
+
+        // Parse source as simple identifier (to avoid { being consumed as object literal)
+        let source_name = self.expect_identifier();
+        let source_span = self.previous_span;
+        let source = Expr {
+            kind: ExprKind::Variable(source_name),
+            span: source_span,
+        };
+
+        // Parse failure block
+        let failure_block = self.parse_block();
+        let end = self.previous_span.end;
+
+        Statement {
+            kind: StatementKind::Check {
+                binding,
+                source,
+                failure_block: Box::new(Statement {
+                    kind: StatementKind::Block(failure_block),
+                    span: Span::new(start, end),
+                }),
             },
             span: Span::new(start, end),
         }
@@ -1941,6 +1998,7 @@ impl Parser {
         Statement {
             kind: StatementKind::If {
                 condition,
+                binding: None,
                 then_branch: Box::new(then_stmt),
                 else_branch,
             },

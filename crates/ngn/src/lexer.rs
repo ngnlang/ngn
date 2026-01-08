@@ -26,6 +26,7 @@ pub enum Token {
     Extend,
     With,
     This,
+    Check,
 
     // Built-ins
     Print,
@@ -439,6 +440,7 @@ impl Lexer {
             "extend" => Token::Extend,
             "with" => Token::With,
             "this" => Token::This,
+            "check" => Token::Check,
             "true" => Token::Bool(true),
             "false" => Token::Bool(false),
             "map" => Token::Map,

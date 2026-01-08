@@ -1244,6 +1244,26 @@ impl Fiber {
                 let json_str = serde_json::to_string(&json).unwrap_or_else(|_| "null".to_string());
                 self.set_reg_at(dest_reg, Value::String(json_str));
             }
+            OpCode::CheckMaybeValue(dest_reg, maybe_reg) => {
+                // Check if the Maybe is a Value variant
+                let val = self.get_reg_at(maybe_reg);
+                let is_value = match val {
+                    Value::Enum(ref e) => e.enum_name == "Maybe" && e.variant_name == "Value",
+                    _ => false,
+                };
+                self.set_reg_at(dest_reg, Value::Bool(is_value));
+            }
+            OpCode::UnwrapMaybe(dest_reg, maybe_reg) => {
+                // Extract the inner value from Maybe::Value
+                let val = self.get_reg_at(maybe_reg);
+                let inner = match val {
+                    Value::Enum(ref e) if e.enum_name == "Maybe" && e.variant_name == "Value" => {
+                        e.data.clone().map(|b| *b).unwrap_or(Value::Void)
+                    }
+                    _ => Value::Void,
+                };
+                self.set_reg_at(dest_reg, inner);
+            }
             OpCode::Halt => {
                 self.status = FiberStatus::Finished;
                 return FiberStatus::Finished;
