@@ -124,13 +124,15 @@ print("hello \${x}") // hello ${x}
 
 ## json
 
-### parse
+### `parse()`
+You can parse a JSON string or an array.
 ```ngn
 const data = json.parse('{"name": "ngn"}')
 print(data.name) // ngn
 ```
 
-### stringify
+### `stringify()`
+You can stringify an object or an array.
 ```ngn
 const data = { name: "ngn" }
 const str = json.stringify(data)
@@ -449,9 +451,22 @@ print(person.age) // 30
 print(person.isStudent) // false
 ```
 
-## Custom Methods
+You can also use shorthand syntax for assigning values to object fields.
+```ngn
+const name = "John"
+const age = 30
+const isStudent = false
 
-If you want to add methods to built-in types, you can use the `extend` keyword. Applies to these types:
+const person = { name, age, isStudent }
+
+print(person.name) // John
+print(person.age) // 30
+print(person.isStudent) // false
+```
+
+## Custom TypeMethods
+
+If you want to add methods to built-in types, you can use the `extend` keyword. This feature applies to following types:
 
 - number (generic that applies to all numeric types)
 - f64, i32, u8, etc (for specific numeric types)
@@ -532,16 +547,13 @@ fn main() {
 ```
 
 ### Maybe<T>
-
 `Maybe` represents a value that may or may not exist.
 
 #### Variants
-
 - `Value(T)` — The value exists
 - `Null` — The value does not exist
 
 #### Examples
-
 ```ngn
 fn findUser(id: u64): Maybe<string> {
   if (id == 1) return Value("Jason")
@@ -560,6 +572,28 @@ match (user1) {
 match (user2) {
   Value(name) => print("Found: {name}"),
   Null => print("User not found"), // matches
+}
+```
+
+#### `check`
+`check` is a way of guarding logic that requires a value. It can only be used for variables of type `Maybe<T>` or `Result<T, E>`.
+
+- If it evaluates to `Null`, the statement block is run and it must either `return` or `break`.
+- If it evaluates to a value, the declared variable (`u` in the example) is assigned the value and the statement block is skipped.
+```ngn
+fn getUser(user?: string): Result<User, string> {
+  check var u = user {
+    // failure case
+    return "User not found"
+  }
+  // success case
+  return db.getUser(u)
+}
+
+const user = getUser("jason")
+match (user) {
+  Ok(user) => print("User: {user}"),
+  Error(msg) => print("Error: {msg}"),
 }
 ```
 
@@ -691,6 +725,8 @@ Functions create an isolated environment, meaning it can't access values outside
 
 If passing a function as a param, you can mark the param like `fn<param1_type, param2_type, paramN_type, return_type>`. `return_type` is always last in the list, even if that means it's the only type listed.
 
+Function params must be explicitly typed - otherwise ngn will show a console warning.
+
 ### Traditional block, explicit return
 ```ngn
 fn add(a: i64, b: i64): i64 {
@@ -700,7 +736,7 @@ fn add(a: i64, b: i64): i64 {
 
 ### Traditional block, explicit multiline return
 ```ngn
-fn add(a, b) {
+fn add(a: i64, b: i64): i64 {
   return (
     a + 
     b
@@ -710,10 +746,11 @@ fn add(a, b) {
 
 ### Implicit return
 ```ngn
-fn add(a, b) a + b
+fn add(a: i64, b: i64): i64 a + b
 ```
 
 ### Side-effects only
+Functions that only perform side-effects don't need a return type, but you can declare `void` if you want.
 ```ngn
 fn doThing() {
   print("something")
@@ -755,7 +792,40 @@ readThing(x) ✅ // does not move ownership of `x` to the function
 print(x) ✅ // `x` is still available
 ```
 
-If a function doesn't declare a param as owned, you can still pass owned data to it. In this case, we "downgrade" what you pass, so that it doesn't transfer ownership. Essentially, the function borrows it.
+### Optional params
+In this example, `suffix` is optional. Inside the function, it is either `Maybe::Value<T>` or `Maybe::Null`. There are a couple of ways to handle checking which variant it is:
+```ngn
+fn greet(name: string, suffix?: string): string {
+  // explicit match
+  match (suffix) {
+    Value(s) => return "Hello ${name}${s}"
+    Null => return "Hello ${name}"
+  }
+}
+print(greet("Bob")) // "Hello Bob"
+print(greet("Bob", "!")) // "Hello Bob!"
+```
+```ngn
+fn greet(name: string, suffix?: string): string {
+  // Check if a value can be unwrapped from the enum variant. If so, assign to local variable and run the statement block; otherwise, it's `Maybe::Null`.
+  if (let s = suffix) {
+    return "Hello ${name}${s}"
+  }
+  return "Hello ${name}"
+}
+print(greet("Bob")) // "Hello Bob"
+print(greet("Bob", "!")) // "Hello Bob!"
+```
+
+### Default params
+Default params are implicitly optional.
+```ngn
+fn greet(name: string, suffix: string = "!") {
+  print("Hello ${name}${suffix}")
+}
+print(greet("Bob")) // "Hello Bob!"
+print(greet("Bob", ",")) // "Hello Bob,"
+```
 
 ## `map`
 Create a key, value map. Type declartion is required.
@@ -873,7 +943,7 @@ Closures are similar to functions, but have important differences:
     ```
 To mutate the value of a variable from within a closure, use `state()`.
 
-## Objects and Composability
+## Typed Objects and Composability
 You can create typed objects using models, then create a new instance of a model.
 
 ### `model`
@@ -951,9 +1021,21 @@ fn main() {
 }
 ```
 
-## `this`
-There's no need to fear `this` in ngn. It's an implicit reference to the instance that a method is called on. It gives you access to the instance's fields and other methods.
+### Mutating model data
+When you create an instance of a model, it's essentially an object - although it can have methods attached to it as well.
 
+The general rule is that you can mutate based on how the variable was declared (`var`, `const`). However, you can't change a field's type.
+
+Here are the ways to manipulate an object's fields, based on the above example code:
+- direct assignment: `user.age = 7`
+- entire object: `user = { name: "Ben", age: 56 }`
+- method: `user.changeName("Stacie")`
+- by `const`, `static` variables: ❌ not allowed, as these are all strictly immutable
+
+## `this`
+There's no need to fear `this` in ngn. It's an implicit reference to the instance that a method is called on.
+
+For models, it gives you access to the instance's fields and other methods.
 ```ngn
 model User {
   name: string,
@@ -973,17 +1055,17 @@ extend User {
 var user = User { name: "Jason", age: 47 }
 user.greet()  // "Hello, I'm Jason"
 ```
+For custom type methods, it gives you access to the type's value.
+```ngn
+extend string {
+  fn isBlank(): bool {
+    return this.trim().length() == 0
+  }
+}
 
-### Mutating "object" data
-When you create an instance of a model, it's essentially an object - although it can have methods attached to it as well.
-
-The general rule is that you can mutate based on how the variable was declared (`var`, `const`). However, you can't change a field's type.
-
-Here are the ways to manipulate an object's fields, based on the above example code:
-- direct assignment: `user.age = 7`
-- entire object: `user = { name: "Ben", age: 56 }`
-- method: `user.changeName("Stacie")`
-- by `const`, `static` variables: ❌ not allowed, as these are all strictly immutable
+const name = ""
+print(name.isBlank()) // true
+```
 
 ## Channels
 Send and receive data.
@@ -1259,6 +1341,29 @@ fn main() {
   
   print("Spawned results: {results}")
 }
+```
+
+## `fetch()`
+Use `fetch` to make HTTP requests, such as to external APIs. It returns a channel, so you await it with the `<-` operator.
+
+```ngn
+const response = <- fetch("https://example.com") // GET is the default method
+print(response)
+```
+```ngn
+const response = <- fetch("https://example.com", {
+  method: "POST",
+  headers: {
+    "Accept": "application/json",
+    "Content-Type": "application/json",
+  },
+  body: json.stringify({
+    "name": "John Doe",
+    "email": "john.doe@example.com",
+  }),
+  timeout: 10000, // 10 seconds
+})
+print(response)
 ```
 
 ## Modules
