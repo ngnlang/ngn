@@ -110,6 +110,73 @@ impl Span {
     pub fn new(start: usize, end: usize) -> Self {
         Self { start, end }
     }
+
+    /// Convert byte offset to (line, column) - both 1-indexed
+    pub fn to_line_col(&self, source: &str) -> (usize, usize) {
+        let mut line = 1;
+        let mut col = 1;
+        for (i, ch) in source.char_indices() {
+            if i >= self.start {
+                break;
+            }
+            if ch == '\n' {
+                line += 1;
+                col = 1;
+            } else {
+                col += 1;
+            }
+        }
+        (line, col)
+    }
+
+    /// Get the line content containing this span
+    pub fn get_line<'a>(&self, source: &'a str) -> &'a str {
+        let line_start = source[..self.start].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let line_end = source[self.start..]
+            .find('\n')
+            .map(|i| self.start + i)
+            .unwrap_or(source.len());
+        &source[line_start..line_end]
+    }
+
+    /// Format a diagnostic message with source context
+    pub fn format_diagnostic(&self, source: &str, filename: &str, message: &str) -> String {
+        // Adjust start to skip any leading whitespace in the span
+        let mut adjusted_start = self.start;
+        while adjusted_start < self.end && adjusted_start < source.len() {
+            let ch = source.as_bytes().get(adjusted_start).copied().unwrap_or(0);
+            if ch == b' ' || ch == b'\t' || ch == b'\r' {
+                adjusted_start += 1;
+            } else {
+                break;
+            }
+        }
+
+        let adjusted_span = Span::new(adjusted_start, self.end);
+        let (line, col) = adjusted_span.to_line_col(source);
+        let line_content = adjusted_span.get_line(source);
+        let caret_padding = " ".repeat(col.saturating_sub(1));
+        let caret_len = (self.end - adjusted_start).max(1);
+        let carets = "^".repeat(caret_len);
+
+        // Calculate line number width for consistent alignment
+        let line_num_width = format!("{}", line).len().max(3);
+
+        format!(
+            "{}\n --> {}:{}:{}\n{:width$} |\n{:width$} | {}\n{:width$} | {}{}",
+            message,
+            filename,
+            line,
+            col,
+            "", // blank line
+            line,
+            line_content,
+            "",
+            caret_padding,
+            carets,
+            width = line_num_width
+        )
+    }
 }
 
 pub struct Lexer {
@@ -154,6 +221,7 @@ impl Lexer {
     }
 
     /// Returns the next token along with its source span
+    /// Note: span may include leading whitespace; use format_diagnostic which handles this
     pub fn next_token_with_span(&mut self) -> (Token, Span) {
         let start = self.byte_offset();
         let token = self.next_token();

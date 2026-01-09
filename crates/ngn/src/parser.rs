@@ -346,8 +346,9 @@ impl Parser {
         let mut params = Vec::new();
 
         while self.current_token != Token::RParen {
-            let start_param = self.current_span.start;
             let param_name = self.expect_identifier();
+            // Capture span start from the identifier we just parsed
+            let start_param = self.previous_span.start;
 
             // Check for optional marker (?)
             let is_optional = if self.current_token == Token::Question {

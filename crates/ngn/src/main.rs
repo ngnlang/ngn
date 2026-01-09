@@ -288,14 +288,22 @@ fn main() {
     // 3. Semantic Analysis (Static Type Checking)
     if let Err(errors) = analyzer.analyze(&statements) {
         for err in errors {
-            eprintln!("{}", err);
+            eprintln!(
+                "{}",
+                err.span.format_diagnostic(&source, filename, &err.message)
+            );
         }
         std::process::exit(1);
     }
 
     // Print warnings (non-blocking)
     for warning in &analyzer.warnings {
-        eprintln!("{}", warning);
+        eprintln!(
+            "{}",
+            warning
+                .span
+                .format_diagnostic(&source, filename, &warning.message)
+        );
     }
 
     // 3a. Now resolve the export type and check for fetch method
