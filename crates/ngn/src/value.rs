@@ -494,6 +494,37 @@ impl ObjectData {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ResponseData {
+    pub status: u16,
+    pub status_text: String,
+    pub headers: std::collections::HashMap<String, String>,
+    pub body: String,
+    pub ok: bool,
+}
+
+impl ResponseData {
+    pub fn new(
+        status: u16,
+        status_text: String,
+        headers: std::collections::HashMap<String, String>,
+        body: String,
+    ) -> Self {
+        let ok = status >= 200 && status < 300;
+        Self {
+            status,
+            status_text,
+            headers,
+            body,
+            ok,
+        }
+    }
+
+    pub fn into_value(self) -> Value {
+        Value::Response(Box::new(self))
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[allow(dead_code)]
 pub enum Value {
     Bool(bool),
@@ -511,6 +542,7 @@ pub enum Value {
     Object(Box<ObjectData>),
     Map(std::collections::HashMap<Value, Value>),
     Set(std::collections::HashSet<Value>),
+    Response(Box<ResponseData>),
     Void,
     Regex(String),
 }
@@ -702,6 +734,7 @@ impl Value {
             Value::Map(_) => "map",
             Value::Set(_) => "set",
             Value::Function(_) | Value::Closure(_) | Value::NativeFunction(_) => "function",
+            Value::Response(_) => "Response",
             Value::Void => "void",
             Value::Reference(_, _) => "reference",
         }
@@ -793,6 +826,21 @@ impl fmt::Display for Value {
             }
             Value::Void => write!(f, "void"),
             Value::Regex(r) => write!(f, "/{}/", r),
+            Value::Response(r) => {
+                let headers_str: Vec<String> = r
+                    .headers
+                    .iter()
+                    .map(|(k, v)| format!("\"{}\": \"{}\"", k, v))
+                    .collect();
+                write!(
+                    f,
+                    "Response {{ status: {}, statusText: \"{}\", ok: {}, headers: {{ {} }} }}",
+                    r.status,
+                    r.status_text,
+                    r.ok,
+                    headers_str.join(", ")
+                )
+            }
         }
     }
 }
@@ -852,6 +900,9 @@ impl std::hash::Hash for Value {
             Value::Set(_) => panic!("Runtime Error: Sets cannot be used as map keys or set values"),
             Value::Reference(_, _) => {
                 panic!("Runtime Error: References cannot be used as map keys or set values")
+            }
+            Value::Response(_) => {
+                panic!("Runtime Error: Response values cannot be used as map keys or set values")
             }
         }
     }

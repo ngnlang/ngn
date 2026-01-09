@@ -43,7 +43,7 @@ pub fn get_type(name: &str) -> Option<GlobalDef> {
             ty: Type::Function {
                 params: vec![Type::String, Type::Model("FetchOptions".to_string())],
                 optional_count: 1, // Second arg is optional
-                return_type: Box::new(Type::Channel(Box::new(Type::String))),
+                return_type: Box::new(Type::Channel(Box::new(Type::Model("Response".to_string())))),
             },
             is_mutable: false,
         }),

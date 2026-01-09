@@ -124,7 +124,12 @@ impl Analyzer {
                 name: "Response".to_string(),
                 fields: vec![
                     ("status".to_string(), Type::I64),
-                    ("headers".to_string(), Type::Any),
+                    ("statusText".to_string(), Type::String),
+                    ("ok".to_string(), Type::Bool),
+                    (
+                        "headers".to_string(),
+                        Type::Map(Box::new(Type::String), Box::new(Type::String)),
+                    ),
                     ("body".to_string(), Type::String),
                 ],
             },
@@ -1361,6 +1366,20 @@ impl Analyzer {
                 }
                 match obj_ty.clone() {
                     Type::Model(name) => {
+                        // Special handling for built-in Response type methods
+                        if name == "Response" {
+                            match method.as_str() {
+                                "text" => return Type::String,
+                                "json" => {
+                                    // Returns Result<Any, String> - use Generic type
+                                    return Type::Generic(
+                                        "Result".to_string(),
+                                        vec![Type::Any, Type::String],
+                                    );
+                                }
+                                _ => {}
+                            }
+                        }
                         self.add_error(
                             format!(
                                 "Type Error: Method '{}' not found on model '{}'",

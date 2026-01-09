@@ -808,11 +808,47 @@ impl Fiber {
                         }
 
                         let result = match request.send() {
-                            Ok(response) => match response.text() {
-                                Ok(text) => Value::String(text),
-                                Err(e) => Value::String(format!("Error: {}", e)),
-                            },
-                            Err(e) => Value::String(format!("Error: {}", e)),
+                            Ok(response) => {
+                                // Capture response metadata before consuming body
+                                let status = response.status().as_u16();
+                                let status_text = response
+                                    .status()
+                                    .canonical_reason()
+                                    .unwrap_or("Unknown")
+                                    .to_string();
+
+                                // Convert headers to HashMap (lowercase keys for case-insensitivity)
+                                let mut resp_headers = std::collections::HashMap::new();
+                                for (key, val) in response.headers() {
+                                    if let Ok(val_str) = val.to_str() {
+                                        resp_headers.insert(
+                                            key.as_str().to_lowercase(),
+                                            val_str.to_string(),
+                                        );
+                                    }
+                                }
+
+                                // Get body as text
+                                let body = response.text().unwrap_or_default();
+
+                                crate::value::ResponseData::new(
+                                    status,
+                                    status_text,
+                                    resp_headers,
+                                    body,
+                                )
+                                .into_value()
+                            }
+                            Err(e) => {
+                                // Return error as a Response with status 0
+                                crate::value::ResponseData::new(
+                                    0,
+                                    format!("Error: {}", e),
+                                    std::collections::HashMap::new(),
+                                    String::new(),
+                                )
+                                .into_value()
+                            }
                         };
                         chan_clone.buffer.lock().unwrap().push_back(result);
                     });
@@ -1101,14 +1137,37 @@ impl Fiber {
             OpCode::GetField(dest, obj_reg, field_idx) => {
                 let obj = self.get_reg_at(obj_reg);
                 let field_name = self.expect_string_const(field_idx);
-                if let Value::Object(o) = obj {
-                    if let Some(val) = o.fields.get(&field_name) {
-                        self.set_reg_at(dest, val.clone());
-                    } else {
-                        panic!("Runtime Error: Field '{}' not found in object", field_name);
+                match obj {
+                    Value::Object(o) => {
+                        if let Some(val) = o.fields.get(&field_name) {
+                            self.set_reg_at(dest, val.clone());
+                        } else {
+                            panic!("Runtime Error: Field '{}' not found in object", field_name);
+                        }
                     }
-                } else {
-                    panic!("Runtime Error: GetField on non-object");
+                    Value::Response(r) => {
+                        // Handle Response properties
+                        let val = match field_name.as_str() {
+                            "status" => Value::Numeric(crate::value::Number::I64(r.status as i64)),
+                            "statusText" => Value::String(r.status_text.clone()),
+                            "ok" => Value::Bool(r.ok),
+                            "body" => Value::String(r.body.clone()),
+                            "headers" => {
+                                // Return headers as a Map so .get() works
+                                let mut map = std::collections::HashMap::new();
+                                for (k, v) in r.headers.iter() {
+                                    map.insert(Value::String(k.clone()), Value::String(v.clone()));
+                                }
+                                Value::Map(map)
+                            }
+                            _ => panic!("Runtime Error: Response has no field '{}'", field_name),
+                        };
+                        self.set_reg_at(dest, val);
+                    }
+                    _ => panic!(
+                        "Runtime Error: GetField on non-object type: {:?}",
+                        obj.type_name()
+                    ),
                 }
             }
             OpCode::SetField(obj_reg, field_idx, src_reg) => {
@@ -1339,6 +1398,7 @@ impl Fiber {
             Value::Tuple(t) => self.tuple_method(&t, method, args),
             Value::Map(map) => self.map_method(map, method, args),
             Value::Set(set) => self.set_method(set, method, args),
+            Value::Response(r) => self.response_method(&r, method, args),
             _ => panic!(
                 "Runtime Error: Cannot call method '{}' on {:?}",
                 method, obj
@@ -1855,6 +1915,80 @@ impl Fiber {
                 (Value::Bool(was_removed), Value::Set(set))
             }
             _ => panic!("Runtime Error: Unknown mutating set method '{}'", method),
+        }
+    }
+
+    /// Response methods: text(), json()
+    fn response_method(
+        &self,
+        response: &crate::value::ResponseData,
+        method: &str,
+        _args: Vec<Value>,
+    ) -> Value {
+        match method {
+            "text" => Value::String(response.body.clone()),
+            "json" => {
+                // Parse body as JSON and return Result enum
+                match serde_json::from_str::<serde_json::Value>(&response.body) {
+                    Ok(json_value) => {
+                        let ngn_value = self.json_to_value(json_value);
+                        // Return Result::Ok(data)
+                        crate::value::EnumData::into_value(
+                            "Result".to_string(),
+                            "Ok".to_string(),
+                            Some(Box::new(ngn_value)),
+                        )
+                    }
+                    Err(e) => {
+                        // Return Result::Error(message)
+                        crate::value::EnumData::into_value(
+                            "Result".to_string(),
+                            "Error".to_string(),
+                            Some(Box::new(Value::String(format!("JSON parse error: {}", e)))),
+                        )
+                    }
+                }
+            }
+            "headers" => {
+                // Return a HeadersAccessor object that handles .get()
+                // For now, return the headers as an object with a get method
+                let mut fields = std::collections::HashMap::new();
+                for (k, v) in &response.headers {
+                    fields.insert(k.clone(), Value::String(v.clone()));
+                }
+                crate::value::ObjectData::into_value("__headers__".to_string(), fields)
+            }
+            _ => panic!("Runtime Error: Unknown Response method '{}'", method),
+        }
+    }
+
+    /// Convert serde_json::Value to ngn Value
+    fn json_to_value(&self, json: serde_json::Value) -> Value {
+        match json {
+            serde_json::Value::Null => {
+                crate::value::EnumData::into_value("Maybe".to_string(), "Null".to_string(), None)
+            }
+            serde_json::Value::Bool(b) => Value::Bool(b),
+            serde_json::Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    Value::Numeric(crate::value::Number::I64(i))
+                } else if let Some(f) = n.as_f64() {
+                    Value::Numeric(crate::value::Number::F64(f))
+                } else {
+                    Value::Numeric(crate::value::Number::I64(0))
+                }
+            }
+            serde_json::Value::String(s) => Value::String(s),
+            serde_json::Value::Array(arr) => {
+                Value::Array(arr.into_iter().map(|v| self.json_to_value(v)).collect())
+            }
+            serde_json::Value::Object(obj) => {
+                let mut fields = std::collections::HashMap::new();
+                for (k, v) in obj {
+                    fields.insert(k, self.json_to_value(v));
+                }
+                crate::value::ObjectData::into_value("__anon__".to_string(), fields)
+            }
         }
     }
 
