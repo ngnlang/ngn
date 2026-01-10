@@ -1396,6 +1396,26 @@ impl Analyzer {
                                 _ => {}
                             }
                         }
+                        // Special handling for built-in Request type methods
+                        if name == "Request" {
+                            match method.as_str() {
+                                "clone" => return Type::Model("Request".to_string()),
+                                "text" => return Type::String,
+                                "json" => {
+                                    return Type::Generic(
+                                        "Result".to_string(),
+                                        vec![Type::Any, Type::String],
+                                    );
+                                }
+                                "formData" => {
+                                    return Type::Map(
+                                        Box::new(Type::String),
+                                        Box::new(Type::String),
+                                    );
+                                }
+                                _ => {}
+                            }
+                        }
                         self.add_error(
                             format!(
                                 "Type Error: Method '{}' not found on model '{}'",

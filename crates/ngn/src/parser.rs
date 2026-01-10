@@ -2308,6 +2308,10 @@ impl Parser {
             None
         };
 
+        // Closures are function-like contexts, so allow const/var declarations
+        let old_in_function = self.in_function;
+        self.in_function = true;
+
         // Parse body - expect block or expression
         let body_stmt = if self.current_token == Token::LBrace {
             let b_start = self.current_span.start;
@@ -2327,6 +2331,8 @@ impl Parser {
                 span: Span::new(e_start, e_end),
             })
         };
+
+        self.in_function = old_in_function;
         let end = body_stmt.span.end;
 
         Expr {

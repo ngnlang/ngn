@@ -1435,6 +1435,9 @@ impl Fiber {
             Value::Map(map) => self.map_method(map, method, args),
             Value::Set(set) => self.set_method(set, method, args),
             Value::Response(r) => self.response_method(&r, method, args),
+            Value::Object(ref o) if o.model_name == "Request" => {
+                self.request_method(o, method, args)
+            }
             _ => panic!(
                 "Runtime Error: Cannot call method '{}' on {:?}",
                 method, obj
@@ -1951,6 +1954,85 @@ impl Fiber {
                 (Value::Bool(was_removed), Value::Set(set))
             }
             _ => panic!("Runtime Error: Unknown mutating set method '{}'", method),
+        }
+    }
+
+    /// Request methods: clone(), formData(), text(), json()
+    fn request_method(
+        &self,
+        request: &crate::value::ObjectData,
+        method: &str,
+        _args: Vec<Value>,
+    ) -> Value {
+        match method {
+            "clone" => {
+                // Deep clone the Request object
+                Value::Object(Box::new(request.clone()))
+            }
+            "text" => {
+                // Return body as string
+                request
+                    .fields
+                    .get("body")
+                    .cloned()
+                    .unwrap_or(Value::String(String::new()))
+            }
+            "json" => {
+                // Parse body as JSON and return Result enum
+                let body = match request.fields.get("body") {
+                    Some(Value::String(s)) => s.clone(),
+                    _ => String::new(),
+                };
+                match serde_json::from_str::<serde_json::Value>(&body) {
+                    Ok(json_value) => {
+                        let ngn_value = self.json_to_value(json_value);
+                        crate::value::EnumData::into_value(
+                            "Result".to_string(),
+                            "Ok".to_string(),
+                            Some(Box::new(ngn_value)),
+                        )
+                    }
+                    Err(e) => crate::value::EnumData::into_value(
+                        "Result".to_string(),
+                        "Error".to_string(),
+                        Some(Box::new(Value::String(format!("JSON parse error: {}", e)))),
+                    ),
+                }
+            }
+            "formData" => {
+                // Parse application/x-www-form-urlencoded body into Map<string, string>
+                let body = match request.fields.get("body") {
+                    Some(Value::String(s)) => s.clone(),
+                    _ => String::new(),
+                };
+                let mut form_data: std::collections::HashMap<Value, Value> =
+                    std::collections::HashMap::new();
+                for pair in body.split('&') {
+                    if pair.is_empty() {
+                        continue;
+                    }
+                    if let Some(eq_idx) = pair.find('=') {
+                        let key = pair[..eq_idx].to_string();
+                        let value = pair[eq_idx + 1..].to_string();
+                        // URL decode: replace + with space and decode %XX
+                        let key = urlencoding::decode(&key.replace('+', " "))
+                            .unwrap_or_else(|_| key.into())
+                            .into_owned();
+                        let value = urlencoding::decode(&value.replace('+', " "))
+                            .unwrap_or_else(|_| value.into())
+                            .into_owned();
+                        form_data.insert(Value::String(key), Value::String(value));
+                    } else {
+                        // Key with no value
+                        let key = urlencoding::decode(&pair.replace('+', " "))
+                            .unwrap_or_else(|_| pair.into())
+                            .into_owned();
+                        form_data.insert(Value::String(key), Value::String(String::new()));
+                    }
+                }
+                Value::Map(form_data)
+            }
+            _ => panic!("Runtime Error: Unknown Request method '{}'", method),
         }
     }
 
