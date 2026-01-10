@@ -1872,7 +1872,18 @@ impl Fiber {
                 if args.is_empty() {
                     panic!("get() requires a key");
                 }
-                map.get(&args[0]).cloned().unwrap_or(Value::Void)
+                match map.get(&args[0]) {
+                    Some(value) => crate::value::EnumData::into_value(
+                        "Maybe".to_string(),
+                        "Value".to_string(),
+                        Some(Box::new(value.clone())),
+                    ),
+                    None => crate::value::EnumData::into_value(
+                        "Maybe".to_string(),
+                        "Null".to_string(),
+                        None,
+                    ),
+                }
             }
             _ => panic!(
                 "Runtime Error: Unknown non-mutating map method '{}'",

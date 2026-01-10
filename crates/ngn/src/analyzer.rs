@@ -1982,7 +1982,8 @@ impl Analyzer {
                                         ), expr.span);
                                     }
                                 }
-                                *value_type.clone()
+                                // Returns Maybe<value_type>
+                                Type::Generic("Maybe".to_string(), vec![*value_type.clone()])
                             }
                             "set" => {
                                 if args.len() != 2 {
