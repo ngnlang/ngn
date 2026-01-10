@@ -113,6 +113,19 @@ impl Analyzer {
                     ("query".to_string(), Type::String),
                     ("headers".to_string(), Type::Any),
                     ("body".to_string(), Type::String),
+                    // New fields
+                    (
+                        "params".to_string(),
+                        Type::Map(Box::new(Type::String), Box::new(Type::String)),
+                    ),
+                    ("ip".to_string(), Type::String),
+                    ("url".to_string(), Type::String),
+                    (
+                        "cookies".to_string(),
+                        Type::Map(Box::new(Type::String), Box::new(Type::String)),
+                    ),
+                    ("protocol".to_string(), Type::String),
+                    ("host".to_string(), Type::String),
                 ],
             },
         );

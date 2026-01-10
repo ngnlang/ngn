@@ -162,6 +162,12 @@ async fn handle_connection_async_fast(
 ) {
     use tokio::time::{Duration, timeout};
 
+    // Get peer IP address
+    let peer_ip = stream
+        .peer_addr()
+        .map(|addr| addr.ip().to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+
     // Keep-Alive: handle multiple requests on the same connection
     const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(30);
     const MAX_REQUESTS_PER_CONNECTION: usize = 100;
@@ -179,7 +185,7 @@ async fn handle_connection_async_fast(
         // Parse request with timeout for idle connections
         let request = match timeout(
             KEEP_ALIVE_TIMEOUT,
-            parse_request_async_keepalive(&mut stream),
+            parse_request_async_keepalive(&mut stream, peer_ip.clone(), "http"),
         )
         .await
         {
@@ -326,18 +332,19 @@ async fn serve_tls_inner(
         tokio::select! {
             result = listener.accept() => {
                 match result {
-                    Ok((tcp_stream, _)) => {
+                    Ok((tcp_stream, addr)) => {
                         let handler = handler.clone();
                         let globals = globals.clone();
                         let custom_methods = custom_methods.clone();
                         let acceptor = tls_acceptor.clone();
+                        let peer_ip = addr.ip().to_string();
 
                         // Spawn async task for TLS handshake + handling
                         tokio::spawn(async move {
                             // Perform TLS handshake
                             match acceptor.accept(tcp_stream).await {
                                 Ok(tls_stream) => {
-                                    handle_tls_connection_async(tls_stream, handler, globals, custom_methods).await;
+                                    handle_tls_connection_async(tls_stream, handler, globals, custom_methods, peer_ip).await;
                                 }
                                 Err(e) => {
                                     eprintln!("TLS handshake error: {}", e);
@@ -367,6 +374,7 @@ async fn handle_tls_connection_async<S>(
     handler: Value,
     globals: Arc<Vec<Value>>,
     custom_methods: Arc<Mutex<HashMap<String, HashMap<String, Value>>>>,
+    peer_ip: String,
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
@@ -393,12 +401,32 @@ async fn handle_tls_connection_async<S>(
     let (path, query) = if let Some(idx) = full_path.find('?') {
         (full_path[..idx].to_string(), full_path[idx..].to_string())
     } else {
-        (full_path, String::new())
+        (full_path.clone(), String::new())
     };
+
+    // Parse query parameters into a map
+    let mut params: HashMap<Value, Value> = HashMap::new();
+    if !query.is_empty() {
+        let query_str = query.strip_prefix('?').unwrap_or(&query);
+        for pair in query_str.split('&') {
+            if let Some(eq_idx) = pair.find('=') {
+                let key = pair[..eq_idx].to_string();
+                let value = pair[eq_idx + 1..].to_string();
+                params.insert(Value::String(key), Value::String(value));
+            } else if !pair.is_empty() {
+                params.insert(
+                    Value::String(pair.to_string()),
+                    Value::String(String::new()),
+                );
+            }
+        }
+    }
 
     // Read headers
     let mut headers: HashMap<Value, Value> = HashMap::new();
     let mut content_length: usize = 0;
+    let mut host = String::new();
+    let mut cookie_header = String::new();
 
     loop {
         let mut line = String::new();
@@ -415,7 +443,26 @@ async fn handle_tls_connection_async<S>(
             if key == "content-length" {
                 content_length = value.parse().unwrap_or(0);
             }
+            if key == "host" {
+                host = value.clone();
+            }
+            if key == "cookie" {
+                cookie_header = value.clone();
+            }
             headers.insert(Value::String(key), Value::String(value));
+        }
+    }
+
+    // Parse cookies into a map
+    let mut cookies: HashMap<Value, Value> = HashMap::new();
+    if !cookie_header.is_empty() {
+        for cookie in cookie_header.split(';') {
+            let cookie = cookie.trim();
+            if let Some(eq_idx) = cookie.find('=') {
+                let key = cookie[..eq_idx].trim().to_string();
+                let value = cookie[eq_idx + 1..].trim().to_string();
+                cookies.insert(Value::String(key), Value::String(value));
+            }
         }
     }
 
@@ -428,13 +475,22 @@ async fn handle_tls_connection_async<S>(
         }
     }
 
-    // Build Request object
+    // Build url field
+    let url = full_path.clone();
+
+    // Build Request object with all fields
     let mut fields = std::collections::HashMap::new();
     fields.insert("method".to_string(), Value::String(method));
     fields.insert("path".to_string(), Value::String(path));
     fields.insert("query".to_string(), Value::String(query));
     fields.insert("headers".to_string(), Value::Map(headers));
     fields.insert("body".to_string(), Value::String(body));
+    fields.insert("params".to_string(), Value::Map(params));
+    fields.insert("ip".to_string(), Value::String(peer_ip));
+    fields.insert("url".to_string(), Value::String(url));
+    fields.insert("cookies".to_string(), Value::Map(cookies));
+    fields.insert("protocol".to_string(), Value::String("https".to_string()));
+    fields.insert("host".to_string(), Value::String(host));
     let request = ObjectData::into_value("Request".to_string(), fields);
 
     // Execute handler with cooperative yielding
@@ -537,7 +593,11 @@ async fn handle_tls_connection_async<S>(
 
 /// Parse HTTP request with Keep-Alive awareness
 /// Returns (Request, should_close) where should_close indicates if client wants to close connection
-async fn parse_request_async_keepalive(stream: &mut TokioTcpStream) -> Option<(Value, bool)> {
+async fn parse_request_async_keepalive(
+    stream: &mut TokioTcpStream,
+    peer_ip: String,
+    protocol: &str,
+) -> Option<(Value, bool)> {
     let mut reader = TokioBufReader::new(stream);
 
     // Read request line
@@ -566,13 +626,36 @@ async fn parse_request_async_keepalive(stream: &mut TokioTcpStream) -> Option<(V
     let (path, query) = if let Some(idx) = full_path.find('?') {
         (full_path[..idx].to_string(), full_path[idx..].to_string())
     } else {
-        (full_path, String::new())
+        (full_path.clone(), String::new())
     };
+
+    // Parse query parameters into a map
+    let mut params: HashMap<Value, Value> = HashMap::new();
+    if !query.is_empty() {
+        // Remove leading '?' if present
+        let query_str = query.strip_prefix('?').unwrap_or(&query);
+        for pair in query_str.split('&') {
+            if let Some(eq_idx) = pair.find('=') {
+                let key = pair[..eq_idx].to_string();
+                let value = pair[eq_idx + 1..].to_string();
+                // URL decode would be nice here, but keep it simple for now
+                params.insert(Value::String(key), Value::String(value));
+            } else if !pair.is_empty() {
+                // Key with no value
+                params.insert(
+                    Value::String(pair.to_string()),
+                    Value::String(String::new()),
+                );
+            }
+        }
+    }
 
     // Read headers
     let mut headers: HashMap<Value, Value> = HashMap::new();
     let mut content_length: usize = 0;
     let mut connection_close = !default_keepalive;
+    let mut host = String::new();
+    let mut cookie_header = String::new();
 
     loop {
         let mut line = String::new();
@@ -592,7 +675,26 @@ async fn parse_request_async_keepalive(stream: &mut TokioTcpStream) -> Option<(V
             if key == "connection" {
                 connection_close = value.eq_ignore_ascii_case("close");
             }
+            if key == "host" {
+                host = value.clone();
+            }
+            if key == "cookie" {
+                cookie_header = value.clone();
+            }
             headers.insert(Value::String(key), Value::String(value));
+        }
+    }
+
+    // Parse cookies into a map
+    let mut cookies: HashMap<Value, Value> = HashMap::new();
+    if !cookie_header.is_empty() {
+        for cookie in cookie_header.split(';') {
+            let cookie = cookie.trim();
+            if let Some(eq_idx) = cookie.find('=') {
+                let key = cookie[..eq_idx].trim().to_string();
+                let value = cookie[eq_idx + 1..].trim().to_string();
+                cookies.insert(Value::String(key), Value::String(value));
+            }
         }
     }
 
@@ -604,13 +706,22 @@ async fn parse_request_async_keepalive(stream: &mut TokioTcpStream) -> Option<(V
         body = String::from_utf8_lossy(&body_bytes).to_string();
     }
 
-    // Build Request object
+    // Build url field (path + query)
+    let url = full_path.clone();
+
+    // Build Request object with all fields
     let mut fields = std::collections::HashMap::new();
     fields.insert("method".to_string(), Value::String(method));
     fields.insert("path".to_string(), Value::String(path));
     fields.insert("query".to_string(), Value::String(query));
     fields.insert("headers".to_string(), Value::Map(headers));
     fields.insert("body".to_string(), Value::String(body));
+    fields.insert("params".to_string(), Value::Map(params));
+    fields.insert("ip".to_string(), Value::String(peer_ip));
+    fields.insert("url".to_string(), Value::String(url));
+    fields.insert("cookies".to_string(), Value::Map(cookies));
+    fields.insert("protocol".to_string(), Value::String(protocol.to_string()));
+    fields.insert("host".to_string(), Value::String(host));
 
     Some((
         ObjectData::into_value("Request".to_string(), fields),
