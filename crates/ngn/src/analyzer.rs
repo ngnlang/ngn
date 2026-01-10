@@ -1221,15 +1221,18 @@ impl Analyzer {
                             );
                         }
                     }
-                    for (f_name, _) in &model_def.fields {
-                        if !fields.iter().any(|(n, _)| n == f_name) {
-                            self.add_error(
-                                format!(
-                                    "Type Error: Missing field '{}' in instantiation of model '{}'",
-                                    f_name, name
-                                ),
-                                expr.span,
-                            );
+                    // Check for missing fields (skip for Response where all fields are optional)
+                    if name != "Response" {
+                        for (f_name, _) in &model_def.fields {
+                            if !fields.iter().any(|(n, _)| n == f_name) {
+                                self.add_error(
+                                    format!(
+                                        "Type Error: Missing field '{}' in instantiation of model '{}'",
+                                        f_name, name
+                                    ),
+                                    expr.span,
+                                );
+                            }
                         }
                     }
                     Type::Model(name.clone())

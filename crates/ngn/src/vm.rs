@@ -1132,6 +1132,42 @@ impl Fiber {
                     };
                     fields.insert(field_name, self.get_reg_at(start + i as u16));
                 }
+
+                // Add defaults for Response models
+                if model_name == "Response" {
+                    // status defaults to 200
+                    if !fields.contains_key("status") {
+                        fields.insert(
+                            "status".to_string(),
+                            Value::Numeric(crate::value::Number::I64(200)),
+                        );
+                    }
+                    // statusText defaults to ""
+                    if !fields.contains_key("statusText") {
+                        fields.insert("statusText".to_string(), Value::String(String::new()));
+                    }
+                    // headers defaults to empty map
+                    if !fields.contains_key("headers") {
+                        fields.insert(
+                            "headers".to_string(),
+                            Value::Map(std::collections::HashMap::new()),
+                        );
+                    }
+                    // body defaults to ""
+                    if !fields.contains_key("body") {
+                        fields.insert("body".to_string(), Value::String(String::new()));
+                    }
+                    // ok is calculated from status
+                    if !fields.contains_key("ok") {
+                        let status = match fields.get("status") {
+                            Some(Value::Numeric(crate::value::Number::I64(s))) => *s as u16,
+                            _ => 200,
+                        };
+                        let ok = status >= 200 && status < 300;
+                        fields.insert("ok".to_string(), Value::Bool(ok));
+                    }
+                }
+
                 self.set_reg_at(dest, ObjectData::into_value(model_name, fields));
             }
             OpCode::GetField(dest, obj_reg, field_idx) => {
