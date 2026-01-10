@@ -726,7 +726,7 @@ impl Fiber {
                     let mut method = "GET".to_string();
                     let mut body: Option<String> = None;
                     let mut headers: Vec<(String, String)> = Vec::new();
-                    let mut timeout_ms: u64 = 30000; // Default 30s
+                    let mut timeout_ms: u64 = 10000; // Default 10s
 
                     if options_reg != u16::MAX {
                         let options_val = self.get_reg_at(options_reg);
