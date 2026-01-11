@@ -1359,6 +1359,25 @@ impl Fiber {
                 };
                 self.set_reg_at(dest_reg, inner);
             }
+            OpCode::NullCoalesce(dest_reg, maybe_reg, fallback_reg) => {
+                // If maybe_reg is Maybe::Value, unwrap to dest; else use fallback_reg
+                let maybe_val = self.get_reg_at(maybe_reg);
+                let result = match maybe_val {
+                    Value::Enum(ref e) if e.enum_name == "Maybe" && e.variant_name == "Value" => {
+                        // Unwrap the Value value
+                        e.data.clone().map(|b| *b).unwrap_or(Value::Void)
+                    }
+                    Value::Enum(ref e) if e.enum_name == "Maybe" && e.variant_name == "Null" => {
+                        // Use the fallback value
+                        self.get_reg_at(fallback_reg)
+                    }
+                    _ => {
+                        // Not a Maybe - just use the value as-is (or panic for strictness)
+                        maybe_val
+                    }
+                };
+                self.set_reg_at(dest_reg, result);
+            }
             OpCode::Halt => {
                 self.status = FiberStatus::Finished;
                 return FiberStatus::Finished;

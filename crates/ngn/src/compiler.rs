@@ -594,6 +594,15 @@ impl Compiler {
                     Token::NotEqual => self
                         .instructions
                         .push(OpCode::NotEqual(dest, left_reg, right_reg)),
+                    Token::QuestionQuestion => {
+                        // Null-coalescing: if left is Maybe::Some, use unwrapped value, else use right
+                        // left_reg contains the Maybe value
+                        // right_reg should NOT be computed yet for short-circuit, but our current
+                        // approach already computed it. For true short-circuit, we need to restructure.
+                        // For now, use a simpler approach: compute both, then select at runtime.
+                        self.instructions
+                            .push(OpCode::NullCoalesce(dest, left_reg, right_reg));
+                    }
                     _ => todo!("Other operators: {:?}", op),
                 }
                 // Free temporaries but keep result

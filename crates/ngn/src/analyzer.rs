@@ -838,6 +838,33 @@ impl Analyzer {
                         }
                         return Type::Bool;
                     }
+                    Token::QuestionQuestion => {
+                        // Null-coalescing: left should be Maybe<T>, right should be T, result is T
+                        // Extract inner type from Maybe<T>
+                        let inner_ty = match &l_ty {
+                            Type::Generic(name, args) if name == "Maybe" && args.len() == 1 => {
+                                args[0].clone()
+                            }
+                            _ => {
+                                self.add_error(
+                                    format!(
+                                        "Type Error: Left side of ?? must be Maybe<T>, got {:?}",
+                                        l_ty
+                                    ),
+                                    expr.span,
+                                );
+                                return r_ty;
+                            }
+                        };
+                        // Check that right type is compatible with inner type
+                        if !self.types_compatible(&inner_ty, &r_ty) {
+                            self.add_error(
+                                format!("Type Error: Right side of ?? ({:?}) must be compatible with {:?}", r_ty, inner_ty),
+                                expr.span,
+                            );
+                        }
+                        return inner_ty;
+                    }
                     _ => {}
                 }
 

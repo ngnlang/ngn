@@ -946,7 +946,7 @@ impl Parser {
     }
 
     fn parse_assignment(&mut self) -> Expr {
-        let expr = self.parse_equality();
+        let expr = self.parse_null_coalesce();
 
         let compound_op = match self.current_token {
             Token::PlusEqual => Some(Token::Plus),
@@ -1019,6 +1019,28 @@ impl Parser {
             }
         }
         expr
+    }
+
+    /// Parse null-coalescing operator (??) with right-to-left associativity
+    fn parse_null_coalesce(&mut self) -> Expr {
+        let mut left = self.parse_equality();
+
+        while self.current_token == Token::QuestionQuestion {
+            let start = left.span.start;
+            let op = self.current_token.clone();
+            self.advance();
+            let right = self.parse_equality(); // Right-to-left: parse at same level
+            let end = right.span.end;
+            left = Expr {
+                kind: ExprKind::Binary {
+                    left: Box::new(left),
+                    op,
+                    right: Box::new(right),
+                },
+                span: Span::new(start, end),
+            };
+        }
+        left
     }
 
     fn parse_equality(&mut self) -> Expr {

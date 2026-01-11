@@ -85,6 +85,7 @@ pub enum Token {
     LArrow,
     Pipe,
     Question,
+    QuestionQuestion,
     Period,
 
     // Formatting
@@ -442,7 +443,14 @@ impl Lexer {
             '[' => Token::LBracket,
             ']' => Token::RBracket,
             ',' => Token::Comma,
-            '?' => Token::Question,
+            '?' => {
+                if self.peek_current() == '?' {
+                    self.cursor += 1;
+                    Token::QuestionQuestion
+                } else {
+                    Token::Question
+                }
+            }
             '.' => Token::Period,
             '_' => Token::Underscore,
             _ => panic!("Unknown character: {}", ch),

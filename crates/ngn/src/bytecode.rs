@@ -118,4 +118,8 @@ pub enum OpCode {
     // Maybe operations (for conditional binding)
     CheckMaybeValue(u16, u16), // (DestReg, MaybeReg) - sets DestReg to true if Maybe::Value
     UnwrapMaybe(u16, u16),     // (DestReg, MaybeReg) - extracts inner value from Maybe::Value
+
+    // Null Coalescing (??)
+    // If MaybeReg is Maybe::Value, unwrap to DestReg; else set DestReg = FallbackReg
+    NullCoalesce(u16, u16, u16), // (DestReg, MaybeReg, FallbackReg)
 }
