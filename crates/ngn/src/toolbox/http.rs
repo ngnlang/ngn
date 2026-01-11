@@ -8,8 +8,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader as TokioBufReader};
-use tokio::net::{TcpListener as TokioTcpListener, TcpStream as TokioTcpStream};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::net::{TcpListener, TcpStream};
 
 use crate::value::{Closure, ObjectData, Value};
 use crate::vm::{Fiber, FiberStatus};
@@ -107,7 +107,7 @@ async fn serve_inner(
     custom_methods: HashMap<String, HashMap<String, Value>>,
 ) -> Result<(), String> {
     let addr = format!("0.0.0.0:{}", port);
-    let listener = TokioTcpListener::bind(&addr)
+    let listener = TcpListener::bind(&addr)
         .await
         .map_err(|e| format!("Failed to bind to {}: {}", addr, e))?;
 
@@ -155,7 +155,7 @@ async fn serve_inner(
 
 /// Handle a single HTTP connection asynchronously with Keep-Alive support
 async fn handle_connection_async_fast(
-    stream: TokioTcpStream,
+    stream: TcpStream,
     handler: Value,
     globals: Arc<Vec<Value>>,
     custom_methods: Arc<Mutex<HashMap<String, HashMap<String, Value>>>>,
@@ -170,7 +170,7 @@ async fn handle_connection_async_fast(
 
     // Split stream into read and write halves - this allows us to persist the BufReader
     let (read_half, mut write_half) = stream.into_split();
-    let mut reader = TokioBufReader::new(read_half);
+    let mut reader = BufReader::new(read_half);
 
     // Keep-Alive: handle multiple requests on the same connection
     const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -320,7 +320,7 @@ async fn serve_tls_inner(
     use tokio_rustls::TlsAcceptor;
 
     let addr = format!("0.0.0.0:{}", port);
-    let listener = TokioTcpListener::bind(&addr)
+    let listener = TcpListener::bind(&addr)
         .await
         .map_err(|e| format!("Failed to bind to {}: {}", addr, e))?;
 
@@ -607,7 +607,7 @@ use tokio::net::tcp::OwnedWriteHalf;
 /// Parse HTTP request from a persistent BufReader (used for keep-alive connections)
 /// Returns (Request, should_close) where should_close indicates if client wants to close connection
 async fn parse_request_from_reader<R>(
-    reader: &mut TokioBufReader<R>,
+    reader: &mut BufReader<R>,
     peer_ip: String,
     protocol: &str,
 ) -> Option<(Value, bool)>
@@ -822,225 +822,6 @@ async fn write_response_to_stream(
     stream.write_all(response_str.as_bytes()).await?;
     stream.flush().await?;
     Ok(())
-}
-
-/// Parse HTTP request with Keep-Alive awareness (legacy - creates its own BufReader)
-/// Returns (Request, should_close) where should_close indicates if client wants to close connection
-async fn parse_request_async_keepalive(
-    stream: &mut TokioTcpStream,
-    peer_ip: String,
-    protocol: &str,
-) -> Option<(Value, bool)> {
-    let mut reader = TokioBufReader::new(stream);
-
-    // Read request line
-    let mut request_line = String::new();
-    if reader.read_line(&mut request_line).await.ok()? == 0 {
-        return None;
-    }
-
-    let parts: Vec<&str> = request_line.trim().split_whitespace().collect();
-    if parts.len() < 2 {
-        return None;
-    }
-
-    let method = parts[0].to_string();
-    let full_path = parts[1].to_string();
-
-    // Detect HTTP version for default keep-alive behavior
-    let http_version = if parts.len() >= 3 {
-        parts[2]
-    } else {
-        "HTTP/1.0"
-    };
-    let default_keepalive = http_version == "HTTP/1.1"; // HTTP/1.1 defaults to keep-alive
-
-    // Split path and query
-    let (path, query) = if let Some(idx) = full_path.find('?') {
-        (full_path[..idx].to_string(), full_path[idx..].to_string())
-    } else {
-        (full_path.clone(), String::new())
-    };
-
-    // Parse query parameters into a map
-    let mut params: HashMap<Value, Value> = HashMap::new();
-    if !query.is_empty() {
-        // Remove leading '?' if present
-        let query_str = query.strip_prefix('?').unwrap_or(&query);
-        for pair in query_str.split('&') {
-            if let Some(eq_idx) = pair.find('=') {
-                let key = pair[..eq_idx].to_string();
-                let value = pair[eq_idx + 1..].to_string();
-                // URL decode would be nice here, but keep it simple for now
-                params.insert(Value::String(key), Value::String(value));
-            } else if !pair.is_empty() {
-                // Key with no value
-                params.insert(
-                    Value::String(pair.to_string()),
-                    Value::String(String::new()),
-                );
-            }
-        }
-    }
-
-    // Read headers
-    let mut headers: HashMap<Value, Value> = HashMap::new();
-    let mut content_length: usize = 0;
-    let mut connection_close = !default_keepalive;
-    let mut host = String::new();
-    let mut cookie_header = String::new();
-
-    loop {
-        let mut line = String::new();
-        if reader.read_line(&mut line).await.ok()? == 0 {
-            break;
-        }
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            break;
-        }
-        if let Some(idx) = trimmed.find(':') {
-            let key = trimmed[..idx].trim().to_lowercase();
-            let value = trimmed[idx + 1..].trim().to_string();
-            if key == "content-length" {
-                content_length = value.parse().unwrap_or(0);
-            }
-            if key == "connection" {
-                connection_close = value.eq_ignore_ascii_case("close");
-            }
-            if key == "host" {
-                host = value.clone();
-            }
-            if key == "cookie" {
-                cookie_header = value.clone();
-            }
-            headers.insert(Value::String(key), Value::String(value));
-        }
-    }
-
-    // Parse cookies into a map
-    let mut cookies: HashMap<Value, Value> = HashMap::new();
-    if !cookie_header.is_empty() {
-        for cookie in cookie_header.split(';') {
-            let cookie = cookie.trim();
-            if let Some(eq_idx) = cookie.find('=') {
-                let key = cookie[..eq_idx].trim().to_string();
-                let value = cookie[eq_idx + 1..].trim().to_string();
-                cookies.insert(Value::String(key), Value::String(value));
-            }
-        }
-    }
-
-    // Read body if present
-    let mut body = String::new();
-    if content_length > 0 {
-        let mut body_bytes = vec![0u8; content_length];
-        reader.read_exact(&mut body_bytes).await.ok()?;
-        body = String::from_utf8_lossy(&body_bytes).to_string();
-    }
-
-    // Build url field (path + query)
-    let url = full_path.clone();
-
-    // Build Request object with all fields
-    let mut fields = std::collections::HashMap::new();
-    fields.insert("method".to_string(), Value::String(method));
-    fields.insert("path".to_string(), Value::String(path));
-    fields.insert("query".to_string(), Value::String(query));
-    fields.insert("headers".to_string(), Value::Map(headers));
-    fields.insert("body".to_string(), Value::String(body));
-    fields.insert("params".to_string(), Value::Map(params));
-    fields.insert("ip".to_string(), Value::String(peer_ip));
-    fields.insert("url".to_string(), Value::String(url));
-    fields.insert("cookies".to_string(), Value::Map(cookies));
-    fields.insert("protocol".to_string(), Value::String(protocol.to_string()));
-    fields.insert("host".to_string(), Value::String(host));
-
-    Some((
-        ObjectData::into_value("Request".to_string(), fields),
-        connection_close,
-    ))
-}
-
-/// Write HTTP response with Keep-Alive header
-async fn write_response_async_keepalive(
-    stream: &mut TokioTcpStream,
-    response: &Value,
-    close_connection: bool,
-) {
-    use std::fmt::Write;
-
-    let (status, headers, body) = if let Value::Object(obj) = response {
-        let status = match obj.fields.get("status") {
-            Some(Value::Numeric(n)) => match n {
-                crate::value::Number::I64(v) => *v as u16,
-                crate::value::Number::I32(v) => *v as u16,
-                _ => 200,
-            },
-            _ => 200,
-        };
-
-        let body = match obj.fields.get("body") {
-            Some(Value::String(s)) => s.clone(),
-            _ => String::new(),
-        };
-
-        let headers = match obj.fields.get("headers") {
-            Some(Value::Map(m)) => m.clone(),
-            _ => HashMap::new(),
-        };
-
-        (status, headers, body)
-    } else {
-        (200, HashMap::new(), response.to_string())
-    };
-
-    let status_text = match status {
-        200 => "OK",
-        201 => "Created",
-        204 => "No Content",
-        400 => "Bad Request",
-        404 => "Not Found",
-        500 => "Internal Server Error",
-        _ => "OK",
-    };
-
-    // Pre-allocate with estimated capacity
-    let estimated_size = 128 + headers.len() * 64 + body.len();
-    let mut response_str = String::with_capacity(estimated_size);
-
-    let _ = write!(response_str, "HTTP/1.1 {} {}\r\n", status, status_text);
-
-    // Set Connection header based on whether we should close
-    if close_connection {
-        response_str.push_str("Connection: close\r\n");
-    } else {
-        response_str.push_str("Connection: keep-alive\r\n");
-    }
-
-    let mut has_content_length = false;
-    for (k, v) in &headers {
-        if let (Value::String(key), Value::String(val)) = (k, v) {
-            if key.eq_ignore_ascii_case("content-length") {
-                has_content_length = true;
-            }
-            // Skip if user tried to set Connection header (we control it)
-            if key.eq_ignore_ascii_case("connection") {
-                continue;
-            }
-            let _ = write!(response_str, "{}: {}\r\n", key, val);
-        }
-    }
-
-    if !has_content_length {
-        let _ = write!(response_str, "Content-Length: {}\r\n", body.len());
-    }
-
-    response_str.push_str("\r\n");
-    response_str.push_str(&body);
-
-    let _ = stream.write_all(response_str.as_bytes()).await;
-    let _ = stream.flush().await;
 }
 
 use super::ToolboxModule;
