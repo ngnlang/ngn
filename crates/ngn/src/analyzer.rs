@@ -816,9 +816,13 @@ impl Analyzer {
 
                 match op {
                     Token::EqualEqual | Token::NotEqual => {
-                        if !self.types_compatible(&l_ty, &r_ty)
-                            && !self.types_compatible(&r_ty, &l_ty)
-                        {
+                        // Allow Maybe<T> to be compared with T (auto-unwrap for comparison)
+                        let types_ok = self.types_compatible(&l_ty, &r_ty)
+                            || self.types_compatible(&r_ty, &l_ty)
+                            || self.maybe_inner_compatible(&l_ty, &r_ty)
+                            || self.maybe_inner_compatible(&r_ty, &l_ty);
+
+                        if !types_ok {
                             self.add_error(
                                 format!("Type Error: Cannot compare {:?} and {:?}", l_ty, r_ty),
                                 expr.span,
@@ -2422,6 +2426,17 @@ impl Analyzer {
             }
             _ => false,
         }
+    }
+
+    /// Check if maybe_ty is Maybe<T> and inner T is compatible with other_ty
+    fn maybe_inner_compatible(&self, maybe_ty: &Type, other_ty: &Type) -> bool {
+        if let Type::Generic(name, args) = maybe_ty {
+            if name == "Maybe" && args.len() == 1 {
+                // Extract inner type T from Maybe<T>
+                return self.types_compatible(&args[0], other_ty);
+            }
+        }
+        false
     }
 
     fn check_pattern(&mut self, pattern: &Pattern, matched_type: &Type, span: Span) {

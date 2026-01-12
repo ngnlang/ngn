@@ -672,6 +672,44 @@ impl Value {
                 }
                 true
             }
+            // Maybe auto-unwrap for comparisons: Maybe::Value(x) == x is true
+            // Left is Maybe, right is not - check if Maybe::Value and compare inner
+            (Value::Enum(e), other) if e.enum_name == "Maybe" => {
+                match e.variant_name.as_str() {
+                    "Value" => {
+                        // Unwrap and compare with other
+                        if let Some(inner) = &e.data {
+                            inner.is_equal(other)
+                        } else {
+                            false
+                        }
+                    }
+                    "Null" => {
+                        // Maybe::Null only equals Maybe::Null
+                        if let Value::Enum(e2) = other {
+                            e2.enum_name == "Maybe" && e2.variant_name == "Null"
+                        } else {
+                            false
+                        }
+                    }
+                    _ => false,
+                }
+            }
+            // Right is Maybe, left is not - flip comparison
+            (other, Value::Enum(e)) if e.enum_name == "Maybe" => {
+                match e.variant_name.as_str() {
+                    "Value" => {
+                        if let Some(inner) = &e.data {
+                            other.is_equal(inner)
+                        } else {
+                            false
+                        }
+                    }
+                    "Null" => false, // T == Maybe::Null is always false (T is not Maybe)
+                    _ => false,
+                }
+            }
+            // Regular enum comparison (non-Maybe)
             (Value::Enum(e1), Value::Enum(e2)) => {
                 if e1.variant_name != e2.variant_name || e1.enum_name != e2.enum_name {
                     return false;
