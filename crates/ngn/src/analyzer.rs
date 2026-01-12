@@ -518,15 +518,26 @@ impl Analyzer {
                 source,
                 failure_block,
             } => {
-                // Get the source expression's type (already unwrapped for optional params)
+                // Get the source expression's type
                 let source_type = self.check_expression(source);
 
                 // Check failure block
                 // TODO: validate failure_block contains return/break/continue
                 self.check_statement(failure_block);
 
-                // Define binding in current scope with the source's type
-                self.define(&binding, source_type, false, source.span);
+                // Unwrap the inner type for Maybe<T> or Result<T, E>
+                let unwrapped_type = match &source_type {
+                    Type::Generic(name, args) if name == "Maybe" && !args.is_empty() => {
+                        args[0].clone()
+                    }
+                    Type::Generic(name, args) if name == "Result" && !args.is_empty() => {
+                        args[0].clone() // Result<T, E> -> T
+                    }
+                    _ => source_type,
+                };
+
+                // Define binding in current scope with the unwrapped type
+                self.define(&binding, unwrapped_type, false, source.span);
 
                 Type::Void
             }

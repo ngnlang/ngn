@@ -1341,19 +1341,25 @@ impl Fiber {
                 self.set_reg_at(dest_reg, Value::String(json_str));
             }
             OpCode::CheckMaybeValue(dest_reg, maybe_reg) => {
-                // Check if the Maybe is a Value variant
+                // Check if the value is a "success" variant: Maybe::Value or Result::Ok
                 let val = self.get_reg_at(maybe_reg);
-                let is_value = match val {
-                    Value::Enum(ref e) => e.enum_name == "Maybe" && e.variant_name == "Value",
+                let is_success = match val {
+                    Value::Enum(ref e) => {
+                        (e.enum_name == "Maybe" && e.variant_name == "Value")
+                            || (e.enum_name == "Result" && e.variant_name == "Ok")
+                    }
                     _ => false,
                 };
-                self.set_reg_at(dest_reg, Value::Bool(is_value));
+                self.set_reg_at(dest_reg, Value::Bool(is_success));
             }
             OpCode::UnwrapMaybe(dest_reg, maybe_reg) => {
-                // Extract the inner value from Maybe::Value
+                // Extract the inner value from Maybe::Value or Result::Ok
                 let val = self.get_reg_at(maybe_reg);
                 let inner = match val {
-                    Value::Enum(ref e) if e.enum_name == "Maybe" && e.variant_name == "Value" => {
+                    Value::Enum(ref e)
+                        if (e.enum_name == "Maybe" && e.variant_name == "Value")
+                            || (e.enum_name == "Result" && e.variant_name == "Ok") =>
+                    {
                         e.data.clone().map(|b| *b).unwrap_or(Value::Void)
                     }
                     _ => Value::Void,
