@@ -329,6 +329,17 @@ impl Compiler {
                         args.len() as u8,
                     ));
                     self.reg_top = dest + 1;
+                } else if let Some(up_idx) = self.resolve_upvalue(name) {
+                    // Captured function from enclosing scope: get upvalue then call
+                    let func_reg = self.alloc_reg();
+                    self.instructions.push(OpCode::GetUpvalue(func_reg, up_idx));
+                    self.instructions.push(OpCode::Call(
+                        dest,
+                        func_reg,
+                        start_reg,
+                        args.len() as u8,
+                    ));
+                    self.reg_top = dest + 1;
                 } else if let Some(e) = self
                     .enums
                     .values()

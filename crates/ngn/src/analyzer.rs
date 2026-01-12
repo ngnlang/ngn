@@ -1913,26 +1913,72 @@ impl Analyzer {
                                     "Type Error: .update() takes 1 argument".to_string(),
                                     expr.span,
                                 );
-                            } else {
-                                let closure_ty = self.check_expression(&args[0]);
-                                if let Type::Function {
-                                    params,
-                                    return_type,
-                                    ..
-                                } = closure_ty
-                                {
-                                    if params.len() != 1
-                                        || !self.types_compatible(&params[0], &inner)
-                                        || !self.types_compatible(&inner, &return_type)
-                                    {
-                                        self.add_error(format!("Type Error: .update() expects closure |{:?}| -> {:?}", *inner, *inner), expr.span);
-                                    }
+                            } else if let ExprKind::Closure {
+                                params: closure_params,
+                                body: closure_body,
+                                return_type: closure_ret_type,
+                            } = &args[0].kind
+                            {
+                                // Analyze closure specially with mutable param for update()
+                                self.enter_scope();
+
+                                // Define the closure param as mutable
+                                let param_ty = if closure_params.len() == 1 {
+                                    let param = &closure_params[0];
+                                    let ty = if let Some(t) = &param.ty {
+                                        t.clone()
+                                    } else {
+                                        // Infer type from State<T> inner type
+                                        (*inner).clone()
+                                    };
+                                    // Define as MUTABLE since update() is for mutation
+                                    self.define(&param.name, ty.clone(), true, param.span);
+                                    ty
                                 } else {
                                     self.add_error(
-                                        "Type Error: .update() expects a closure".to_string(),
+                                        "Type Error: .update() closure must take exactly 1 parameter".to_string(),
+                                        expr.span,
+                                    );
+                                    Type::Any
+                                };
+
+                                // Check the closure body
+                                let previous_return_type = self.current_return_type.clone();
+                                self.current_return_type = closure_ret_type.clone();
+
+                                if closure_ret_type.is_none() {
+                                    self.infer_stack.push(None);
+                                }
+
+                                self.check_statement(closure_body);
+
+                                let actual_ret = if closure_ret_type.is_none() {
+                                    self.infer_stack.pop().unwrap().unwrap_or(Type::Void)
+                                } else {
+                                    closure_ret_type.clone().unwrap()
+                                };
+
+                                self.current_return_type = previous_return_type;
+                                self.exit_scope();
+
+                                // Validate types
+                                if !self.types_compatible(&param_ty, &inner) {
+                                    self.add_error(
+                                        format!("Type Error: .update() closure param type {:?} doesn't match state type {:?}", param_ty, *inner),
                                         expr.span,
                                     );
                                 }
+                                if !self.types_compatible(&inner, &actual_ret) {
+                                    self.add_error(
+                                        format!("Type Error: .update() closure must return {:?}, got {:?}", *inner, actual_ret),
+                                        expr.span,
+                                    );
+                                }
+                            } else {
+                                self.add_error(
+                                    "Type Error: .update() expects a closure".to_string(),
+                                    expr.span,
+                                );
                             }
                             Type::Void
                         }
