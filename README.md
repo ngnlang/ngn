@@ -882,6 +882,7 @@ Closures are similar to functions, but have important differences:
 - access to external values, even ones outside its environment
 - uses pipe syntax to wrap params
 - param ownership transfer is the same as functions
+- to mutate the value of a variable from within a closure, use `state()` to declare the variable.
 
 1. The closure captures outside values at creation.
     ```ngn
@@ -923,14 +924,14 @@ Closures are similar to functions, but have important differences:
       print(add_me(5)) // 20
     }
     ```
-    Or, the closed over value can be within the function.
+    Or, the closed over value can be within the function. In this case, we use `state()` to declare the variable since we need to mutate it from within the closure.
     ```ngn
     fn main() {
       fn make_counter() {
-        var count = 0
+        var count = state(0)
         
         return || {
-          count += 1
+          count.update(|c| c + 1)
           print(count)
         }
       }
@@ -941,7 +942,6 @@ Closures are similar to functions, but have important differences:
       counter()  // 3
     }
     ```
-To mutate the value of a variable from within a closure, use `state()`.
 
 ## Typed Objects and Composability
 You can create typed objects using models, then create a new instance of a model.
@@ -1108,7 +1108,7 @@ fn main() {
     // Assign channel output to a variable
     // Receiving "first" will still work here, because of buffering
     const msg = <- c
-    print("Received: {msg}")
+    print("Received: ${msg}")
 
     // This will fail because the channel is closed and empty.
     const fail = <- c
@@ -1118,7 +1118,7 @@ fn main() {
 You can send a closure to a channel:
 ```ngn
 fn main() {
-    const job_queue = channel(): fn
+    const job_queue = channel(): fn<i64, void>
 
     // (See next section for details on threads)
     const done = thread(|| {
@@ -1134,11 +1134,11 @@ fn main() {
         return
     })
 
-    job_queue <- |n: i64| { print("Task A executing with {n}") }
+    job_queue <- |n: i64| { print("Task A executing with ${n}") }
     
     job_queue <- |n: i64| { 
         const res = n * 2
-        print("Task B executing: {n} * 2 = {res}") 
+        print("Task B executing: ${n} * 2 = ${res}") 
     }
     
     // must close the channel to break out of `while` loop
@@ -1151,6 +1151,14 @@ fn main() {
 
     print("Jobs complete")
 }
+```
+```txt
+Jobs sent
+Worker started
+Task A executing with 42
+Task B executing: 42 * 2 = 84
+Worker finished
+Jobs complete
 ```
 
 Channels can even contain other channels, and you can send/receive data within those inner channels.
@@ -1235,16 +1243,26 @@ fn main() {
         return Error("Oh this is bad channel d!")
     })
     
-    print("5. Main doing other work while thread runs...")
+    print("4. Main doing other work while thread runs...")
 
     // This should block until the "c" thread sends a message
     const msgc = <- c
-    print("6c. Main received, from thread c: {msgc}")
+    print("5c. Main received, from thread c: ${msgc}")
 
     // This should block until the "d" thread sends a message
     const msgd = <- d
-    print("6d. Main received, from thread d: {msgd}")
+    print("5d. Main received, from thread d: ${msgd}")
 }
+```
+```txt
+1. Main started
+4. Main doing other work while thread runs...
+  2c. Thread c started (sleeping...)
+  3c. Thread c sending message
+  2d. Thread d started (sleeping...)
+  3d. Thread d sending message
+5c. Main received, from thread c: Result::Ok (Hello from channel c!)
+5d. Main received, from thread d: Result::Error (Oh this is bad channel d!)
 ```
 
 If you're unsure how much data is coming, use a `for` loop, and then close the channel at the end of the input in order to indicate that no more messages can be sent. Below, we're simulating "unknown" amounts of data.
@@ -1328,18 +1346,21 @@ fn main() {
 
   // Spawn threads
   // Optional index value as the second closure param
-  tasks.each(|task, i| {
+  for (task in tasks) {
     thread(|| {
       const result = task()
-      results.update(|r| r.push(result))
+      results.update(|r| {
+        r.push(result)
+        return r
+      })
 
       done <- true
     })
-  })
+  }
 
   <-tasks.size() done
   
-  print("Spawned results: {results}")
+  print("Spawned results: ${results}")
 }
 ```
 
@@ -1347,7 +1368,7 @@ fn main() {
 Use `fetch` to make HTTP requests, such as to external APIs. It returns a channel, so you await it with the `<-` operator.
 
 ```ngn
-const response = <- fetch("https://example.com") // GET is the default method
+const response = <- fetch("https://example.com")
 print(response)
 ```
 ```ngn
@@ -1361,10 +1382,83 @@ const response = <- fetch("https://example.com", {
     "name": "John Doe",
     "email": "john.doe@example.com",
   }),
-  timeout: 10000, // 10 seconds
+  timeout: 30000,
 })
 print(response)
 ```
+
+### `fetch` properties
+- `url`: The URL of the request
+- `options`: An object containing the options for the request
+  - `method`: The HTTP method of the request - defaults to GET
+  - `headers`: The headers of the request
+  - `body`: The body of the request
+  - `timeout`: The timeout of the request, in milliseconds - defaults to 10 seconds
+
+## `Request`
+You can handle `Request` objects.
+
+```ngn
+fn handler(req: Request) {
+  const path = req.path
+  const method = req.method
+  const headers = req.headers
+  const body = req.body
+
+  return Response {
+    body: "Hello, world!",
+  }
+}
+
+export default {
+  fetch: handler
+}
+```
+### `Request` properties
+- `method`: The HTTP method of the request
+- `url`: The URL of the request
+- `protocol`: Whether HTTP or HTTPs was used
+- `host`: The host the client used to make the request
+- `path`: The path of the request
+- `query`: The query string of the request
+- `params`: Query parameters as a `Map<string, string>`
+- `headers`: The headers of the request
+- `body`: The body of the request
+- `ip`: The client's IP address
+- `cookies`: The cookies sent with the request
+
+### `Request` methods
+- `clone()`: Creates a new `Request` object with the same properties
+- `text()`: Parses the body as a string, returns a `string`
+- `json()`: Parses the body as JSON, returns a Result enum
+- `formData()`: Parses URL-encoded body, returns a `Map<string, string>`
+
+## `Response`
+You can create a `Response` object to send HTTP responses.
+
+```ngn
+fn handler(req: Request) {
+  return Response {
+    body: "Hello, world!",
+  }
+}
+
+export default {
+  fetch: handler
+}
+```
+
+### `Response` properties
+- `status`: The HTTP status code - default is 200
+- `statusText`: The HTTP status text - default is ""
+- `ok`: A boolean indicating whether the response status code is in the range 200-299
+- `headers`: The headers to include in the response
+- `body`: The body of the response - default is ""
+
+### `Response` methods
+- `text()`: Parses the body as a string, returns a `string`
+- `json()`: Parses the body as JSON, returns a Result enum
+- `formData()`: Parses URL-encoded body, returns a `Map<string, string>`
 
 ## Modules
 You can use `export` and `import` to create modules in your project. This is a functions-only feature.
@@ -1433,6 +1527,13 @@ You can import in different ways:
 
 ### tbx::test
 - `assert`: assert that a condition is true
+```ngn
+import { assert } from "tbx::test"
+
+fn main() {
+  assert(1 + 1 == 2)
+}
+```
 
 ### tbx::http
 Create an HTTP server.
