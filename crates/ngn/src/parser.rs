@@ -1857,6 +1857,9 @@ impl Parser {
             let then_stmt = self.parse_statement();
             let mut else_branch = None;
 
+            // Allow newlines before the else colon for multiline inline if
+            self.consume_newlines();
+
             if self.current_token == Token::Colon {
                 self.advance(); // consume ':'
                 // Check for 'else if' vs 'else'
@@ -2034,6 +2037,9 @@ impl Parser {
         self.expect(Token::RParen);
         let then_stmt = self.parse_statement();
         let mut else_branch = None;
+
+        // Allow newlines before the else colon for multiline inline if
+        self.consume_newlines();
 
         if self.current_token == Token::Colon {
             self.advance();
