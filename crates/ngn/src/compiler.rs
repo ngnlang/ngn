@@ -1799,10 +1799,8 @@ impl Compiler {
         let mut sub_compiler = Compiler::new(Some(self));
         sub_compiler.is_global = false;
 
-        // Inherit all current symbols as GLOBALS for the function
-        for (n, &idx) in &self.symbol_table {
-            sub_compiler.global_table.insert(n.clone(), idx);
-        }
+        // Only inherit actual globals, NOT local symbols from parent scope.
+        // Local symbols (like sibling functions) should be resolved via upvalue mechanism.
         for (n, &idx) in &self.global_table {
             sub_compiler.global_table.insert(n.clone(), idx);
         }
