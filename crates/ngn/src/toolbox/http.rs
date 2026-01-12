@@ -568,10 +568,10 @@ async fn handle_tls_connection_async<S>(
     };
 
     // Pre-allocate with estimated capacity
-    let header_count = if let Value::Map(h) = &resp_headers {
-        h.len()
-    } else {
-        0
+    let header_count = match &resp_headers {
+        Value::Map(h) => h.len(),
+        Value::Object(o) => o.fields.len(),
+        _ => 0,
     };
     let estimated_size = 128 + header_count * 64 + resp_body.len();
     let mut response_str = String::with_capacity(estimated_size);
@@ -579,13 +579,23 @@ async fn handle_tls_connection_async<S>(
     use std::fmt::Write;
     let _ = write!(response_str, "HTTP/1.1 {} {}\r\n", status, status_text);
 
-    // Add headers
-    if let Value::Map(h) = resp_headers {
-        for (k, v) in h {
-            if let (Value::String(key), Value::String(val)) = (k, v) {
-                let _ = write!(response_str, "{}: {}\r\n", key, val);
+    // Add headers - support both Map and Object (anonymous object)
+    match resp_headers {
+        Value::Map(h) => {
+            for (k, v) in h {
+                if let (Value::String(key), Value::String(val)) = (k, v) {
+                    let _ = write!(response_str, "{}: {}\r\n", key, val);
+                }
             }
         }
+        Value::Object(o) => {
+            for (key, val) in o.fields {
+                if let Value::String(val_str) = val {
+                    let _ = write!(response_str, "{}: {}\r\n", key, val_str);
+                }
+            }
+        }
+        _ => {}
     }
 
     // Add content-length and body

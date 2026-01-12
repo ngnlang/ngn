@@ -113,7 +113,6 @@ impl Analyzer {
                     ("query".to_string(), Type::String),
                     ("headers".to_string(), Type::Any),
                     ("body".to_string(), Type::String),
-                    // New fields
                     (
                         "params".to_string(),
                         Type::Map(Box::new(Type::String), Box::new(Type::String)),
@@ -139,10 +138,7 @@ impl Analyzer {
                     ("status".to_string(), Type::I64),
                     ("statusText".to_string(), Type::String),
                     ("ok".to_string(), Type::Bool),
-                    (
-                        "headers".to_string(),
-                        Type::Map(Box::new(Type::String), Box::new(Type::String)),
-                    ),
+                    ("headers".to_string(), Type::Any), // accepts map or object literal
                     ("body".to_string(), Type::String),
                 ],
             },
