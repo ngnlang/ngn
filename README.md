@@ -584,16 +584,16 @@ match (user2) {
 fn getUser(user?: string): Result<User, string> {
   check var u = user {
     // failure case
-    return "User not found"
+    return Error("User not found")
   }
   // success case
-  return db.getUser(u)
+  return Ok(u)
 }
 
 const user = getUser("jason")
 match (user) {
-  Ok(user) => print("User: {user}"),
-  Error(msg) => print("Error: {msg}"),
+  Ok(user) => print("User: ${user}"),
+  Error(msg) => print("Error: ${msg}"),
 }
 ```
 
