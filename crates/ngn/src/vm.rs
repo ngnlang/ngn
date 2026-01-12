@@ -940,7 +940,8 @@ impl Fiber {
                 let closure_val = self.get_reg_at(closure_reg);
                 if let (Value::State(state), Value::Closure(closure)) = (state_val, closure_val) {
                     let current_val = state.lock().unwrap().clone();
-                    let arg_start = self.stack.len() as u16;
+                    // arg_start must be relative to current fp, not absolute stack index
+                    let arg_start = (self.stack.len() - self.fp) as u16;
                     self.stack.push(current_val);
 
                     let func = closure.function.clone();
