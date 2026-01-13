@@ -83,6 +83,7 @@ pub enum OpCode {
     Print(u16),
     Echo(u16),
     Sleep(u16),
+    Panic(u16),
     Return(u16), // (SrcReg)
     ReturnVoid,
     Halt,

@@ -456,6 +456,11 @@ impl Fiber {
                     std::thread::sleep(std::time::Duration::from_millis(ms as u64));
                 }
             }
+            OpCode::Panic(src) => {
+                let val = self.get_reg_at(src);
+                eprintln!("{}", val);
+                std::process::exit(1);
+            }
             OpCode::Jump(target) => {
                 self.ip = target;
             }

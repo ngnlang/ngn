@@ -278,6 +278,11 @@ impl Compiler {
                         self.instructions.push(OpCode::Sleep(reg));
                         return reg;
                     }
+                    "panic" => {
+                        let reg = self.compile_expr(&args[0]);
+                        self.instructions.push(OpCode::Panic(reg));
+                        return reg;
+                    }
                     "fetch" => {
                         let url_reg = self.compile_expr(&args[0]);
                         let options_reg = if args.len() > 1 {
