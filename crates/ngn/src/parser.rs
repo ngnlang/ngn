@@ -1476,13 +1476,18 @@ impl Parser {
             match self.current_token {
                 Token::LParen => {
                     self.advance(); // consume '('
+                    self.paren_depth += 1;
+                    self.consume_newlines();
                     let mut args = Vec::new();
                     while self.current_token != Token::RParen && self.current_token != Token::EOF {
                         args.push(self.parse_expression());
+                        self.consume_newlines();
                         if self.current_token == Token::Comma {
                             self.advance();
+                            self.consume_newlines();
                         }
                     }
+                    self.paren_depth -= 1;
                     self.expect(Token::RParen);
 
                     let end = self.previous_span.end;
@@ -1528,15 +1533,20 @@ impl Parser {
                     // Check for method call: .method(args)
                     if self.current_token == Token::LParen {
                         self.advance();
+                        self.paren_depth += 1;
+                        self.consume_newlines();
                         let mut args = Vec::new();
                         while self.current_token != Token::RParen
                             && self.current_token != Token::EOF
                         {
                             args.push(self.parse_expression());
+                            self.consume_newlines();
                             if self.current_token == Token::Comma {
                                 self.advance();
+                                self.consume_newlines();
                             }
                         }
+                        self.paren_depth -= 1;
                         self.expect(Token::RParen);
                         let end = self.previous_span.end;
 
