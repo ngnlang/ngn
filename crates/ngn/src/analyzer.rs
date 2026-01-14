@@ -2173,6 +2173,15 @@ impl Analyzer {
                             }
                             Type::Bool
                         }
+                        "clear" => {
+                            if !args.is_empty() {
+                                self.add_error(
+                                    "Type Error: .clear() takes no arguments".to_string(),
+                                    expr.span,
+                                );
+                            }
+                            Type::Void
+                        }
                         _ => {
                             self.add_error(
                                 format!("Type Error: Unknown method '{}' for Set type", method),

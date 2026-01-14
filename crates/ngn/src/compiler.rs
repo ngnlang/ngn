@@ -849,7 +849,7 @@ impl Compiler {
                 let is_mutating = matches!(
                     method.as_str(),
                     "push" | "pop" | "slice" | "splice" |  // array mutating methods
-                    "set" | "remove" |  // map mutating methods (remove is shared with set)
+                    "set" | "remove" | "clear" |  // map/set mutating methods
                     "add" // set mutating methods
                 );
 

@@ -1995,6 +1995,13 @@ impl Fiber {
                 let was_removed = set.remove(&args[0]);
                 (Value::Bool(was_removed), Value::Set(set))
             }
+            "clear" => {
+                if !args.is_empty() {
+                    panic!("clear() takes no arguments");
+                }
+                set.clear();
+                (Value::Void, Value::Set(set))
+            }
             _ => panic!("Runtime Error: Unknown mutating set method '{}'", method),
         }
     }
