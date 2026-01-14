@@ -295,18 +295,18 @@ stuff.push("coat", 0)
 print(stuff) // ["coat", "guitar", "shirt", "hat"]
 ```
 
-### `pull(index?)`
-Pull, i.e. remove, an item from an array. By default, it removes from the end. To pull from another location, provide the index number. Returns the removed item's value.
+### `pop(index?)`
+Pop, i.e. remove, an item from an array. By default, it removes from the end. To pop from another location, provide the index number. Returns the removed item's value.
 ```
 var stuff = ["coat", "guitar", "shirt", "hat"]
-const pulled = stuff.pull()
+const popped = stuff.pop()
 
-print(pulled) // hat
+print(popped) // hat
 print(stuff) // ["coat", "guitar", "shirt"]
 
-const pulled_one = stuff.pull(1)
+const popped_one = stuff.pop(1)
 
-print(pulled_one) // ["guitar"]
+print(popped_one) // ["guitar"]
 print stuff // ["coat", "shirt"]
 ```
 
