@@ -874,6 +874,9 @@ s.remove("one") // returns a bool of whether the value was removed
 
 // get the size
 s.size() // returns the number of values in the set
+
+// clear all values
+s.clear()
 ```
 
 ## Closures
