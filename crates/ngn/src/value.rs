@@ -541,7 +541,7 @@ pub enum Value {
     State(Arc<Mutex<Value>>),
     Object(Box<ObjectData>),
     Map(std::collections::HashMap<Value, Value>),
-    Set(std::collections::HashSet<Value>),
+    Set(indexmap::IndexSet<Value>),
     Response(Box<ResponseData>),
     Void,
     Regex(String),

@@ -560,6 +560,7 @@ impl Analyzer {
                     Type::Tuple(_) => Type::Any,
                     Type::Enum(ref name) if name == "Maybe" => Type::Any,
                     Type::Channel(inner) => *inner,
+                    Type::Set(inner) => *inner,
                     Type::Any => Type::Any,
                     _ => {
                         self.add_error(

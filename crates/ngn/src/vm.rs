@@ -526,6 +526,17 @@ impl Fiber {
                                 }
                             }
                         }
+                        Value::Set(items) => {
+                            if let Some(val) = items.get_index(idx as usize) {
+                                self.set_reg_at(dest, val.clone());
+                                self.set_reg_at(
+                                    iter_reg + 1,
+                                    Value::Numeric(crate::value::Number::I64(idx + 1)),
+                                );
+                            } else {
+                                self.ip = jump_offset;
+                            }
+                        }
                         _ => panic!(
                             "Runtime Error: IterNext on non-collection: {:?}",
                             collection
@@ -915,7 +926,7 @@ impl Fiber {
                 self.set_reg_at(dest, Value::Map(std::collections::HashMap::new()));
             }
             OpCode::CreateSet(dest) => {
-                self.set_reg_at(dest, Value::Set(std::collections::HashSet::new()));
+                self.set_reg_at(dest, Value::Set(indexmap::IndexSet::new()));
             }
             OpCode::CreateState(dest, initial_reg) => {
                 let initial = self.get_reg_at(initial_reg);
@@ -1951,12 +1962,7 @@ impl Fiber {
     }
 
     /// Set non-mutating methods: size, has
-    fn set_method(
-        &self,
-        set: std::collections::HashSet<Value>,
-        method: &str,
-        args: Vec<Value>,
-    ) -> Value {
+    fn set_method(&self, set: indexmap::IndexSet<Value>, method: &str, args: Vec<Value>) -> Value {
         match method {
             "size" => Value::Numeric(crate::value::Number::I64(set.len() as i64)),
             "has" => {
@@ -1972,10 +1978,10 @@ impl Fiber {
         }
     }
 
-    /// Set mutating methods: add, remove
+    /// Set mutating methods: add, remove, clear
     fn set_method_mut(
         &self,
-        mut set: std::collections::HashSet<Value>,
+        mut set: indexmap::IndexSet<Value>,
         method: &str,
         args: Vec<Value>,
     ) -> (Value, Value) {
@@ -1992,7 +1998,7 @@ impl Fiber {
                 if args.is_empty() {
                     panic!("remove() requires a value");
                 }
-                let was_removed = set.remove(&args[0]);
+                let was_removed = set.shift_remove(&args[0]);
                 (Value::Bool(was_removed), Value::Set(set))
             }
             "clear" => {
