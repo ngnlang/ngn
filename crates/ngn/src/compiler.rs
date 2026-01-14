@@ -848,7 +848,7 @@ impl Compiler {
                 // Mutating methods need CallMethodMut to write back to the source register
                 let is_mutating = matches!(
                     method.as_str(),
-                    "push" | "pull" | "slice" | "splice" |  // array mutating methods
+                    "push" | "pop" | "slice" | "splice" |  // array mutating methods
                     "set" | "remove" |  // map mutating methods (remove is shared with set)
                     "add" // set mutating methods
                 );

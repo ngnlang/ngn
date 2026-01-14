@@ -1525,7 +1525,7 @@ impl Fiber {
         }
     }
 
-    /// Array mutating methods: push, pull, slice, splice
+    /// Array mutating methods: push, pop, slice, splice
     fn array_method_mut(
         &self,
         mut arr: Vec<Value>,
@@ -1554,17 +1554,17 @@ impl Fiber {
                     Value::Array(arr),
                 )
             }
-            "pull" => {
+            "pop" => {
                 let removed = if args.len() > 0 {
                     let idx = self
                         .to_usize(&args[0])
-                        .expect("pull() index must be integer");
+                        .expect("pop() index must be integer");
                     if idx >= arr.len() {
-                        panic!("pull() index out of bounds");
+                        panic!("pop() index out of bounds");
                     }
                     arr.remove(idx)
                 } else {
-                    arr.pop().expect("pull() from empty array")
+                    arr.pop().expect("pop() from empty array")
                 };
                 (removed, Value::Array(arr))
             }

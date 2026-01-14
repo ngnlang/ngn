@@ -1359,7 +1359,7 @@ impl Analyzer {
                 // Check for immutability
                 if matches!(
                     method.as_str(),
-                    "push" | "pull" | "slice" | "splice" |  // array mutating methods
+                    "push" | "pop" | "slice" | "splice" |  // array mutating methods
                     "set" | "remove" |  // map mutating methods (remove is shared with set)
                     "add" // set mutating methods
                 ) {
@@ -1557,10 +1557,10 @@ impl Analyzer {
                                 }
                                 Type::I64
                             }
-                            "pull" => {
+                            "pop" => {
                                 if args.len() > 1 {
                                     self.add_error(
-                                        "Type Error: .pull() takes at most 1 argument".to_string(),
+                                        "Type Error: .pop() takes at most 1 argument".to_string(),
                                         expr.span,
                                     );
                                 }
@@ -1569,7 +1569,7 @@ impl Analyzer {
                                     if !self.types_compatible(&Type::I64, &idx_ty) {
                                         self.add_error(
                                             format!(
-                                                "Type Error: pull() index must be I64, got {:?}",
+                                                "Type Error: pop() index must be I64, got {:?}",
                                                 idx_ty
                                             ),
                                             expr.span,
