@@ -877,6 +877,16 @@ s.size() // returns the number of values in the set
 
 // clear all values
 s.clear()
+
+// iterate over values
+for (v in s) {
+  print(v)
+}
+
+// iterate over values with index
+for (v, i in s) {
+  print("index: ${i}, value: ${v}")
+}
 ```
 
 ## Closures
