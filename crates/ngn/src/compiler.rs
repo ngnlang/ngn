@@ -1563,6 +1563,9 @@ impl Compiler {
     fn compile_match(&mut self, condition: Expr, arms: Vec<crate::parser::MatchArm>) {
         let match_reg = self.compile_expr(&condition);
 
+        // Allow break inside match statements
+        self.break_patches.push(Vec::new());
+
         // Sync next_index to preserve match_reg if it used temp regs
         if (self.reg_top as usize) > self.next_index {
             self.next_index = self.reg_top as usize;
@@ -1680,6 +1683,13 @@ impl Compiler {
         // Final Cleanup
         self.next_body_patches.pop();
         self.match_state_vars.pop();
+
+        // Patch break jumps to exit the match
+        let break_patches = self.break_patches.pop().unwrap();
+        for idx in break_patches {
+            self.patch_jump(idx);
+        }
+
         // Condition was in match_reg, which will be freed when compile_match finishes
         self.reg_top = match_reg;
     }
