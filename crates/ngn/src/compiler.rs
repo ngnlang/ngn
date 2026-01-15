@@ -1563,7 +1563,6 @@ impl Compiler {
     fn compile_match(&mut self, condition: Expr, arms: Vec<crate::parser::MatchArm>) {
         let match_reg = self.compile_expr(&condition);
 
-        // Allow break inside match statements
         self.break_patches.push(Vec::new());
 
         // Sync next_index to preserve match_reg if it used temp regs
