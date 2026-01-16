@@ -2201,6 +2201,54 @@ impl Analyzer {
                         Type::Any
                     }
 
+                    // Allow method calls on Type::Spawn (for spawn.all, spawn.try, spawn.race)
+                    Type::Spawn => {
+                        match method.as_str() {
+                            "all" | "try" => {
+                                // Expects array of functions, returns array<Result<Any, String>>
+                                if args.is_empty() {
+                                    self.add_error(
+                                        format!(
+                                            "Type Error: spawn.{}() requires array of tasks",
+                                            method
+                                        ),
+                                        expr.span,
+                                    );
+                                } else {
+                                    self.check_expression(&args[0]);
+                                    // Check optional options parameter
+                                    if args.len() > 1 {
+                                        self.check_expression(&args[1]);
+                                    }
+                                }
+                                Type::Array(Box::new(Type::Generic(
+                                    "Result".to_string(),
+                                    vec![Type::Any, Type::String],
+                                )))
+                            }
+                            "race" => {
+                                // Expects array of functions, returns Result<Any, String>
+                                if args.is_empty() {
+                                    self.add_error(
+                                        "Type Error: spawn.race() requires array of tasks"
+                                            .to_string(),
+                                        expr.span,
+                                    );
+                                } else {
+                                    self.check_expression(&args[0]);
+                                }
+                                Type::Generic("Result".to_string(), vec![Type::Any, Type::String])
+                            }
+                            _ => {
+                                self.add_error(
+                                    format!("Type Error: Unknown spawn method '{}'", method),
+                                    expr.span,
+                                );
+                                Type::Any
+                            }
+                        }
+                    }
+
                     _ => {
                         self.add_error(
                             format!("Type Error: Methods not supported for type {:?}", obj_ty),

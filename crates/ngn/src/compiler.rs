@@ -810,6 +810,50 @@ impl Compiler {
                             _ => {}
                         }
                     }
+
+                    // Handle spawn.all(), spawn.try(), spawn.race()
+                    if var_name == "spawn" {
+                        let dest = self.alloc_reg();
+                        match method.as_str() {
+                            "all" => {
+                                let tasks_reg = self.compile_expr(&args[0]);
+                                let options_reg = if args.len() > 1 {
+                                    self.compile_expr(&args[1])
+                                } else {
+                                    u16::MAX // No options
+                                };
+                                self.instructions.push(OpCode::SpawnAll(
+                                    dest,
+                                    tasks_reg,
+                                    options_reg,
+                                ));
+                                self.reg_top = dest + 1;
+                                return dest;
+                            }
+                            "try" => {
+                                let tasks_reg = self.compile_expr(&args[0]);
+                                let options_reg = if args.len() > 1 {
+                                    self.compile_expr(&args[1])
+                                } else {
+                                    u16::MAX // No options
+                                };
+                                self.instructions.push(OpCode::SpawnTry(
+                                    dest,
+                                    tasks_reg,
+                                    options_reg,
+                                ));
+                                self.reg_top = dest + 1;
+                                return dest;
+                            }
+                            "race" => {
+                                let tasks_reg = self.compile_expr(&args[0]);
+                                self.instructions.push(OpCode::SpawnRace(dest, tasks_reg));
+                                self.reg_top = dest + 1;
+                                return dest;
+                            }
+                            _ => {}
+                        }
+                    }
                 }
 
                 let obj_reg = self.compile_expr(obj_expr);

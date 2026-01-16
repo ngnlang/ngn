@@ -79,6 +79,11 @@ pub enum OpCode {
     ReceiveCount(u16, u16, u16), // (DestReg, ChannelReg, CountReg)
     ReceiveMaybe(u16, u16),      // (DestReg, ChannelReg)
 
+    // Spawn API for parallel task execution
+    SpawnAll(u16, u16, u16), // (DestReg, TasksArrayReg, OptionsReg) - run all, return all results
+    SpawnTry(u16, u16, u16), // (DestReg, TasksArrayReg, OptionsReg) - stop on first error
+    SpawnRace(u16, u16),     // (DestReg, TasksArrayReg) - return first success
+
     // Builtins/Misc
     Print(u16),
     Echo(u16),

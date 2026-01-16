@@ -1401,6 +1401,53 @@ impl Fiber {
                 };
                 self.set_reg_at(dest_reg, result);
             }
+            OpCode::SpawnAll(dest_reg, tasks_reg, options_reg) => {
+                // spawn.all() - run all tasks in parallel, return all results
+                let tasks = self.get_reg_at(tasks_reg);
+                let concurrency = self.get_spawn_concurrency(options_reg);
+
+                if let Value::Array(task_closures) = tasks {
+                    let results = self.run_spawn_tasks(
+                        &task_closures,
+                        concurrency,
+                        false,
+                        globals,
+                        custom_methods,
+                    );
+                    self.set_reg_at(dest_reg, Value::Array(results));
+                } else {
+                    panic!("spawn.all() expects an array of tasks");
+                }
+            }
+            OpCode::SpawnTry(dest_reg, tasks_reg, options_reg) => {
+                // spawn.try() - run tasks, stop on first error
+                let tasks = self.get_reg_at(tasks_reg);
+                let concurrency = self.get_spawn_concurrency(options_reg);
+
+                if let Value::Array(task_closures) = tasks {
+                    let results = self.run_spawn_tasks(
+                        &task_closures,
+                        concurrency,
+                        true,
+                        globals,
+                        custom_methods,
+                    );
+                    self.set_reg_at(dest_reg, Value::Array(results));
+                } else {
+                    panic!("spawn.try() expects an array of tasks");
+                }
+            }
+            OpCode::SpawnRace(dest_reg, tasks_reg) => {
+                // spawn.race() - return first success (or first error if all fail)
+                let tasks = self.get_reg_at(tasks_reg);
+
+                if let Value::Array(task_closures) = tasks {
+                    let result = self.run_spawn_race(&task_closures, globals, custom_methods);
+                    self.set_reg_at(dest_reg, result);
+                } else {
+                    panic!("spawn.race() expects an array of tasks");
+                }
+            }
             OpCode::Halt => {
                 self.status = FiberStatus::Finished;
                 return FiberStatus::Finished;
@@ -1504,6 +1551,342 @@ impl Fiber {
                 method, obj
             ),
         }
+    }
+
+    /// Extract concurrency limit from spawn options
+    fn get_spawn_concurrency(&self, options_reg: u16) -> Option<usize> {
+        if options_reg == u16::MAX {
+            return None;
+        }
+        let options = self.get_reg_at(options_reg);
+        if let Value::Object(obj) = options {
+            if let Some(Value::Numeric(n)) = obj.fields.get("concurrency") {
+                let concurrency = match n {
+                    crate::value::Number::I64(v) => *v as usize,
+                    crate::value::Number::I32(v) => *v as usize,
+                    crate::value::Number::U64(v) => *v as usize,
+                    crate::value::Number::U32(v) => *v as usize,
+                    _ => 0,
+                };
+                return Some(concurrency);
+            }
+        }
+        None
+    }
+
+    /// Run spawn tasks (used by spawn.all and spawn.try)
+    fn run_spawn_tasks(
+        &self,
+        tasks: &[Value],
+        _concurrency: Option<usize>,
+        fail_fast: bool,
+        globals: &mut Vec<Value>,
+        custom_methods: &Arc<
+            Mutex<std::collections::HashMap<String, std::collections::HashMap<String, Value>>>,
+        >,
+    ) -> Vec<Value> {
+        use std::sync::mpsc;
+        use std::thread;
+
+        let mut results: Vec<Value> = Vec::new();
+        let _task_count = tasks.len();
+
+        // Create a channel for results
+        let (tx, rx) = mpsc::channel::<(usize, Value)>();
+
+        // Collect closures for spawning
+        let mut handles = Vec::new();
+
+        for (idx, task) in tasks.iter().enumerate() {
+            if let Value::Closure(closure) = task.clone() {
+                let tx = tx.clone();
+                let closure_clone = closure.clone();
+                let globals_clone = globals.clone();
+                let custom_methods_clone = custom_methods.clone();
+
+                let handle = thread::spawn(move || {
+                    // Run the closure in a new fiber
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let mut fiber = Fiber::new(closure_clone);
+                        let mut thread_globals = globals_clone;
+
+                        // Run the fiber to completion
+                        loop {
+                            let status = fiber.run_step(&mut thread_globals, &custom_methods_clone);
+                            match status {
+                                FiberStatus::Finished => {
+                                    return fiber.return_value.unwrap_or(Value::Void);
+                                }
+                                FiberStatus::Running => continue,
+                                _ => break,
+                            }
+                        }
+                        Value::Void
+                    }));
+
+                    match result {
+                        Ok(value) => {
+                            let _ = tx.send((idx, value));
+                        }
+                        Err(panic_info) => {
+                            let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                                s.to_string()
+                            } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                                s.clone()
+                            } else {
+                                "Unknown panic".to_string()
+                            };
+                            let error = crate::value::EnumData::into_value(
+                                "Result".to_string(),
+                                "Error".to_string(),
+                                Some(Box::new(Value::String(format!("Thread panicked: {}", msg)))),
+                            );
+                            let _ = tx.send((idx, error));
+                        }
+                    }
+                });
+                handles.push(handle);
+            } else if let Value::Function(func) = task.clone() {
+                // Handle raw functions (create closure from them)
+                let tx = tx.clone();
+                let func_clone = func.clone();
+                let globals_clone = globals.clone();
+                let custom_methods_clone = custom_methods.clone();
+
+                let handle = thread::spawn(move || {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let closure = Box::new(Closure {
+                            function: func_clone,
+                            upvalues: Vec::new(),
+                        });
+                        let mut fiber = Fiber::new(closure);
+                        let mut thread_globals = globals_clone;
+
+                        loop {
+                            let status = fiber.run_step(&mut thread_globals, &custom_methods_clone);
+                            match status {
+                                FiberStatus::Finished => {
+                                    return fiber.return_value.unwrap_or(Value::Void);
+                                }
+                                FiberStatus::Running => continue,
+                                _ => break,
+                            }
+                        }
+                        Value::Void
+                    }));
+
+                    match result {
+                        Ok(value) => {
+                            let _ = tx.send((idx, value));
+                        }
+                        Err(panic_info) => {
+                            let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                                s.to_string()
+                            } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                                s.clone()
+                            } else {
+                                "Unknown panic".to_string()
+                            };
+                            let error = crate::value::EnumData::into_value(
+                                "Result".to_string(),
+                                "Error".to_string(),
+                                Some(Box::new(Value::String(format!("Thread panicked: {}", msg)))),
+                            );
+                            let _ = tx.send((idx, error));
+                        }
+                    }
+                });
+                handles.push(handle);
+            }
+        }
+
+        drop(tx); // Close the sender so rx iterator will terminate
+
+        // Collect results in order
+        let mut indexed_results: Vec<(usize, Value)> = Vec::new();
+        let mut error_found = false;
+
+        for (idx, result) in rx {
+            indexed_results.push((idx, result.clone()));
+
+            // Check for error in fail_fast mode
+            if fail_fast && !error_found {
+                if let Value::Enum(ref e) = result {
+                    if e.enum_name == "Result" && e.variant_name == "Error" {
+                        error_found = true;
+                    }
+                }
+            }
+        }
+
+        // Wait for all threads (they've already finished since rx closed)
+        for handle in handles {
+            let _ = handle.join();
+        }
+
+        // Sort by original index and extract values
+        indexed_results.sort_by_key(|(idx, _)| *idx);
+
+        if fail_fast && error_found {
+            // Return results up to and including first error
+            for (_, val) in indexed_results {
+                results.push(val.clone());
+                if let Value::Enum(ref e) = val {
+                    if e.enum_name == "Result" && e.variant_name == "Error" {
+                        break;
+                    }
+                }
+            }
+        } else {
+            results = indexed_results.into_iter().map(|(_, v)| v).collect();
+        }
+
+        results
+    }
+
+    /// Run spawn.race - return first success or first error if all fail
+    fn run_spawn_race(
+        &self,
+        tasks: &[Value],
+        globals: &mut Vec<Value>,
+        custom_methods: &Arc<
+            Mutex<std::collections::HashMap<String, std::collections::HashMap<String, Value>>>,
+        >,
+    ) -> Value {
+        use std::sync::mpsc;
+        use std::thread;
+
+        let (tx, rx) = mpsc::channel::<Value>();
+
+        for task in tasks.iter() {
+            if let Value::Closure(closure) = task.clone() {
+                let tx = tx.clone();
+                let closure_clone = closure.clone();
+                let globals_clone = globals.clone();
+                let custom_methods_clone = custom_methods.clone();
+
+                thread::spawn(move || {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let mut fiber = Fiber::new(closure_clone);
+                        let mut thread_globals = globals_clone;
+
+                        loop {
+                            let status = fiber.run_step(&mut thread_globals, &custom_methods_clone);
+                            match status {
+                                FiberStatus::Finished => {
+                                    return fiber.return_value.unwrap_or(Value::Void);
+                                }
+                                FiberStatus::Running => continue,
+                                _ => break,
+                            }
+                        }
+                        Value::Void
+                    }));
+
+                    match result {
+                        Ok(value) => {
+                            let _ = tx.send(value);
+                        }
+                        Err(panic_info) => {
+                            let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                                s.to_string()
+                            } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                                s.clone()
+                            } else {
+                                "Unknown panic".to_string()
+                            };
+                            let error = crate::value::EnumData::into_value(
+                                "Result".to_string(),
+                                "Error".to_string(),
+                                Some(Box::new(Value::String(format!("Thread panicked: {}", msg)))),
+                            );
+                            let _ = tx.send(error);
+                        }
+                    }
+                });
+            } else if let Value::Function(func) = task.clone() {
+                let tx = tx.clone();
+                let func_clone = func.clone();
+                let globals_clone = globals.clone();
+                let custom_methods_clone = custom_methods.clone();
+
+                thread::spawn(move || {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let closure = Box::new(Closure {
+                            function: func_clone,
+                            upvalues: Vec::new(),
+                        });
+                        let mut fiber = Fiber::new(closure);
+                        let mut thread_globals = globals_clone;
+
+                        loop {
+                            let status = fiber.run_step(&mut thread_globals, &custom_methods_clone);
+                            match status {
+                                FiberStatus::Finished => {
+                                    return fiber.return_value.unwrap_or(Value::Void);
+                                }
+                                FiberStatus::Running => continue,
+                                _ => break,
+                            }
+                        }
+                        Value::Void
+                    }));
+
+                    match result {
+                        Ok(value) => {
+                            let _ = tx.send(value);
+                        }
+                        Err(panic_info) => {
+                            let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                                s.to_string()
+                            } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                                s.clone()
+                            } else {
+                                "Unknown panic".to_string()
+                            };
+                            let error = crate::value::EnumData::into_value(
+                                "Result".to_string(),
+                                "Error".to_string(),
+                                Some(Box::new(Value::String(format!("Thread panicked: {}", msg)))),
+                            );
+                            let _ = tx.send(error);
+                        }
+                    }
+                });
+            }
+        }
+
+        drop(tx);
+
+        // Look for first success; if all fail return first error
+        let mut first_error: Option<Value> = None;
+
+        for result in rx {
+            if let Value::Enum(ref e) = result {
+                if e.enum_name == "Result" && e.variant_name == "Ok" {
+                    return result; // First success wins
+                }
+                if first_error.is_none() {
+                    first_error = Some(result);
+                }
+            } else {
+                // Non-enum result is treated as success
+                return crate::value::EnumData::into_value(
+                    "Result".to_string(),
+                    "Ok".to_string(),
+                    Some(Box::new(result)),
+                );
+            }
+        }
+
+        // All failed, return first error
+        first_error.unwrap_or_else(|| {
+            crate::value::EnumData::into_value(
+                "Result".to_string(),
+                "Error".to_string(),
+                Some(Box::new(Value::String("All tasks failed".to_string()))),
+            )
+        })
     }
 
     /// Array non-mutating methods: size, copy, each (placeholder)

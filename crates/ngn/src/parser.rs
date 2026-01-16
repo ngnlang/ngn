@@ -34,6 +34,7 @@ pub enum Type {
     Regex,
     Number, // Generic number type for extends
     Json,   // Built-in json module type
+    Spawn,  // Built-in spawn module type
 }
 
 #[derive(Debug, Clone, PartialEq)]
