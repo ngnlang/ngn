@@ -48,6 +48,7 @@ pub enum FiberStatus {
     Suspended,
     Finished,
     Spawning(Box<Fiber>),
+    Panicked(String), // User-level panic from ngn code
 }
 
 pub struct Fiber {
@@ -458,8 +459,8 @@ impl Fiber {
             }
             OpCode::Panic(src) => {
                 let val = self.get_reg_at(src);
-                eprintln!("{}", val);
-                std::process::exit(1);
+                // Return Panicked status - VM run loop handles it gracefully
+                return FiberStatus::Panicked(format!("{}", val));
             }
             OpCode::Jump(target) => {
                 self.ip = target;
@@ -2612,22 +2613,70 @@ impl VM {
 
     pub fn run(&mut self) {
         while let Some(mut fiber) = self.current_fiber.take() {
-            let status = fiber.run_step(&mut self.globals, &self.custom_methods);
-            match status {
-                FiberStatus::Running => {
-                    self.current_fiber = Some(fiber);
-                }
-                FiberStatus::Suspended => {
-                    self.fibers.push_back(fiber);
+            // Wrap fiber execution in catch_unwind to handle unexpected Rust panics
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                fiber.run_step(&mut self.globals, &self.custom_methods)
+            }));
+
+            match result {
+                Ok(status) => match status {
+                    FiberStatus::Running => {
+                        self.current_fiber = Some(fiber);
+                    }
+                    FiberStatus::Suspended => {
+                        self.fibers.push_back(fiber);
+                        self.current_fiber = self.fibers.pop_front();
+                    }
+                    FiberStatus::Finished => {
+                        self.last_value = fiber.return_value.clone();
+                        self.current_fiber = self.fibers.pop_front();
+                    }
+                    FiberStatus::Spawning(new_fiber) => {
+                        self.fibers.push_back(*new_fiber);
+                        self.current_fiber = Some(fiber);
+                    }
+                    FiberStatus::Panicked(msg) => {
+                        // User-level panic from ngn code
+                        eprintln!("[ngn] Thread panicked: {}", msg);
+
+                        // Send Error to completion channel if it exists
+                        if let Some(chan) = &fiber.completion_channel {
+                            let error = crate::value::EnumData::into_value(
+                                "Result".to_string(),
+                                "Error".to_string(),
+                                Some(Box::new(Value::String(format!("Thread panicked: {}", msg)))),
+                            );
+                            chan.buffer.lock().unwrap().push_back(error);
+                        }
+
+                        // Move to next fiber
+                        self.current_fiber = self.fibers.pop_front();
+                    }
+                },
+                Err(panic_info) => {
+                    // Internal Rust panic (VM bug) - extract message and continue
+                    let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "Unknown internal error".to_string()
+                    };
+
+                    eprintln!("[ngn] Internal error: {}", msg);
+
+                    // Send Error to completion channel if it exists
+                    if let Some(chan) = &fiber.completion_channel {
+                        let error = crate::value::EnumData::into_value(
+                            "Result".to_string(),
+                            "Error".to_string(),
+                            Some(Box::new(Value::String(format!("Internal error: {}", msg)))),
+                        );
+                        chan.buffer.lock().unwrap().push_back(error);
+                    }
+
+                    // Move to next fiber
                     self.current_fiber = self.fibers.pop_front();
-                }
-                FiberStatus::Finished => {
-                    self.last_value = fiber.return_value.clone();
-                    self.current_fiber = self.fibers.pop_front();
-                }
-                FiberStatus::Spawning(new_fiber) => {
-                    self.fibers.push_back(*new_fiber);
-                    self.current_fiber = Some(fiber);
                 }
             }
 

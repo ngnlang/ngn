@@ -55,6 +55,11 @@ async fn call_handler_async(
                 // For now, just continue with the main handler
                 continue;
             }
+            FiberStatus::Panicked(msg) => {
+                // Handler panicked - log and return 500 error
+                eprintln!("[ngn] HTTP handler panicked: {}", msg);
+                break;
+            }
         }
     }
 
