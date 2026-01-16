@@ -24,6 +24,7 @@ pub struct Compiler {
     pub instructions: Vec<OpCode>,
     pub constants: Vec<Value>,
     pub break_patches: Vec<Vec<usize>>,
+    pub is_loop_break: Vec<bool>,
     pub match_state_vars: Vec<usize>,
     pub next_body_patches: Vec<Vec<usize>>,
     pub is_global: bool,
@@ -59,6 +60,7 @@ impl Compiler {
             instructions: Vec::new(),
             constants: Vec::new(),
             break_patches: Vec::new(),
+            is_loop_break: Vec::new(),
             match_state_vars: Vec::new(),
             next_body_patches: Vec::new(),
             is_global: true,
@@ -1430,6 +1432,7 @@ impl Compiler {
     fn compile_while(&mut self, condition: Expr, body: Box<Statement>, is_once: bool) {
         let loop_start = self.instructions.len();
         self.break_patches.push(Vec::new());
+        self.is_loop_break.push(true);
 
         if is_once {
             // "While Once" behavior: Body -> Condition -> JumpBack
@@ -1456,25 +1459,36 @@ impl Compiler {
             self.patch_jump(jump_end_idx);
         }
 
+        self.is_loop_break.pop();
         let patches = self.break_patches.pop().unwrap();
         for idx in patches {
             self.patch_jump(idx);
         }
+
+        // Reset reg_top and temp_start to ensure subsequent code doesn't overwrite variables
+        self.reg_top = self.next_index as u16;
+        self.temp_start = self.next_index as u16;
     }
 
     fn compile_loop(&mut self, body: Box<Statement>) {
         let loop_start = self.instructions.len();
         self.break_patches.push(Vec::new());
+        self.is_loop_break.push(true);
 
         self.compile_statement(*body);
 
         // Jump back to start
         self.emit(OpCode::Jump(loop_start));
 
+        self.is_loop_break.pop();
         let patches = self.break_patches.pop().unwrap();
         for idx in patches {
             self.patch_jump(idx);
         }
+
+        // Reset reg_top and temp_start to ensure subsequent code doesn't overwrite variables
+        self.reg_top = self.next_index as u16;
+        self.temp_start = self.next_index as u16;
     }
 
     fn compile_for(
@@ -1507,6 +1521,7 @@ impl Compiler {
 
         let loop_start = self.instructions.len();
         self.break_patches.push(Vec::new());
+        self.is_loop_break.push(true);
 
         // 4. Emit IterNext
         let val_reg = self.alloc_reg();
@@ -1551,19 +1566,23 @@ impl Compiler {
         self.patch_jump(exit_jump);
 
         // 9. Patch breaks
+        self.is_loop_break.pop();
         let patches = self.break_patches.pop().unwrap();
         for idx in patches {
             self.patch_jump(idx);
         }
 
-        // Cleanup: free temporary registers used by iterator and val
-        self.reg_top = iter_reg; // Frees iter_reg, idx_temp, and val_reg
+        // Cleanup: reset registers to ensure subsequent code doesn't overwrite variables
+        self.reg_top = self.next_index as u16;
+        self.temp_start = self.next_index as u16;
     }
 
     fn compile_match(&mut self, condition: Expr, arms: Vec<crate::parser::MatchArm>) {
         let match_reg = self.compile_expr(&condition);
+        let saved_temp_start = self.temp_start; // Save for restoration at end
 
         self.break_patches.push(Vec::new());
+        self.is_loop_break.push(false);
 
         // Sync next_index to preserve match_reg if it used temp regs
         if (self.reg_top as usize) > self.next_index {
@@ -1684,6 +1703,7 @@ impl Compiler {
         self.match_state_vars.pop();
 
         // Patch break jumps to exit the match
+        self.is_loop_break.pop();
         let break_patches = self.break_patches.pop().unwrap();
         for idx in break_patches {
             self.patch_jump(idx);
@@ -1691,6 +1711,9 @@ impl Compiler {
 
         // Condition was in match_reg, which will be freed when compile_match finishes
         self.reg_top = match_reg;
+        self.temp_start = saved_temp_start.max(match_reg); // Restore but don't go below match_reg
+        // Note: DO NOT restore next_index - the state_var slot must stay reserved
+        // since DefVar was emitted for it and could cause collisions
     }
 
     fn compile_next(&mut self) {
@@ -1711,22 +1734,46 @@ impl Compiler {
     }
 
     fn compile_break(&mut self) {
-        if self.break_patches.is_empty() {
-            panic!("Compiler Error: 'break' used outside of loop or match");
-        }
+        // Find the nearest loop context (not match)
+        let loop_depth = self.is_loop_break.iter().rposition(|&is_loop| is_loop);
 
-        // If we are inside a match, we should also set the state to 0
-        if let Some(&state_var) = self.match_state_vars.last() {
-            let zero_idx = self.add_constant(Value::Numeric(Number::I64(0)));
-            let reg = self.alloc_reg();
-            self.instructions.push(OpCode::LoadConst(reg, zero_idx));
-            self.instructions
-                .push(OpCode::AssignVar(state_var as u16, reg));
-            self.reg_top = self.temp_start;
-        }
+        match loop_depth {
+            None => panic!("Compiler Error: 'break' used outside of loop"),
+            Some(depth) => {
+                // Reset all match state vars that are nested inside the loop
+                // Count how many match contexts are between depth and end
+                let match_contexts_after_loop = self
+                    .is_loop_break
+                    .iter()
+                    .skip(depth + 1)
+                    .filter(|&&is_loop| !is_loop)
+                    .count();
+                let match_state_start = self
+                    .match_state_vars
+                    .len()
+                    .saturating_sub(match_contexts_after_loop);
 
-        let idx = self.emit(OpCode::Jump(0));
-        self.break_patches.last_mut().unwrap().push(idx);
+                // Collect the state vars we need to reset (to avoid borrow issues)
+                let state_vars_to_reset: Vec<usize> = self
+                    .match_state_vars
+                    .iter()
+                    .skip(match_state_start)
+                    .copied()
+                    .collect();
+
+                for state_var in state_vars_to_reset {
+                    let zero_idx = self.add_constant(Value::Numeric(Number::I64(0)));
+                    let reg = self.alloc_reg();
+                    self.instructions.push(OpCode::LoadConst(reg, zero_idx));
+                    self.instructions
+                        .push(OpCode::AssignVar(state_var as u16, reg));
+                    self.reg_top = self.temp_start;
+                }
+
+                let idx = self.emit(OpCode::Jump(0));
+                self.break_patches[depth].push(idx);
+            }
+        }
     }
 
     fn emit(&mut self, opcode: OpCode) -> usize {
