@@ -953,6 +953,18 @@ impl Compiler {
                 self.reg_top = dest + 1;
                 dest
             }
+            ExprKind::Null => {
+                // null is syntactic sugar for Maybe::Null
+                let dest = self.alloc_reg();
+                let names_idx = self.add_constant(Value::Tuple(vec![
+                    Value::String("Maybe".to_string()),
+                    Value::String("Null".to_string()),
+                ]));
+                self.instructions
+                    .push(OpCode::CreateEnum(dest, names_idx, 0, 0));
+                self.reg_top = dest + 1;
+                dest
+            }
             ExprKind::Error(msg) => {
                 panic!("Compiler received invalid AST: {}", msg);
             }

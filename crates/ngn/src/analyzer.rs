@@ -472,15 +472,25 @@ impl Analyzer {
 
                 self.enter_scope();
                 for param in params {
-                    if let Some(ty) = &param.ty {
-                        self.define(&param.name, ty.clone(), true, param.span);
+                    let param_type = if let Some(ty) = &param.ty {
+                        // If parameter is optional (?), wrap the type in Maybe<T>
+                        if param.is_optional {
+                            Type::Generic("Maybe".to_string(), vec![ty.clone()])
+                        } else {
+                            ty.clone()
+                        }
                     } else {
                         self.add_warning(
                             format!("Warning: Parameter '{}' has no type annotation", param.name),
                             param.span,
                         );
-                        self.define(&param.name, Type::Any, true, param.span);
-                    }
+                        if param.is_optional {
+                            Type::Generic("Maybe".to_string(), vec![Type::Any])
+                        } else {
+                            Type::Any
+                        }
+                    };
+                    self.define(&param.name, param_type, true, param.span);
                 }
 
                 for s in body {
@@ -1484,6 +1494,11 @@ impl Analyzer {
                     }
                 }
             }
+            ExprKind::Null => {
+                // null is syntactic sugar for Maybe::Null
+                // Type is Maybe<Any> which is compatible with any Maybe<T>
+                Type::Generic("Maybe".to_string(), vec![Type::Any])
+            }
             ExprKind::Error(msg) => {
                 self.add_error(msg.clone(), expr.span);
                 Type::Any
@@ -2438,7 +2453,10 @@ impl Analyzer {
                         right_ty
                     }
                     Token::Bang => {
-                        if !self.types_compatible(&Type::Bool, &right_ty) {
+                        // Allow ! on Bool and Maybe types
+                        let is_maybe =
+                            matches!(&right_ty, Type::Generic(name, _) if name == "Maybe");
+                        if !self.types_compatible(&Type::Bool, &right_ty) && !is_maybe {
                             self.add_error(
                                 format!("Type Error: Cannot apply ! to type {:?}", right_ty),
                                 expr.span,

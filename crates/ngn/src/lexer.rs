@@ -27,6 +27,7 @@ pub enum Token {
     With,
     This,
     Check,
+    Null,
 
     // Built-ins
     Print,
@@ -521,6 +522,7 @@ impl Lexer {
             "false" => Token::Bool(false),
             "map" => Token::Map,
             "set" => Token::Set,
+            "null" => Token::Null,
             _ => Token::Identifier(ident),
         }
     }

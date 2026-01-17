@@ -245,6 +245,7 @@ pub enum ExprKind {
     Set(Type),
     This,
     Object(Vec<(String, Expr)>), // Anonymous object literal: { key: value }
+    Null,                        // null literal - syntactic sugar for Maybe::Null
     Error(String),
 }
 
@@ -705,7 +706,7 @@ impl Parser {
     }
 
     fn parse_type(&mut self) -> Type {
-        match &self.current_token {
+        let base_type = match &self.current_token {
             Token::Identifier(name) => {
                 match name.as_str() {
                     "i64" => {
@@ -888,6 +889,14 @@ impl Parser {
                 "Syntax Error: Expected a type, but found {:?}",
                 self.current_token
             ),
+        };
+
+        // Check for T? syntax - wrap in Maybe<T>
+        if self.current_token == Token::Question {
+            self.advance(); // consume '?'
+            Type::Generic("Maybe".to_string(), vec![base_type])
+        } else {
+            base_type
         }
     }
 
@@ -1226,6 +1235,14 @@ impl Parser {
                 self.advance();
                 Expr {
                     kind: ExprKind::Bool(b),
+                    span: Span::new(start, self.previous_span.end),
+                }
+            }
+            Token::Null => {
+                let start = self.current_span.start;
+                self.advance();
+                Expr {
+                    kind: ExprKind::Null,
                     span: Span::new(start, self.previous_span.end),
                 }
             }

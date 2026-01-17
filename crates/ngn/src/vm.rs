@@ -296,10 +296,21 @@ impl Fiber {
             }
             OpCode::Not(dest, src) => {
                 let val = self.get_reg_at(src);
-                if let Value::Bool(b) = val {
-                    self.set_reg_at(dest, Value::Bool(!b));
-                } else {
-                    panic!("Runtime Error: Not expects boolean type, got {:?}", val);
+                match val {
+                    Value::Bool(b) => {
+                        self.set_reg_at(dest, Value::Bool(!b));
+                    }
+                    // !null returns true, !Value(x) returns false
+                    Value::Enum(ref e) if e.enum_name == "Maybe" => {
+                        let is_null = e.variant_name == "Null";
+                        self.set_reg_at(dest, Value::Bool(is_null));
+                    }
+                    _ => {
+                        panic!(
+                            "Runtime Error: Not expects boolean or Maybe type, got {:?}",
+                            val
+                        );
+                    }
                 }
             }
             OpCode::GetGlobal(dest, idx) => {
