@@ -241,6 +241,11 @@ pub enum ExprKind {
         object: Box<Expr>,
         field: String,
     },
+    OptionalFieldAccess {
+        object: Box<Expr>,
+        field: String,
+    },
+    OptionalMethodCall(Box<Expr>, String, Vec<Expr>),
     Map(Type, Type),
     Set(Type),
     This,
@@ -1593,6 +1598,48 @@ impl Parser {
                         let end = self.previous_span.end;
                         expr = Expr {
                             kind: ExprKind::FieldAccess {
+                                object: Box::new(expr),
+                                field: name,
+                            },
+                            span: Span::new(start, end),
+                        };
+                    }
+                }
+                Token::QuestionDot => {
+                    // Optional chaining: obj?.field or obj?.method()
+                    self.advance(); // consume '?.'
+                    let name = self.expect_identifier();
+                    let start = expr.span.start;
+
+                    // Check for optional method call: ?.method(args)
+                    if self.current_token == Token::LParen {
+                        self.advance();
+                        self.paren_depth += 1;
+                        self.consume_newlines();
+                        let mut args = Vec::new();
+                        while self.current_token != Token::RParen
+                            && self.current_token != Token::EOF
+                        {
+                            args.push(self.parse_expression());
+                            self.consume_newlines();
+                            if self.current_token == Token::Comma {
+                                self.advance();
+                                self.consume_newlines();
+                            }
+                        }
+                        self.paren_depth -= 1;
+                        self.expect(Token::RParen);
+                        let end = self.previous_span.end;
+
+                        expr = Expr {
+                            kind: ExprKind::OptionalMethodCall(Box::new(expr), name, args),
+                            span: Span::new(start, end),
+                        };
+                    } else {
+                        // Optional field access: ?.field
+                        let end = self.previous_span.end;
+                        expr = Expr {
+                            kind: ExprKind::OptionalFieldAccess {
                                 object: Box::new(expr),
                                 field: name,
                             },

@@ -1499,6 +1499,101 @@ impl Analyzer {
                 // Type is Maybe<Any> which is compatible with any Maybe<T>
                 Type::Generic("Maybe".to_string(), vec![Type::Any])
             }
+            ExprKind::OptionalFieldAccess { object, field } => {
+                // obj?.field where obj is Maybe<T> - unwrap T, access field, wrap result in Maybe
+                let obj_ty = self.check_expression(object);
+
+                // Extract inner type from Maybe<T>
+                let inner_ty = match &obj_ty {
+                    Type::Generic(name, args) if name == "Maybe" && args.len() == 1 => {
+                        args[0].clone()
+                    }
+                    Type::Any => Type::Any,
+                    _ => {
+                        self.add_error(
+                            format!(
+                                "Type Error: Optional chaining (?.) requires Maybe<T>, got {:?}",
+                                obj_ty
+                            ),
+                            expr.span,
+                        );
+                        return Type::Any;
+                    }
+                };
+
+                // Get field type from inner type
+                let field_ty = match &inner_ty {
+                    Type::Model(name) => {
+                        if let Some(model_def) = self.models.get(name) {
+                            if let Some((_, f_ty)) =
+                                model_def.fields.iter().find(|(f, _)| f == field)
+                            {
+                                f_ty.clone()
+                            } else {
+                                self.add_error(
+                                    format!(
+                                        "Type Error: Model '{}' has no field named '{}'",
+                                        name, field
+                                    ),
+                                    expr.span,
+                                );
+                                Type::Any
+                            }
+                        } else {
+                            Type::Any
+                        }
+                    }
+                    Type::Generic(name, type_args) => self
+                        .get_generic_model_field_type(name, type_args, field)
+                        .unwrap_or(Type::Any),
+                    Type::Any => Type::Any,
+                    _ => {
+                        self.add_error(
+                            format!(
+                                "Type Error: Cannot access field '{}' on type {:?}",
+                                field, inner_ty
+                            ),
+                            expr.span,
+                        );
+                        Type::Any
+                    }
+                };
+
+                // Wrap result in Maybe
+                Type::Generic("Maybe".to_string(), vec![field_ty])
+            }
+            ExprKind::OptionalMethodCall(object, method, args) => {
+                // obj?.method() where obj is Maybe<T>
+                let obj_ty = self.check_expression(object);
+
+                // Check arguments
+                for arg in args {
+                    self.check_expression(arg);
+                }
+
+                // Extract inner type from Maybe<T>
+                let inner_ty = match &obj_ty {
+                    Type::Generic(name, type_args) if name == "Maybe" && type_args.len() == 1 => {
+                        type_args[0].clone()
+                    }
+                    Type::Any => Type::Any,
+                    _ => {
+                        self.add_error(
+                            format!(
+                                "Type Error: Optional chaining (?.) requires Maybe<T>, got {:?}",
+                                obj_ty
+                            ),
+                            expr.span,
+                        );
+                        return Type::Any;
+                    }
+                };
+
+                // For now, just return Maybe<Any> since method return type inference is complex
+                // A full implementation would look up the method on inner_ty
+                let _ = (inner_ty, method);
+                Type::Generic("Maybe".to_string(), vec![Type::Any])
+            }
             ExprKind::Error(msg) => {
                 self.add_error(msg.clone(), expr.span);
                 Type::Any

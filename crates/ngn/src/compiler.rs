@@ -965,6 +965,143 @@ impl Compiler {
                 self.reg_top = dest + 1;
                 dest
             }
+            ExprKind::OptionalFieldAccess { object, field } => {
+                // obj?.field - short-circuit if null, otherwise unwrap and access field
+                let obj_reg = self.compile_expr(object);
+                let dest = self.alloc_reg();
+
+                // Check if obj is Maybe::Value
+                let check_reg = self.alloc_reg();
+                self.instructions
+                    .push(OpCode::CheckMaybeValue(check_reg, obj_reg));
+
+                // Jump to null result if not a value
+                let jump_to_null = self.instructions.len();
+                self.instructions.push(OpCode::JumpIfFalse(check_reg, 0)); // patch later
+
+                // Value path: unwrap, access field, wrap in Maybe::Value
+                let unwrapped_reg = self.alloc_reg();
+                self.instructions
+                    .push(OpCode::UnwrapMaybe(unwrapped_reg, obj_reg));
+
+                let field_idx = self.add_constant(Value::String(field.clone()));
+                let field_result_reg = self.alloc_reg();
+                self.instructions.push(OpCode::GetField(
+                    field_result_reg,
+                    unwrapped_reg,
+                    field_idx,
+                ));
+
+                // Wrap result in Maybe::Value
+                let value_names_idx = self.add_constant(Value::Tuple(vec![
+                    Value::String("Maybe".to_string()),
+                    Value::String("Value".to_string()),
+                ]));
+                self.instructions.push(OpCode::CreateEnum(
+                    dest,
+                    value_names_idx,
+                    field_result_reg,
+                    1,
+                ));
+
+                // Jump over null path
+                let jump_to_end = self.instructions.len();
+                self.instructions.push(OpCode::Jump(0)); // patch later
+
+                // Null path: create Maybe::Null
+                let null_label = self.instructions.len();
+                let null_names_idx = self.add_constant(Value::Tuple(vec![
+                    Value::String("Maybe".to_string()),
+                    Value::String("Null".to_string()),
+                ]));
+                self.instructions
+                    .push(OpCode::CreateEnum(dest, null_names_idx, 0, 0));
+
+                // Patch jumps
+                let end_label = self.instructions.len();
+                self.instructions[jump_to_null] = OpCode::JumpIfFalse(check_reg, null_label);
+                self.instructions[jump_to_end] = OpCode::Jump(end_label);
+
+                self.reg_top = dest + 1;
+                dest
+            }
+            ExprKind::OptionalMethodCall(object, method, args) => {
+                // obj?.method(args) - short-circuit if null, otherwise unwrap and call method
+                let obj_reg = self.compile_expr(object);
+                let dest = self.alloc_reg();
+
+                // Check if obj is Maybe::Value
+                let check_reg = self.alloc_reg();
+                self.instructions
+                    .push(OpCode::CheckMaybeValue(check_reg, obj_reg));
+
+                // Jump to null result if not a value
+                let jump_to_null = self.instructions.len();
+                self.instructions.push(OpCode::JumpIfFalse(check_reg, 0)); // patch later
+
+                // Value path: unwrap
+                let unwrapped_reg = self.alloc_reg();
+                self.instructions
+                    .push(OpCode::UnwrapMaybe(unwrapped_reg, obj_reg));
+
+                // Compile arguments
+                let args_start = self.reg_top;
+                for (i, arg) in args.iter().enumerate() {
+                    let expected_reg = args_start + i as u16;
+                    let result_reg = self.compile_expr(arg);
+                    if result_reg != expected_reg {
+                        self.instructions
+                            .push(OpCode::Move(expected_reg, result_reg));
+                    }
+                    if self.reg_top <= expected_reg {
+                        self.reg_top = expected_reg + 1;
+                    }
+                }
+
+                // Call method on unwrapped value
+                let method_idx = self.add_constant(Value::String(method.clone()));
+                let method_result_reg = self.alloc_reg();
+                self.instructions.push(OpCode::CallMethod(
+                    method_result_reg,
+                    unwrapped_reg,
+                    method_idx,
+                    args_start,
+                    args.len() as u8,
+                ));
+
+                // Wrap result in Maybe::Value
+                let value_names_idx = self.add_constant(Value::Tuple(vec![
+                    Value::String("Maybe".to_string()),
+                    Value::String("Value".to_string()),
+                ]));
+                self.instructions.push(OpCode::CreateEnum(
+                    dest,
+                    value_names_idx,
+                    method_result_reg,
+                    1,
+                ));
+
+                // Jump over null path
+                let jump_to_end = self.instructions.len();
+                self.instructions.push(OpCode::Jump(0)); // patch later
+
+                // Null path: create Maybe::Null
+                let null_label = self.instructions.len();
+                let null_names_idx = self.add_constant(Value::Tuple(vec![
+                    Value::String("Maybe".to_string()),
+                    Value::String("Null".to_string()),
+                ]));
+                self.instructions
+                    .push(OpCode::CreateEnum(dest, null_names_idx, 0, 0));
+
+                // Patch jumps
+                let end_label = self.instructions.len();
+                self.instructions[jump_to_null] = OpCode::JumpIfFalse(check_reg, null_label);
+                self.instructions[jump_to_end] = OpCode::Jump(end_label);
+
+                self.reg_top = dest + 1;
+                dest
+            }
             ExprKind::Error(msg) => {
                 panic!("Compiler received invalid AST: {}", msg);
             }

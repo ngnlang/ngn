@@ -87,6 +87,7 @@ pub enum Token {
     Pipe,
     Question,
     QuestionQuestion,
+    QuestionDot,
     Period,
 
     // Formatting
@@ -448,6 +449,9 @@ impl Lexer {
                 if self.peek_current() == '?' {
                     self.cursor += 1;
                     Token::QuestionQuestion
+                } else if self.peek_current() == '.' {
+                    self.cursor += 1;
+                    Token::QuestionDot
                 } else {
                     Token::Question
                 }
