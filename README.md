@@ -624,8 +624,8 @@ fn main() {
 ```
 
 ### Generic Enums
-Enums can also have type parameters:
 
+Custom enums can also have generic type parameters:
 ```ngn
 enum Option<T> {
   Some(T),
@@ -633,14 +633,16 @@ enum Option<T> {
 }
 
 fn main() {
-  const value = Some(42)
+  const value = Some(42)  // Inferred as Option<i64>
   
   match (value) {
-    Some(v) => print("Got: {v}"),
+    Some(v) => print("Got: {v}"),  // v has type i64
     None => print("Got nothing")
   }
 }
 ```
+
+When you use `Some(42)`, ngn infers that this is an `Option<i64>`. In match patterns, bindings like `v` in `Some(v)` are given the concrete type (i64), not the type parameter (T).
 
 ## `loop`
 Run the statement block indefinitely. Use `break` to exit the loop.
@@ -1007,6 +1009,24 @@ fn main() {
   const pair = Pair { key: "age", val: 25 }
 }
 ```
+
+#### Type Inference and Enforcement
+When you instantiate a generic model, ngn infers the concrete type from the field values:
+
+```ngn
+model Box<T> {
+  value: T
+}
+
+var box = Box { value: 42 }  // Inferred as Box<i64>
+print(box.value)             // 42
+
+// Type is enforced on reassignment:
+box.value = 100              // ✓ OK - same type (i64)
+box.value = "hello"          // ✗ Type Error: Cannot assign String to field 'value' of type I64
+```
+
+This ensures type safety even with generic types - once a type parameter is bound to a concrete type, it remains consistent.
 
 ### `role`
 You can extend a model's functionality with groups of methods via roles. Declare one or more method signatures and/or method implementations. Use this to group methods into roles in order to define their functionality for models.
