@@ -955,7 +955,7 @@ impl Analyzer {
                 value,
             } => {
                 // Check the object and value expressions
-                let _obj_type = self.check_expression(object);
+                let obj_type = self.check_expression(object);
                 let val_type = self.check_expression(value);
 
                 // Trace back to the root variable to check mutability
@@ -981,6 +981,43 @@ impl Analyzer {
                     }
                 }
 
+                // Check type compatibility for the field assignment
+                match &obj_type {
+                    Type::Model(name) => {
+                        if let Some(model_def) = self.models.get(name) {
+                            if let Some((_, expected_ty)) =
+                                model_def.fields.iter().find(|(f, _)| f == field)
+                            {
+                                if !self.types_compatible(expected_ty, &val_type) {
+                                    self.add_error(
+                                        format!(
+                                            "Type Error: Cannot assign {:?} to field '{}' of type {:?}",
+                                            val_type, field, expected_ty
+                                        ),
+                                        expr.span,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Type::Generic(name, type_args) => {
+                        if let Some(expected_ty) =
+                            self.get_generic_model_field_type(name, type_args, field)
+                        {
+                            if !self.types_compatible(&expected_ty, &val_type) {
+                                self.add_error(
+                                    format!(
+                                        "Type Error: Cannot assign {:?} to field '{}' of type {:?}",
+                                        val_type, field, expected_ty
+                                    ),
+                                    expr.span,
+                                );
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+
                 val_type
             }
             ExprKind::Call { name, args } => {
@@ -997,6 +1034,9 @@ impl Analyzer {
                     });
 
                 if let Some((enum_name, variant)) = enum_info {
+                    // Get the full enum definition for type params
+                    let enum_def = self.enums.get(&enum_name).cloned();
+
                     if let Some(expected_ty) = &variant.data_type {
                         if args.len() != 1 {
                             self.add_error(
@@ -1007,14 +1047,21 @@ impl Analyzer {
                                 ),
                                 expr.span,
                             );
-                        } else if !self.types_compatible(expected_ty, &arg_types[0]) {
-                            self.add_error(
-                                format!(
-                                    "Type Error: Enum variant '{}' expected {:?}, got {:?}",
-                                    name, expected_ty, arg_types[0]
-                                ),
-                                expr.span,
-                            );
+                        } else {
+                            // For TypeParam, infer the concrete type from the argument
+                            // This allows Some(42) to work with enum Option<T> { Some(T), None }
+                            if !matches!(expected_ty, Type::TypeParam(_)) {
+                                // Non-generic: check compatibility normally
+                                if !self.types_compatible(expected_ty, &arg_types[0]) {
+                                    self.add_error(
+                                        format!(
+                                            "Type Error: Enum variant '{}' expected {:?}, got {:?}",
+                                            name, expected_ty, arg_types[0]
+                                        ),
+                                        expr.span,
+                                    );
+                                }
+                            }
                         }
                     } else if !args.is_empty() {
                         self.add_error(
@@ -1022,6 +1069,30 @@ impl Analyzer {
                             expr.span,
                         );
                     }
+
+                    // Return Generic type for generic enums, Enum type otherwise
+                    if let Some(ed) = enum_def {
+                        if !ed.type_params.is_empty() {
+                            // Infer type arguments from the variant's data
+                            let mut inferred_args: Vec<Type> =
+                                vec![Type::Any; ed.type_params.len()];
+
+                            if let Some(data_ty) = &variant.data_type {
+                                if let Type::TypeParam(param_name) = data_ty {
+                                    if let Some(idx) =
+                                        ed.type_params.iter().position(|p| p == param_name)
+                                    {
+                                        if !args.is_empty() {
+                                            inferred_args[idx] = arg_types[0].clone();
+                                        }
+                                    }
+                                }
+                            }
+
+                            return Type::Generic(enum_name, inferred_args);
+                        }
+                    }
+
                     return Type::Enum(enum_name);
                 }
 
@@ -1261,15 +1332,51 @@ impl Analyzer {
             }
             ExprKind::ModelInstance { name, fields } => {
                 if let Some(model_def) = self.models.get(name).cloned() {
+                    // Track inferred type arguments for generic models
+                    let mut inferred_type_args: Vec<Option<Type>> =
+                        vec![None; model_def.type_params.len()];
+
                     for (f_name, f_val_expr) in fields {
                         if let Some((_, f_ty)) = model_def.fields.iter().find(|(n, _)| n == f_name)
                         {
                             let val_ty = self.check_expression(f_val_expr);
-                            if !self.types_compatible(f_ty, &val_ty) {
-                                self.add_error(format!(
-                                    "Type Error: Field '{}' in model '{}' expected {:?}, got {:?}",
-                                    f_name, name, f_ty, val_ty
-                                ), expr.span);
+
+                            // If the field type is a TypeParam, infer its binding
+                            if let Type::TypeParam(param_name) = f_ty {
+                                if let Some(idx) =
+                                    model_def.type_params.iter().position(|p| p == param_name)
+                                {
+                                    if let Some(existing) = &inferred_type_args[idx] {
+                                        // Check consistency: same type param should have same type
+                                        if !self.types_compatible(existing, &val_ty) {
+                                            self.add_error(format!(
+                                                "Type Error: Inconsistent type for parameter '{}': expected {:?}, got {:?}",
+                                                param_name, existing, val_ty
+                                            ), expr.span);
+                                        }
+                                    } else {
+                                        inferred_type_args[idx] = Some(val_ty.clone());
+                                    }
+                                }
+                            } else {
+                                // For non-TypeParam fields, check compatibility normally
+                                // First substitute any type params we've already inferred
+                                let finalized_args: Vec<Type> = inferred_type_args
+                                    .iter()
+                                    .map(|a| a.clone().unwrap_or(Type::Any))
+                                    .collect();
+                                let expected_ty = self.substitute_type_params(
+                                    f_ty,
+                                    &model_def.type_params,
+                                    &finalized_args,
+                                );
+
+                                if !self.types_compatible(&expected_ty, &val_ty) {
+                                    self.add_error(format!(
+                                        "Type Error: Field '{}' in model '{}' expected {:?}, got {:?}",
+                                        f_name, name, expected_ty, val_ty
+                                    ), expr.span);
+                                }
                             }
                         } else {
                             self.add_error(
@@ -1281,6 +1388,7 @@ impl Analyzer {
                             );
                         }
                     }
+
                     // Check for missing fields (skip for Response where all fields are optional)
                     if name != "Response" {
                         for (f_name, _) in &model_def.fields {
@@ -1295,7 +1403,17 @@ impl Analyzer {
                             }
                         }
                     }
-                    Type::Model(name.clone())
+
+                    // Return Generic type if the model has type parameters
+                    if model_def.type_params.is_empty() {
+                        Type::Model(name.clone())
+                    } else {
+                        let finalized_args: Vec<Type> = inferred_type_args
+                            .into_iter()
+                            .map(|a| a.unwrap_or(Type::Any))
+                            .collect();
+                        Type::Generic(name.clone(), finalized_args)
+                    }
                 } else {
                     self.add_error(format!("Type Error: Undefined model '{}'", name), expr.span);
                     Type::Any
@@ -1310,9 +1428,9 @@ impl Analyzer {
             }
             ExprKind::FieldAccess { object, field } => {
                 let obj_ty = self.check_expression(object);
-                match obj_ty {
+                match &obj_ty {
                     Type::Model(name) => {
-                        if let Some(model_def) = self.models.get(&name) {
+                        if let Some(model_def) = self.models.get(name) {
                             if let Some((_, f_ty)) =
                                 model_def.fields.iter().find(|(f, _)| f == field)
                             {
@@ -1330,6 +1448,23 @@ impl Analyzer {
                         } else {
                             self.add_error(
                                 format!("Type Error: Undefined model '{}'", name),
+                                expr.span,
+                            );
+                            Type::Any
+                        }
+                    }
+                    // Handle generic model instances like Container<i64>
+                    Type::Generic(name, type_args) => {
+                        if let Some(field_ty) =
+                            self.get_generic_model_field_type(name, type_args, field)
+                        {
+                            field_ty
+                        } else {
+                            self.add_error(
+                                format!(
+                                    "Type Error: Model '{}' has no field named '{}'",
+                                    name, field
+                                ),
                                 expr.span,
                             );
                             Type::Any
@@ -2507,12 +2642,6 @@ impl Analyzer {
             return true;
         }
 
-        // TypeParam is compatible with any concrete type (generic instantiation)
-        // This allows Container<T> { value: T } to accept any value type
-        if matches!(expected, Type::TypeParam(_)) || matches!(actual, Type::TypeParam(_)) {
-            return true;
-        }
-
         if expected == actual {
             return true;
         }
@@ -2542,6 +2671,16 @@ impl Analyzer {
             }
             (Type::State(e_inner), Type::State(a_inner)) => {
                 self.types_compatible(e_inner.as_ref(), a_inner.as_ref())
+            }
+            // Generic types are compatible if name matches and all type args are compatible
+            (Type::Generic(e_name, e_args), Type::Generic(a_name, a_args)) => {
+                if e_name != a_name || e_args.len() != a_args.len() {
+                    return false;
+                }
+                e_args
+                    .iter()
+                    .zip(a_args.iter())
+                    .all(|(e, a)| self.types_compatible(e, a))
             }
             (Type::Role(expected_role_name), _) => {
                 if let Some(roles) = self.model_roles.get(&actual) {
@@ -2585,18 +2724,26 @@ impl Analyzer {
                 binding,
             } => {
                 let enum_def = if let Some(e_name) = enum_name {
-                    self.enums.get(e_name)
+                    self.enums.get(e_name).cloned()
                 } else {
                     self.enums
                         .values()
                         .find(|e| e.variants.iter().any(|v| &v.name == variant_name))
+                        .cloned()
                 };
 
                 if let Some(e) = enum_def {
                     let variant = e.variants.iter().find(|v| &v.name == variant_name).unwrap();
                     if let Some(bind_name) = binding {
                         if let Some(v_ty) = &variant.data_type {
-                            self.define(bind_name, v_ty.clone(), false, span);
+                            // If the matched type is a Generic (e.g., Option<i64>),
+                            // substitute type parameters in the variant's data type
+                            let concrete_ty = if let Type::Generic(_, type_args) = matched_type {
+                                self.substitute_type_params(v_ty, &e.type_params, type_args)
+                            } else {
+                                v_ty.clone()
+                            };
+                            self.define(bind_name, concrete_ty, false, span);
                         } else {
                             self.add_error(
                                 format!(
@@ -2616,5 +2763,103 @@ impl Analyzer {
             }
             Pattern::Wildcard => {}
         }
+    }
+
+    /// Substitute type parameters in a type with concrete types.
+    /// `type_params` is the list of parameter names (e.g., ["T", "K", "V"])
+    /// `type_args` is the list of concrete types to substitute (e.g., [I64, String])
+    fn substitute_type_params(
+        &self,
+        ty: &Type,
+        type_params: &[String],
+        type_args: &[Type],
+    ) -> Type {
+        match ty {
+            Type::TypeParam(name) => {
+                // Find the index of this type parameter
+                if let Some(idx) = type_params.iter().position(|p| p == name) {
+                    if idx < type_args.len() {
+                        return type_args[idx].clone();
+                    }
+                }
+                // If not found, return as-is (shouldn't happen in well-formed code)
+                ty.clone()
+            }
+            Type::Array(inner) => Type::Array(Box::new(self.substitute_type_params(
+                inner,
+                type_params,
+                type_args,
+            ))),
+            Type::Tuple(elements) => Type::Tuple(
+                elements
+                    .iter()
+                    .map(|e| self.substitute_type_params(e, type_params, type_args))
+                    .collect(),
+            ),
+            Type::Channel(inner) => Type::Channel(Box::new(self.substitute_type_params(
+                inner,
+                type_params,
+                type_args,
+            ))),
+            Type::State(inner) => Type::State(Box::new(self.substitute_type_params(
+                inner,
+                type_params,
+                type_args,
+            ))),
+            Type::Map(k, v) => Type::Map(
+                Box::new(self.substitute_type_params(k, type_params, type_args)),
+                Box::new(self.substitute_type_params(v, type_params, type_args)),
+            ),
+            Type::Set(inner) => Type::Set(Box::new(self.substitute_type_params(
+                inner,
+                type_params,
+                type_args,
+            ))),
+            Type::Function {
+                params,
+                optional_count,
+                return_type,
+            } => Type::Function {
+                params: params
+                    .iter()
+                    .map(|p| self.substitute_type_params(p, type_params, type_args))
+                    .collect(),
+                optional_count: *optional_count,
+                return_type: Box::new(self.substitute_type_params(
+                    return_type,
+                    type_params,
+                    type_args,
+                )),
+            },
+            Type::Generic(name, args) => {
+                // Recursively substitute in nested generics
+                Type::Generic(
+                    name.clone(),
+                    args.iter()
+                        .map(|a| self.substitute_type_params(a, type_params, type_args))
+                        .collect(),
+                )
+            }
+            // All other types (primitives, Model, Enum, etc.) pass through unchanged
+            _ => ty.clone(),
+        }
+    }
+
+    /// Get field type from a generic model instance, with type parameter substitution
+    fn get_generic_model_field_type(
+        &self,
+        model_name: &str,
+        type_args: &[Type],
+        field_name: &str,
+    ) -> Option<Type> {
+        if let Some(model_def) = self.models.get(model_name) {
+            if let Some((_, field_ty)) = model_def.fields.iter().find(|(n, _)| n == field_name) {
+                // Substitute type parameters with concrete types
+                let substituted =
+                    self.substitute_type_params(field_ty, &model_def.type_params, type_args);
+                return Some(substituted);
+            }
+        }
+        None
     }
 }
