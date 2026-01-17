@@ -700,8 +700,8 @@ impl Analyzer {
                         // Determine the function type based on known toolbox functions
                         let fn_type = match (module, name.as_str()) {
                             ("test", "assert") => Type::Function {
-                                params: vec![Type::Bool],
-                                optional_count: 0,
+                                params: vec![Type::Bool, Type::String],
+                                optional_count: 1,
                                 return_type: Box::new(Type::Void),
                             },
                             ("math", "abs")
