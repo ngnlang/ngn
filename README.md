@@ -1563,6 +1563,11 @@ import { assert } from "tbx::test"
 
 fn main() {
   assert(1 + 1 == 2)
+  // ✅ Assertion passed
+
+  // with optional description
+  assert(1 + 1 == 2, "1 + 1 should equal 2")
+  // ✅ 1 + 1 should equal 2
 }
 ```
 
