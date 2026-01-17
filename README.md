@@ -605,21 +605,21 @@ You can define your own enums for domain-specific types.
 enum Color { Red, Green, Blue }
 
 enum Status {
-    Active,
-    Inactive(string)  // With associated data
+  Active,
+  Inactive(string)  // With associated data
 }
 
 fn main() {
-    const color = Red
-    print(color)  // Color::Red
-    
-    const status = Inactive("maintenance")
-    print(status)  // Status::Inactive (maintenance)
+  const color = Red
+  print(color)  // Color::Red
+  
+  const status = Inactive("maintenance")
+  print(status)  // Status::Inactive (maintenance)
 
-    match (status) {
-      Active => print("Status: Active!"),
-      Inactive(value) => print("Status: Inactive with reason, {value}")
-    }
+  match (status) {
+    Active => print("Status: Active!"),
+    Inactive(value) => print("Status: Inactive with reason, {value}")
+  }
 }
 ```
 
@@ -1110,59 +1110,59 @@ Regarding the last point: if you had multiple things sending messages, you have 
 
 ```ngn
 fn main() {
-    const c = channel(): string
+  const c = channel(): string
 
-    // Send a message
-    c <- "first"
+  // Send a message
+  c <- "first"
 
-    // Optionally close the channel for this example
-    c.close()
+  // Optionally close the channel for this example
+  c.close()
 
-    // Assign channel output to a variable
-    // Receiving "first" will still work here, because of buffering
-    const msg = <- c
-    print("Received: ${msg}")
+  // Assign channel output to a variable
+  // Receiving "first" will still work here, because of buffering
+  const msg = <- c
+  print("Received: ${msg}")
 
-    // This will fail because the channel is closed and empty.
-    const fail = <- c
+  // This will fail because the channel is closed and empty.
+  const fail = <- c
 }
 ```
 
 You can send a closure to a channel:
 ```ngn
 fn main() {
-    const job_queue = channel(): fn<i64, void>
+  const job_queue = channel(): fn<i64, void>
 
-    // (See next section for details on threads)
-    const done = thread(|| {
-        print("Worker started")
-        loop {
-            match (<-? job_queue) {
-                Value(task) => task(42), 
-                Null => break
-            }
-        }
-        print("Worker finished")
-        
-        return
-    })
-
-    job_queue <- |n: i64| { print("Task A executing with ${n}") }
-    
-    job_queue <- |n: i64| { 
-        const res = n * 2
-        print("Task B executing: ${n} * 2 = ${res}") 
+  // (See next section for details on threads)
+  const done = thread(|| {
+    print("Worker started")
+    loop {
+      match (<-? job_queue) {
+        Value(task) => task(42), 
+        Null => break
+      }
     }
+    print("Worker finished")
     
-    // must close the channel to break out of `while` loop
-    job_queue.close()
+    return
+  })
 
-    print("Jobs sent")
-    
-    // wait for jobs to complete
-    <- done
+  job_queue <- |n: i64| { print("Task A executing with ${n}") }
+  
+  job_queue <- |n: i64| { 
+    const res = n * 2
+    print("Task B executing: ${n} * 2 = ${res}") 
+  }
+  
+  // must close the channel to break out of `while` loop
+  job_queue.close()
 
-    print("Jobs complete")
+  print("Jobs sent")
+  
+  // wait for jobs to complete
+  <- done
+
+  print("Jobs complete")
 }
 ```
 ```txt
@@ -1177,25 +1177,25 @@ Jobs complete
 Channels can even contain other channels, and you can send/receive data within those inner channels.
 ```ngn
 fn main() {
-    const request_line = channel(): channel<string>
+  const request_line = channel(): channel<string>
 
-    thread(|| {
-        // Thread waits for inbound data on the request_line channel,
-        // which happens to be another channel that we assign to a constant.
-        const reply_channel = <- request_line
-        
-        // Reply back on the private channel
-        reply_channel <- "Your order is ready!"
-    })
+  thread(|| {
+    // Thread waits for inbound data on the request_line channel,
+    // which happens to be another channel that we assign to a constant.
+    const reply_channel = <- request_line
+    
+    // Reply back on the private channel
+    reply_channel <- "Your order is ready!"
+  })
 
-    // Create a private response channel
-    const private_channel = channel(): string
-    
-    // Send private channel, which the worker is waiting for
-    request_line <- private_channel
-    
-    // Wait for the private reply
-    print(<- private_channel)
+  // Create a private response channel
+  const private_channel = channel(): string
+  
+  // Send private channel, which the worker is waiting for
+  request_line <- private_channel
+  
+  // Wait for the private reply
+  print(<- private_channel)
 }
 ```
 
@@ -1205,66 +1205,66 @@ Allows you to do work while, optionally, continuing to do work in the main threa
 Standalone threads are risky because as soon as the main program ends, all unfinished threads are killed. In the below example, `setData(value)` may never finish.
 ```ngn
 fn main() {
-    const value = 100
+  const value = 100
 
-    thread(|| {
-        setData(value)
-    })
+  thread(|| {
+    setData(value)
+  })
 
-    // Continue doing other work while the thread runs
-    print(value)
+  // Continue doing other work while the thread runs
+  print(value)
 }
 ```
 In such cases, use the returned channel to await the thread.
 ```ngn
 fn main() {
-    const value = 100
+  const value = 100
 
-    // "done" is a channel we can use for signaling
-    const done = thread(|| {
-        setData(value)
-        return // returning from a thread sends that data to the created channel
-    })
+  // "done" is a channel we can use for signaling
+  const done = thread(|| {
+    setData(value)
+    return // returning from a thread sends that data to the created channel
+  })
 
-    // Continue doing other work while the thread runs
+  // Continue doing other work while the thread runs
 
-    // Now wait until we receive a message,
-    // indicating thread work is done
-    <- done
+  // Now wait until we receive a message,
+  // indicating thread work is done
+  <- done
 }
 ```
 Threads may run in parallel or sequentially but unordered; however, you can control the order in which you wait on their results.
 ```ngn
 fn main() {
-    print("1. Main started")
+  print("1. Main started")
+  
+  // Create a thread, to do some async work
+  const c = thread(|| {
+    print("  2c. Thread c started (sleeping...")
+    sleep(2000)
     
-    // Create a thread, to do some async work
-    const c = thread(|| {
-        print("  2c. Thread c started (sleeping...)")
-        sleep(2000)
-        
-        print("  3c. Thread c sending message")
-        return Ok("Hello from channel c!")
-    })
+    print("  3c. Thread c sending message")
+    return Ok("Hello from channel c!")
+  })
 
-    // Create a thread, to do some async work
-    const d = thread(|| {
-        print("  2d. Thread d started (sleeping...)")
-        sleep(2000)
-        
-        print("  3d. Thread d sending message")
-        return Error("Oh this is bad channel d!")
-    })
+  // Create a thread, to do some async work
+  const d = thread(|| {
+    print("  2d. Thread d started (sleeping...")
+    sleep(2000)
     
-    print("4. Main doing other work while thread runs...")
+    print("  3d. Thread d sending message")
+    return Error("Oh this is bad channel d!")
+  })
+  
+  print("4. Main doing other work while thread runs...")
 
-    // This should block until the "c" thread sends a message
-    const msgc = <- c
-    print("5c. Main received, from thread c: ${msgc}")
+  // This should block until the "c" thread sends a message
+  const msgc = <- c
+  print("5c. Main received, from thread c: ${msgc}")
 
-    // This should block until the "d" thread sends a message
-    const msgd = <- d
-    print("5d. Main received, from thread d: ${msgd}")
+  // This should block until the "d" thread sends a message
+  const msgd = <- d
+  print("5d. Main received, from thread d: ${msgd}")
 }
 ```
 ```txt
@@ -1282,23 +1282,36 @@ If you're unsure how much data is coming, use a `for` loop, and then close the c
 
 ```ngn
 fn main() {
-    // In this example, we can't use the thread's returned channel,
-    // because we need to close the channel from within the thread
-    // in order to signal the `for` loop to stop.
-    const c = channel(): string
+  // In this example, we can't use the thread's returned channel,
+  // because we need to close the channel from within the thread
+  // in order to signal the `for` loop to stop.
+  const c = channel(): string
 
-    thread(|| {
-        c <- "A"
-        c <- "B"
-        c <- "C"
-        c.close()
-    })
+  thread(|| {
+    c <- "A"
+    c <- "B"
+    c <- "C"
+    c.close()
+  })
 
-    for (msg in <-? c) {
-      print("Got: {msg}")
-    }
-    
-    print("Done")
+  for (msg in <-? c) {
+    print("Got: {msg}")
+  }
+  
+  print("Done")
+}
+```
+
+### Returned Channels
+Creating a thread returns a channel, which can be used to await the thread's result. To send data to the channel, just `return` from the thread - either empty or with a value.
+```ngn
+fn main() {
+  const done = thread(|| {
+    setData(value)
+    return Ok("Done")
+  })
+
+  <- done
 }
 ```
 
@@ -1308,28 +1321,28 @@ It's safe to sequentially mutate shared data outside of threads or within a sing
 You'd also use `state()` if you need to mutate data from within a closure.
 ```ngn
 fn main() {
-    var counter = state(0)
-    const done = channel(): bool
-    
-    thread(|| {
-        // Pass a closure that mutates the data.
-        // The closure receives the current value of `counter` via a param.
-        counter.update(|n| n + 10) // implicit return used
-        print("added 10")
-        done <- true
-    })
-    
-    thread(|| {
-        counter.update(|n| n + 5)
-        print("added 5")
-        done <- true
-    })
-    
-    // If number of awaited messages is known, you can declare that here.
-    // They'll be returned as an array, if you need to assign them.
-    <-2 done
+  var counter = state(0)
+  const done = channel(): bool
+  
+  thread(|| {
+    // Pass a closure that mutates the data.
+    // The closure receives the current value of `counter` via a param.
+    counter.update(|n| n + 10) // implicit return used
+    print("added 10")
+    done <- true
+  })
+  
+  thread(|| {
+    counter.update(|n| n + 5)
+    print("added 5")
+    done <- true
+  })
+  
+  // If number of awaited messages is known, you can declare that here.
+  // They'll be returned as an array, if you need to assign them.
+  <-2 done
 
-    print(counter)  // Always 15
+  print(counter)  // Always 15
 }
 ```
 If needed, you also have access to these variable methods when using `state()`:
