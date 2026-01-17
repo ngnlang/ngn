@@ -623,6 +623,25 @@ fn main() {
 }
 ```
 
+### Generic Enums
+Enums can also have type parameters:
+
+```ngn
+enum Option<T> {
+  Some(T),
+  None
+}
+
+fn main() {
+  const value = Some(42)
+  
+  match (value) {
+    Some(v) => print("Got: {v}"),
+    None => print("Got nothing")
+  }
+}
+```
+
 ## `loop`
 Run the statement block indefinitely. Use `break` to exit the loop.
 ```ngn
@@ -966,6 +985,26 @@ Create object structures.
 model Dog {
   name: string,
   breed: string
+}
+```
+
+#### Generic Models
+Models can have type parameters for creating reusable container types:
+
+```ngn
+model Container<T> {
+  value: T
+}
+
+model Pair<K, V> {
+  key: K,
+  val: V
+}
+
+fn main() {
+  const intBox = Container { value: 42 }
+  const strBox = Container { value: "hello" }
+  const pair = Pair { key: "age", val: 25 }
 }
 ```
 
