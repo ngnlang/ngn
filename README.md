@@ -18,7 +18,7 @@ Your entrypoint file must define a `main()` function. It's found and run automat
 |-------|-------|-------|
 | `var z = "world"` | local | mutable |
 | `const status = "go"` | local | immutable |
-| `static DATA = [1, 2, 3, 4, 5]` | global | immutable |
+| `global DATA = [1, 2, 3, 4, 5]` | global | immutable |
 
 ### `var`
 Defines a variable who's value can be changed.
@@ -36,7 +36,7 @@ const x = "hello"
 x = "goodbye" ❌ // value is immutable
 ```
 
-### `static`
+### `global`
 Used for global declarations, which can only exist at the top-level of a file, not inside functions.
 
 - usually inlined at compile time
@@ -44,8 +44,8 @@ Used for global declarations, which can only exist at the top-level of a file, n
 - arrays and tuples not inlined if size is greater than 4 items or if any item is not a primitive type
 
 ```ngn
-static VERSION = "v3" // inlined at compile time
-static DATA = [1, 2, 3, 4, 5] // not inlined
+global VERSION = "v3" // inlined at compile time
+global DATA = [1, 2, 3, 4, 5] // not inlined
 
 fn main() {
   print(VERSION)
@@ -720,7 +720,7 @@ match (value) {
 ## `fn` (functions)
 Functions create an isolated environment, meaning it can't access values outside of itself. If you need access to a value outside the environment, pass it as a parameter; but there are exceptions, which you can always access:
 
-- globals (imports, statics, models, enums, functions)
+- globals (imports, models, enums, functions)
 - sibling functions
 
 If passing a function as a param, you can mark the param like `fn<param1_type, param2_type, paramN_type, return_type>`. `return_type` is always last in the list, even if that means it's the only type listed.
@@ -1043,7 +1043,7 @@ Here are the ways to manipulate an object's fields, based on the above example c
 - direct assignment: `user.age = 7`
 - entire object: `user = { name: "Ben", age: 56 }`
 - method: `user.changeName("Stacie")`
-- by `const`, `static` variables: ❌ not allowed, as these are all strictly immutable
+- by `const`, `global` variables: ❌ not allowed, as these are all strictly immutable
 
 ## `this`
 There's no need to fear `this` in ngn. It's an implicit reference to the instance that a method is called on.
@@ -1110,7 +1110,7 @@ Regarding the last point: if you had multiple things sending messages, you have 
 
 ```ngn
 fn main() {
-  const c = channel(): string
+  const c = channel<string>()
 
   // Send a message
   c <- "first"
@@ -1131,7 +1131,7 @@ fn main() {
 You can send a closure to a channel:
 ```ngn
 fn main() {
-  const job_queue = channel(): fn<i64, void>
+  const job_queue = channel<fn<i64, void>>()
 
   // (See next section for details on threads)
   const done = thread(|| {
@@ -1177,7 +1177,7 @@ Jobs complete
 Channels can even contain other channels, and you can send/receive data within those inner channels.
 ```ngn
 fn main() {
-  const request_line = channel(): channel<string>
+  const request_line = channel<channel<string>>()
 
   thread(|| {
     // Thread waits for inbound data on the request_line channel,
@@ -1189,7 +1189,7 @@ fn main() {
   })
 
   // Create a private response channel
-  const private_channel = channel(): string
+  const private_channel = channel<string>()
   
   // Send private channel, which the worker is waiting for
   request_line <- private_channel
@@ -1285,7 +1285,7 @@ fn main() {
   // In this example, we can't use the thread's returned channel,
   // because we need to close the channel from within the thread
   // in order to signal the `for` loop to stop.
-  const c = channel(): string
+  const c = channel<string>()
 
   thread(|| {
     c <- "A"
@@ -1322,7 +1322,7 @@ You'd also use `state()` if you need to mutate data from within a closure.
 ```ngn
 fn main() {
   var counter = state(0)
-  const done = channel(): bool
+  const done = channel<bool>()
   
   thread(|| {
     // Pass a closure that mutates the data.
