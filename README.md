@@ -6,7 +6,7 @@ An expressive and easy to use high-level programming language.
 
 ## Status
 
-Make it work - extremely early development.
+Make it work - early development.
 
 ## `main()`
 
@@ -1337,10 +1337,12 @@ If needed, you also have access to these variable methods when using `state()`:
 - `.write()`, sets the current value - which replaces the existing one. Be careful, as it can be tricky to ensure proper mutation order when coupled with `.update()`.
 
 ### `spawn` - Parallel Task Execution
-The `spawn` global provides ergonomic methods for running multiple tasks in parallel. Tasks should be functions that return `Result<T, E>`.
+The `spawn` global provides a way of running multiple tasks in parallel - each in its own thread. Tasks should be functions that return `Result<T, E>`.
+
+All `spawn.*` methods are blocking - they wait for completion before returning. Thread panics are automatically converted to `Error("Thread panicked: <error message>")`.
 
 #### `spawn.all(tasks, options?)`
-Run all tasks in parallel. Returns an array of results (including any errors).
+Returns an array of results (including any errors).
 
 ```ngn
 fn task1(): Result<string, string> { return Ok("Task 1 done") }
@@ -1349,31 +1351,36 @@ fn task3(): Result<string, string> { return Ok("Task 3 done") }
 
 const results = spawn.all([task1, task2, task3])
 // [Result::Ok (Task 1 done), Result::Error (Task 2 failed), Result::Ok (Task 3 done)]
+
+for (result in results) {
+  match (result) {
+    Ok(msg) => print(msg),
+    Err(msg) => print(msg)
+  }
+}
 ```
 
 With concurrency limit:
 ```ngn
-const results = spawn.all(tasks, { concurrency: 2 })  // Max 2 concurrent
+const results = spawn.all(tasks, { concurrency: 2 })  // Max 2 concurrent threads at a time
 ```
 
 #### `spawn.try(tasks, options?)`
-Run tasks in parallel, but stop spawning new tasks on first error. Returns partial results up to and including the error.
+Stop spawning new tasks on first error. Returns partial results up to and including the error.
 
 ```ngn
-const results = spawn.try([task1, task2, task3])
+const results = spawn.try([task1, task2, task3], { concurrency: 4 })
 // Stops when first error occurs
 // [Result::Ok (Task 1 done), Result::Error (Task 2 failed)]
 ```
 
 #### `spawn.race(tasks)`
-Run tasks in parallel. Returns the first successful result, or the first error if all tasks fail.
+Returns the first successful result, or the first error if all tasks fail.
 
 ```ngn
 const result = spawn.race([task1, task2, task3])
 // Result::Ok (Task 1 done)  - whichever completes first with success
 ```
-
-> **Note:** All `spawn.*` methods are blocking - they wait for completion before returning. Thread panics are automatically converted to `Error("Thread panicked: ...")`.
 
 ## `fetch()`
 Use `fetch` to make HTTP requests, such as to external APIs. It returns a channel, so you await it with the `<-` operator.
