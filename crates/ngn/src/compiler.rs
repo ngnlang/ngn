@@ -1046,13 +1046,13 @@ impl Compiler {
             StatementKind::Declaration {
                 name,
                 is_mutable,
-                is_static,
+                is_global,
                 value,
                 declared_type: _,
             } => {
                 let var_idx = self.next_index;
 
-                if is_static {
+                if is_global {
                     // Check if value is a "small" constant for inlining
                     // Primitives: Number, Float, Bool, Void, Null
                     // Strings: length <= 64
@@ -1067,7 +1067,7 @@ impl Compiler {
                     }
                 }
 
-                if is_static || self.is_global {
+                if is_global || self.is_global {
                     // For global/static, compile expression and move result to global slot
                     let res_reg = self.compile_expr(&value);
                     self.global_table.insert(name, var_idx);

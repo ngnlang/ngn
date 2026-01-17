@@ -273,7 +273,7 @@ fn main() {
                 kind: StatementKind::Declaration {
                     name: "__default__".to_string(),
                     is_mutable: false,
-                    is_static: true,
+                    is_global: true,
                     value: expr.clone(),
                     declared_type: None,
                 },
@@ -508,7 +508,7 @@ fn load_module(module_path: &str, base_path: &PathBuf, cache: &mut ModuleCache) 
             kind: StatementKind::Declaration {
                 name: "__default__".to_string(),
                 is_mutable: false,
-                is_static: true, // Global scope
+                is_global: true, // Global scope
                 value: expr,
                 declared_type: None,
             },

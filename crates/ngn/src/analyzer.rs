@@ -402,14 +402,14 @@ impl Analyzer {
 
                 if let Type::Channel(_) = &ty {
                     if *is_mutable {
-                        self.add_error(format!("Type Error: Channel '{}' must be declared as 'const' or 'static', not 'var'.", name), stmt.span);
+                        self.add_error(format!("Type Error: Channel '{}' must be declared as 'const' or 'global', not 'var'.", name), stmt.span);
                     }
                 }
 
                 // Closure
                 if let Type::Function { .. } = &ty {
                     if *is_mutable {
-                        self.add_error(format!("Type Error: Closure '{}' must be declared as 'const' or 'static', not 'var'.", name), stmt.span);
+                        self.add_error(format!("Type Error: Closure '{}' must be declared as 'const' or 'global', not 'var'.", name), stmt.span);
                     }
                 }
 
@@ -1209,9 +1209,12 @@ impl Analyzer {
             }
             ExprKind::Channel(inner_ty) => {
                 if inner_ty.is_none() {
-                    self.add_error(format!(
-                        "Type Error: channel() requires a data type suffix (e.g. channel(): i64)"
-                    ), expr.span);
+                    self.add_error(
+                        format!(
+                            "Type Error: channel() requires a type parameter (e.g. channel<i64>())"
+                        ),
+                        expr.span,
+                    );
                 }
                 Type::Channel(Box::new(inner_ty.clone().unwrap_or(Type::Any)))
             }

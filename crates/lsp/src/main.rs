@@ -103,7 +103,7 @@ fn get_semantic_type(
     let mut modifiers = vec![];
 
     // Declaration check - determine if we are in a declaration
-    if let Some(Token::Const | Token::Static) = prev_token {
+    if let Some(Token::Const | Token::Global) = prev_token {
         if matches!(token, Token::Identifier(_)) {
             modifiers.push("declaration");
             modifiers.push("readonly");
@@ -116,7 +116,7 @@ fn get_semantic_type(
 
     // Modifiers for the tokens themselves
     match token {
-        Token::Var | Token::Const | Token::Static => {
+        Token::Var | Token::Const | Token::Global => {
             modifiers.push("declaration");
         }
         Token::Bool(_) => {
@@ -141,7 +141,7 @@ fn get_semantic_type(
 
     let token_type = match token {
         // Keywords
-        Token::Var | Token::Const | Token::Static | Token::Break | Token::Enum 
+        Token::Var | Token::Const | Token::Global | Token::Break | Token::Enum 
             | Token::Extend | Token::If | Token::Match | Token::Model 
             | Token::Next | Token::Return | Token::Role | Token::While 
             | Token::Loop | Token::For | Token::In | Token::Once
@@ -348,7 +348,7 @@ impl LanguageServer for Backend {
                 }
                 Token::Identifier(name) => {
                     // Check if declaration of const/static
-                    if let Some(Token::Const | Token::Static) = prev_token {
+                    if let Some(Token::Const | Token::Global) = prev_token {
                          if let Some(current_scope) = scopes.last_mut() {
                              current_scope.insert(name.clone());
                          }
@@ -367,7 +367,7 @@ impl LanguageServer for Backend {
             let mut is_constant = false;
             if let Token::Identifier(name) = token {
                 // Determine if declaration (in which case modifiers handle it) or usage
-                let is_decl = matches!(prev_token, Some(Token::Const | Token::Static | Token::Var));
+                let is_decl = matches!(prev_token, Some(Token::Const | Token::Global | Token::Var));
                 if !is_decl {
                     // Look up in scopes from top to bottom
                     for scope in scopes.iter().rev() {

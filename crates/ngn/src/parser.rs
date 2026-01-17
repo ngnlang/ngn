@@ -87,7 +87,7 @@ pub enum StatementKind {
     Declaration {
         name: String,
         is_mutable: bool,
-        is_static: bool,
+        is_global: bool,
         value: Expr,
         declared_type: Option<Type>,
     },
@@ -499,9 +499,9 @@ impl Parser {
         let start = self.current_span.start;
 
         match self.current_token.clone() {
-            Token::Static => {
+            Token::Global => {
                 if self.in_function {
-                    let msg = "Syntax Error: 'static' declarator can only be used in global scope"
+                    let msg = "Syntax Error: 'global' declarator can only be used in global scope"
                         .to_string();
                     eprintln!("{}", msg);
                     self.advance(); // consume token to proceed
@@ -514,7 +514,7 @@ impl Parser {
             }
             Token::Const => {
                 if !self.in_function {
-                    let msg = "Syntax Error: 'const' declarator can only be used inside functions (global state must be 'static')".to_string();
+                    let msg = "Syntax Error: 'const' declarator can only be used inside functions (use 'global' for global state)".to_string();
                     eprintln!("{}", msg);
                     self.advance();
                     return Statement {
@@ -526,7 +526,7 @@ impl Parser {
             }
             Token::Var => {
                 if !self.in_function {
-                    let msg = "Syntax Error: 'var' declarator can only be used inside functions (global state must be 'static')".to_string();
+                    let msg = "Syntax Error: 'var' declarator can only be used inside functions (use 'global' for global state)".to_string();
                     eprintln!("{}", msg);
                     self.advance();
                     return Statement {
@@ -665,12 +665,12 @@ impl Parser {
     fn parse_declaration(&mut self) -> Statement {
         let start = self.current_span.start;
         let declarator = self.current_token.clone();
-        self.advance(); // consume 'var', 'const', or 'static'
+        self.advance(); // consume 'var', 'const', or 'global'
 
-        let (is_mutable, is_static) = match declarator {
+        let (is_mutable, is_global) = match declarator {
             Token::Var => (true, false),
             Token::Const => (false, false),
-            Token::Static => (false, true),
+            Token::Global => (false, true),
             _ => panic!("Expected declarator"),
         };
 
@@ -690,7 +690,7 @@ impl Parser {
             kind: StatementKind::Declaration {
                 name,
                 is_mutable,
-                is_static,
+                is_global,
                 value,
                 declared_type,
             },
@@ -1398,15 +1398,21 @@ impl Parser {
             }
             Token::Channel => {
                 let start = self.current_span.start;
-                self.advance();
-                self.expect(Token::LParen);
-                self.expect(Token::RParen);
-                let ty = if self.current_token == Token::Colon {
-                    self.advance();
-                    Some(self.parse_type())
+                self.advance(); // consume 'channel'
+
+                // Parse type parameter: channel<type>()
+                let ty = if self.current_token == Token::LessThan {
+                    self.advance(); // consume '<'
+                    let inner_type = self.parse_type();
+                    self.expect(Token::GreaterThan);
+                    Some(inner_type)
                 } else {
                     None
                 };
+
+                self.expect(Token::LParen);
+                self.expect(Token::RParen);
+
                 Expr {
                     kind: ExprKind::Channel(ty),
                     span: Span::new(start, self.previous_span.end),

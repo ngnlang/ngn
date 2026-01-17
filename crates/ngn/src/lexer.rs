@@ -3,7 +3,7 @@ pub enum Token {
     // Keywords
     Var,
     Const,
-    Static,
+    Global,
     Fn,
     Return,
     If,
@@ -487,7 +487,7 @@ impl Lexer {
         match ident.as_str() {
             "var" => Token::Var,
             "const" => Token::Const,
-            "static" => Token::Static,
+            "global" => Token::Global,
             "if" => Token::If,
             "while" => Token::While,
             "once" => Token::Once,
