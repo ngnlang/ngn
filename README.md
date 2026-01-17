@@ -254,7 +254,7 @@ print(version.lower()) // one
 Remove whitespace from both ends of a string, returning a new string. Preserves original string.
 
 ```ngn
-var = thing = " strong "
+var thing = " strong "
 print(thing.trim()) // "strong"
 ```
 
@@ -307,7 +307,7 @@ print(stuff) // ["coat", "guitar", "shirt"]
 const popped_one = stuff.pop(1)
 
 print(popped_one) // ["guitar"]
-print stuff // ["coat", "shirt"]
+print(stuff) // ["coat", "shirt"]
 ```
 
 ### `copy(start?, stop?)`
@@ -339,7 +339,7 @@ Remove a section of the array by providing a start index and an optional stop in
 var stuff = [10, 20, 30, 40, 50]
 const sliced = stuff.slice(1, 3)
 
-print(sliced) = [20, 30]
+print(sliced) // [20, 30]
 print(stuff) // [10, 40, 50]
 ```
 
@@ -364,7 +364,7 @@ For each item in an array, execute a closure.
 var things = ["hat", "gloves", "coat"]
 
 things.each(|t, i| {
-  print("{i}: {t}")
+  print("${i}: ${t}")
 })
 ```
 
