@@ -546,12 +546,28 @@ fn main() {
 }
 ```
 
-### Maybe<T>
-`Maybe` represents a value that may or may not exist.
+### Maybe<T> (or `T?`)
+`Maybe` represents a value that may or may not exist. You can write `Maybe<T>` or use the shorthand `T?` syntax.
 
 #### Variants
 - `Value(T)` — The value exists
-- `Null` — The value does not exist
+- `Null` (or `null`) — The value does not exist
+
+#### Type syntax
+```ngn
+// These are equivalent:
+var x: Maybe<i64> = null
+var y: i64? = null
+
+// Function return types:
+fn find(id: i64): i64? {    // Same as Maybe<i64>
+  if (id == 1) return Value(100)
+  return null
+}
+
+// Complex types:
+var arr: array<string>? = null  // Optional array
+```
 
 #### Examples
 ```ngn
@@ -573,6 +589,37 @@ match (user2) {
   Value(name) => print("Found: {name}"),
   Null => print("User not found"), // matches
 }
+```
+
+#### `null` keyword
+The `null` keyword is syntactic sugar for `Maybe::Null`. You can use it in any context where `Null` would be used:
+
+```ngn
+// These are equivalent
+var m1 = null
+var m2 = Null
+
+// Using null in return statements
+fn maybeValue(flag: bool): Maybe<i64> {
+  if (flag) return Value(42)
+  return null  // Syntactic sugar for Null
+}
+
+// null works with the ?? (null-coalescing) operator
+var x: Maybe<i64> = null
+var result = x ?? 100  // result is 100
+```
+
+#### Null checks with `!`
+You can use the `!` operator on `Maybe` values to check if they are null:
+
+```ngn
+fn describe(x?: i64): string {
+  if (!x) return "is null"  // !null is true, !Value(_) is false
+  return "has value"
+}
+print(describe())    // "is null"
+print(describe(42))  // "has value"
 ```
 
 #### `check`
