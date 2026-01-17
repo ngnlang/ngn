@@ -622,6 +622,30 @@ print(describe())    // "is null"
 print(describe(42))  // "has value"
 ```
 
+#### Optional chaining (`?.`)
+Use `?.` to safely access fields or call methods on `Maybe` values. If the value is null, the entire expression short-circuits to `null`.
+
+```ngn
+model User {
+  name: string,
+  age: i64
+}
+
+var user: User? = null
+var name = user?.name        // null (short-circuited)
+var safeName = user?.name ?? "Unknown"  // "Unknown"
+
+var user2 = Value(User { name: "Alice", age: 30 })
+var name2 = user2?.name      // Value("Alice")
+
+// Chaining
+model Address { city: string }
+model Person { address: Address }
+
+var p: Person? = null
+var city = p?.address?.city  // null (multiple short-circuits)
+```
+
 #### `check`
 `check` is a way of guarding logic that requires a value. It can only be used for variables of type `Maybe<T>` or `Result<T, E>`.
 
