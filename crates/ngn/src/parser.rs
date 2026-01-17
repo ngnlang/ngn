@@ -28,13 +28,14 @@ pub enum Type {
     State(Box<Type>),
     Model(String),
     Role(String),
-    Generic(String, Vec<Type>),
+    Generic(String, Vec<Type>), // e.g., Container<i64> -> Generic("Container", [I64])
     Map(Box<Type>, Box<Type>),
     Set(Box<Type>),
     Regex,
-    Number, // Generic number type for extends
-    Json,   // Built-in json module type
-    Spawn,  // Built-in spawn module type
+    Number,            // Generic number type for extends
+    Json,              // Built-in json module type
+    Spawn,             // Built-in spawn module type
+    TypeParam(String), // Type parameter reference (e.g., T in model Container<T>)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -73,6 +74,7 @@ pub struct EnumVariantDef {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumDef {
     pub name: String,
+    pub type_params: Vec<String>, // Type parameters like T, U for generic enums
     pub variants: Vec<EnumVariantDef>,
 }
 
@@ -163,6 +165,7 @@ pub enum StatementKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelDef {
     pub name: String,
+    pub type_params: Vec<String>, // Type parameters like T, U for generic models
     pub fields: Vec<(String, Type)>,
 }
 
@@ -267,6 +270,8 @@ pub struct Parser {
     pub previous_span: Span,
     pub in_function: bool,
     pub paren_depth: usize,
+    /// Type parameters currently in scope (for parsing generic model/enum definitions)
+    pub type_params_in_scope: Vec<String>,
 }
 
 impl Parser {
@@ -279,6 +284,7 @@ impl Parser {
             previous_span: Span::default(),
             in_function: false,
             paren_depth: 0,
+            type_params_in_scope: Vec::new(),
         }
     }
 
@@ -807,9 +813,13 @@ impl Parser {
                         }
                     }
                     _ => {
-                        // assume model or generic
                         let n = name.clone();
                         self.advance();
+
+                        // Check if this is a type parameter currently in scope
+                        if self.type_params_in_scope.contains(&n) {
+                            return Type::TypeParam(n);
+                        }
 
                         // Check for generics <T, U>
                         if self.current_token == Token::LessThan {
@@ -2398,6 +2408,25 @@ impl Parser {
         }
         self.advance(); // consume 'enum'
         let name = self.expect_identifier();
+
+        // Parse optional type parameters: enum MyEnum<T, U> { ... }
+        let mut type_params = Vec::new();
+        if self.current_token == Token::LessThan {
+            self.advance(); // consume '<'
+            while self.current_token != Token::GreaterThan {
+                let param_name = self.expect_identifier();
+                type_params.push(param_name.clone());
+                if self.current_token == Token::Comma {
+                    self.advance();
+                }
+            }
+            self.expect(Token::GreaterThan);
+        }
+
+        // Add type params to scope for parsing variant data types
+        let old_type_params =
+            std::mem::replace(&mut self.type_params_in_scope, type_params.clone());
+
         self.expect(Token::LBrace);
         self.consume_newlines();
 
@@ -2425,8 +2454,15 @@ impl Parser {
         self.expect(Token::RBrace);
         let end = self.previous_span.end;
 
+        // Restore previous type params scope
+        self.type_params_in_scope = old_type_params;
+
         Statement {
-            kind: StatementKind::Enum(EnumDef { name, variants }),
+            kind: StatementKind::Enum(EnumDef {
+                name,
+                type_params,
+                variants,
+            }),
             span: Span::new(start, end),
         }
     }
@@ -2438,6 +2474,25 @@ impl Parser {
         }
         self.advance(); // consume 'model'
         let name = self.expect_identifier();
+
+        // Parse optional type parameters: model Container<T, U> { ... }
+        let mut type_params = Vec::new();
+        if self.current_token == Token::LessThan {
+            self.advance(); // consume '<'
+            while self.current_token != Token::GreaterThan {
+                let param_name = self.expect_identifier();
+                type_params.push(param_name.clone());
+                if self.current_token == Token::Comma {
+                    self.advance();
+                }
+            }
+            self.expect(Token::GreaterThan);
+        }
+
+        // Add type params to scope for parsing field types
+        let old_type_params =
+            std::mem::replace(&mut self.type_params_in_scope, type_params.clone());
+
         self.expect(Token::LBrace);
         self.consume_newlines();
 
@@ -2456,8 +2511,15 @@ impl Parser {
         self.expect(Token::RBrace);
         let end = self.previous_span.end;
 
+        // Restore previous type params scope
+        self.type_params_in_scope = old_type_params;
+
         Statement {
-            kind: StatementKind::Model(ModelDef { name, fields }),
+            kind: StatementKind::Model(ModelDef {
+                name,
+                type_params,
+                fields,
+            }),
             span: Span::new(start, end),
         }
     }

@@ -58,6 +58,7 @@ impl Analyzer {
         // Built-in Result
         let result_enum = EnumDef {
             name: "Result".to_string(),
+            type_params: vec!["T".to_string(), "E".to_string()],
             variants: vec![
                 EnumVariantDef {
                     name: "Ok".to_string(),
@@ -73,6 +74,7 @@ impl Analyzer {
         // Built-in Maybe
         let maybe_enum = EnumDef {
             name: "Maybe".to_string(),
+            type_params: vec!["T".to_string()],
             variants: vec![
                 EnumVariantDef {
                     name: "Value".to_string(),
@@ -107,6 +109,7 @@ impl Analyzer {
             "Request".to_string(),
             ModelDef {
                 name: "Request".to_string(),
+                type_params: vec![],
                 fields: vec![
                     ("method".to_string(), Type::String),
                     ("path".to_string(), Type::String),
@@ -134,6 +137,7 @@ impl Analyzer {
             "Response".to_string(),
             ModelDef {
                 name: "Response".to_string(),
+                type_params: vec![],
                 fields: vec![
                     ("status".to_string(), Type::I64),
                     ("statusText".to_string(), Type::String),
@@ -149,6 +153,7 @@ impl Analyzer {
             "FetchOptions".to_string(),
             ModelDef {
                 name: "FetchOptions".to_string(),
+                type_params: vec![],
                 fields: vec![
                     ("method".to_string(), Type::String),
                     ("headers".to_string(), Type::Any), // accepts map or object literal
@@ -2501,6 +2506,13 @@ impl Analyzer {
         if matches!(expected, Type::Any) || matches!(actual, Type::Any) {
             return true;
         }
+
+        // TypeParam is compatible with any concrete type (generic instantiation)
+        // This allows Container<T> { value: T } to accept any value type
+        if matches!(expected, Type::TypeParam(_)) || matches!(actual, Type::TypeParam(_)) {
+            return true;
+        }
+
         if expected == actual {
             return true;
         }

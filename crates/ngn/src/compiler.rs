@@ -113,6 +113,7 @@ impl Compiler {
         // Built-in Result
         let result_enum = EnumDef {
             name: "Result".to_string(),
+            type_params: vec!["T".to_string(), "E".to_string()],
             variants: vec![
                 crate::parser::EnumVariantDef {
                     name: "Ok".to_string(),
@@ -128,6 +129,7 @@ impl Compiler {
         // Built-in Maybe
         let maybe_enum = EnumDef {
             name: "Maybe".to_string(),
+            type_params: vec!["T".to_string()],
             variants: vec![
                 crate::parser::EnumVariantDef {
                     name: "Value".to_string(),
