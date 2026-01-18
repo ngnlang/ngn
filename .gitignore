@@ -1,5 +1,6 @@
-/target
+target
 *.ngn
 *.mod
 node_modules/
 editors/vscode/out/
+.env*
