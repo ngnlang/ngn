@@ -1469,8 +1469,8 @@ impl Fiber {
                 // Get environment variable, returns Maybe<string>
                 let key_val = self.get_reg_at(key_reg);
                 if let Value::String(key) = key_val {
-                    match std::env::var(&key) {
-                        Ok(value) => {
+                    match crate::env::get(&key) {
+                        Some(value) => {
                             // Return Maybe::Value(value)
                             self.set_reg_at(
                                 dest_reg,
@@ -1481,7 +1481,7 @@ impl Fiber {
                                 ),
                             );
                         }
-                        Err(_) => {
+                        None => {
                             // Return Maybe::Null
                             self.set_reg_at(
                                 dest_reg,
@@ -1497,7 +1497,7 @@ impl Fiber {
                 // Check if environment variable exists, returns bool
                 let key_val = self.get_reg_at(key_reg);
                 if let Value::String(key) = key_val {
-                    let exists = std::env::var(&key).is_ok();
+                    let exists = crate::env::has(&key);
                     self.set_reg_at(dest_reg, Value::Bool(exists));
                 } else {
                     panic!("Runtime Error: env.has() expects a string key");

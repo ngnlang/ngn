@@ -768,6 +768,20 @@ impl Compiler {
                 dest
             }
             ExprKind::FieldAccess { object, field } => {
+                // Special case: env.PROPERTY_NAME -> env.get("PROPERTY_NAME")
+                if let ExprKind::Variable(var_name) = &object.kind {
+                    if var_name == "env" {
+                        // Treat env.FIELD as env.get("FIELD")
+                        let dest = self.alloc_reg();
+                        let key_idx = self.add_constant(Value::String(field.clone()));
+                        let key_reg = self.alloc_reg();
+                        self.instructions.push(OpCode::LoadConst(key_reg, key_idx));
+                        self.instructions.push(OpCode::EnvGet(dest, key_reg));
+                        self.reg_top = dest + 1;
+                        return dest;
+                    }
+                }
+
                 let obj_reg = self.compile_expr(object);
                 let field_idx = self.add_constant(Value::String(field.clone()));
                 let dest = self.alloc_reg();

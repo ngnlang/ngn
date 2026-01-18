@@ -22,6 +22,8 @@ type ModuleCache = HashMap<PathBuf, (ModuleCacheEntry, SystemTime)>;
 fn main() {
     // Check for "Self-Running" mode
     if let Some((instructions, constants)) = check_for_embedded_bytecode() {
+        // Initialize env from current working directory
+        ngn::env::init(std::path::Path::new("."));
         let mut vm = VM::new(instructions, constants, 0);
         vm.run();
         return;
@@ -347,6 +349,12 @@ fn main() {
     // 3. Command Logic
     match command.as_str() {
         "run" => {
+            // Initialize env from the source file's directory
+            let working_dir = std::path::Path::new(filename)
+                .parent()
+                .unwrap_or(std::path::Path::new("."));
+            ngn::env::init(working_dir);
+
             let mut final_instructions = compiler.instructions.clone();
 
             if is_http_server {

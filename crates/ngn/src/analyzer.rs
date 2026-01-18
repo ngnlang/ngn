@@ -1510,6 +1510,8 @@ impl Analyzer {
                             Type::Any
                         }
                     }
+                    // env.PROPERTY_NAME returns Maybe<string>
+                    Type::Env => Type::Generic("Maybe".to_string(), vec![Type::String]),
                     // Allow field access on Type::Any (e.g., json.parse results)
                     Type::Any => Type::Any,
                     _ => {

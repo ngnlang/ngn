@@ -1,6 +1,7 @@
 pub mod analyzer;
 pub mod bytecode;
 pub mod compiler;
+pub mod env;
 pub mod error;
 pub mod lexer;
 pub mod parser;
