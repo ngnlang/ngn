@@ -48,6 +48,7 @@ pub enum FiberStatus {
     Suspended,
     Finished,
     Spawning(Box<Fiber>),
+    Sleeping(u64),    // Fiber wants to sleep for N milliseconds
     Panicked(String), // User-level panic from ngn code
 }
 
@@ -470,7 +471,8 @@ impl Fiber {
             OpCode::Sleep(src) => {
                 let val = self.get_reg_at(src);
                 if let Value::Numeric(crate::value::Number::I64(ms)) = val {
-                    std::thread::sleep(std::time::Duration::from_millis(ms as u64));
+                    // Return Sleeping status - fiber runner handles async sleep
+                    return FiberStatus::Sleeping(ms as u64);
                 }
             }
             OpCode::Panic(src) => {
@@ -2728,6 +2730,11 @@ impl VM {
                     }
                     FiberStatus::Spawning(new_fiber) => {
                         self.fibers.push_back(*new_fiber);
+                        self.current_fiber = Some(fiber);
+                    }
+                    FiberStatus::Sleeping(ms) => {
+                        // Blocking sleep in main runtime (not async)
+                        std::thread::sleep(std::time::Duration::from_millis(ms));
                         self.current_fiber = Some(fiber);
                     }
                     FiberStatus::Panicked(msg) => {

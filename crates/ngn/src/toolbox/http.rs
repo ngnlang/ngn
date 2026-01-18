@@ -49,30 +49,38 @@ async fn call_handler_async(
                 tokio::task::yield_now().await;
                 continue;
             }
+            FiberStatus::Sleeping(ms) => {
+                // Async sleep
+                tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+                continue;
+            }
             FiberStatus::Spawning(new_fiber) => {
-                // Spawn the new fiber in a blocking thread because ngn's sleep() is blocking
-                // Using spawn_blocking ensures blocking operations don't block the async runtime
+                // Spawn the new fiber in a background async task
                 let new_fiber = *new_fiber;
                 let bg_globals = handler_globals.clone();
                 let bg_methods = shared_methods.clone();
 
-                tokio::task::spawn_blocking(move || {
+                tokio::spawn(async move {
                     let mut bg_fiber = new_fiber;
                     let mut bg_globals_mut = bg_globals;
 
                     loop {
                         // Run in smaller batches for better interleaving
-                        let (status, _) = bg_fiber.run_steps(&mut bg_globals_mut, &bg_methods, 10);
+                        let (status, _) = bg_fiber.run_steps(&mut bg_globals_mut, &bg_methods, 50);
                         match status {
                             FiberStatus::Finished => break,
                             FiberStatus::Running | FiberStatus::Suspended => {
-                                // Yield to other threads (not async, but allows OS scheduling)
-                                std::thread::yield_now();
+                                tokio::task::yield_now().await;
                                 continue;
                             }
                             FiberStatus::Spawning(nested) => {
                                 // For nested spawns, just continue (rare case)
                                 let _ = *nested;
+                                continue;
+                            }
+                            FiberStatus::Sleeping(ms) => {
+                                // Async sleep
+                                tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
                                 continue;
                             }
                             FiberStatus::Panicked(msg) => {
