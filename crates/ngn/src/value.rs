@@ -524,6 +524,33 @@ impl ResponseData {
     }
 }
 
+/// Streaming HTTP response backed by a channel
+/// Each message from the channel becomes an HTTP chunk
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StreamingResponseData {
+    pub status: u16,
+    pub headers: std::collections::HashMap<String, String>,
+    pub body_channel: Channel, // Channel<string> that produces chunks
+}
+
+impl StreamingResponseData {
+    pub fn new(
+        status: u16,
+        headers: std::collections::HashMap<String, String>,
+        body_channel: Channel,
+    ) -> Self {
+        Self {
+            status,
+            headers,
+            body_channel,
+        }
+    }
+
+    pub fn into_value(self) -> Value {
+        Value::StreamingResponse(Box::new(self))
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[allow(dead_code)]
 pub enum Value {
@@ -543,6 +570,7 @@ pub enum Value {
     Map(std::collections::HashMap<Value, Value>),
     Set(indexmap::IndexSet<Value>),
     Response(Box<ResponseData>),
+    StreamingResponse(Box<StreamingResponseData>),
     Void,
     Regex(String),
 }
@@ -773,6 +801,7 @@ impl Value {
             Value::Set(_) => "set",
             Value::Function(_) | Value::Closure(_) | Value::NativeFunction(_) => "function",
             Value::Response(_) => "Response",
+            Value::StreamingResponse(_) => "StreamingResponse",
             Value::Void => "void",
             Value::Reference(_, _) => "reference",
         }
@@ -879,6 +908,19 @@ impl fmt::Display for Value {
                     headers_str.join(", ")
                 )
             }
+            Value::StreamingResponse(r) => {
+                let headers_str: Vec<String> = r
+                    .headers
+                    .iter()
+                    .map(|(k, v)| format!("\"{}\": \"{}\"", k, v))
+                    .collect();
+                write!(
+                    f,
+                    "StreamingResponse {{ status: {}, headers: {{ {} }}, body: <channel> }}",
+                    r.status,
+                    headers_str.join(", ")
+                )
+            }
         }
     }
 }
@@ -941,6 +983,11 @@ impl std::hash::Hash for Value {
             }
             Value::Response(_) => {
                 panic!("Runtime Error: Response values cannot be used as map keys or set values")
+            }
+            Value::StreamingResponse(_) => {
+                panic!(
+                    "Runtime Error: StreamingResponse values cannot be used as map keys or set values"
+                )
             }
         }
     }

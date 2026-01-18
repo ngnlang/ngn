@@ -148,6 +148,20 @@ impl Analyzer {
             },
         );
 
+        // Built-in StreamingResponse model for HTTP streaming
+        analyzer.models.insert(
+            "StreamingResponse".to_string(),
+            ModelDef {
+                name: "StreamingResponse".to_string(),
+                type_params: vec![],
+                fields: vec![
+                    ("status".to_string(), Type::I64),
+                    ("headers".to_string(), Type::Any), // accepts map or object literal
+                    ("body".to_string(), Type::Channel(Box::new(Type::String))), // channel<string>
+                ],
+            },
+        );
+
         // Built-in FetchOptions model for fetch()
         analyzer.models.insert(
             "FetchOptions".to_string(),
@@ -1429,8 +1443,8 @@ impl Analyzer {
                         }
                     }
 
-                    // Check for missing fields (skip for Response where all fields are optional)
-                    if name != "Response" {
+                    // Check for missing fields (skip for Response/StreamingResponse where fields have defaults)
+                    if name != "Response" && name != "StreamingResponse" {
                         for (f_name, _) in &model_def.fields {
                             if !fields.iter().any(|(n, _)| n == f_name) {
                                 self.add_error(

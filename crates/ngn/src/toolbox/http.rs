@@ -49,10 +49,57 @@ async fn call_handler_async(
                 tokio::task::yield_now().await;
                 continue;
             }
-            FiberStatus::Spawning(_new_fiber) => {
-                // For HTTP handlers, spawned fibers are rare and not critical
-                // In the future, could run them in background tasks
-                // For now, just continue with the main handler
+            FiberStatus::Spawning(new_fiber) => {
+                // Spawn the new fiber in a blocking thread because ngn's sleep() is blocking
+                // Using spawn_blocking ensures blocking operations don't block the async runtime
+                let new_fiber = *new_fiber;
+                let bg_globals = handler_globals.clone();
+                let bg_methods = shared_methods.clone();
+
+                tokio::task::spawn_blocking(move || {
+                    let mut bg_fiber = new_fiber;
+                    let mut bg_globals_mut = bg_globals;
+
+                    loop {
+                        // Run in smaller batches for better interleaving
+                        let (status, _) = bg_fiber.run_steps(&mut bg_globals_mut, &bg_methods, 10);
+                        match status {
+                            FiberStatus::Finished => break,
+                            FiberStatus::Running | FiberStatus::Suspended => {
+                                // Yield to other threads (not async, but allows OS scheduling)
+                                std::thread::yield_now();
+                                continue;
+                            }
+                            FiberStatus::Spawning(nested) => {
+                                // For nested spawns, just continue (rare case)
+                                let _ = *nested;
+                                continue;
+                            }
+                            FiberStatus::Panicked(msg) => {
+                                eprintln!("[ngn] Background thread panicked: {}", msg);
+                                if let Some(chan) = &bg_fiber.completion_channel {
+                                    let error = crate::value::EnumData::into_value(
+                                        "Result".to_string(),
+                                        "Error".to_string(),
+                                        Some(Box::new(Value::String(format!(
+                                            "Thread panicked: {}",
+                                            msg
+                                        )))),
+                                    );
+                                    chan.buffer.lock().unwrap().push_back(error);
+                                }
+                                break;
+                            }
+                        }
+                    }
+
+                    // If fiber has a completion channel, send result
+                    if let Some(chan) = &bg_fiber.completion_channel {
+                        let result = bg_fiber.return_value.clone().unwrap_or(Value::Void);
+                        chan.buffer.lock().unwrap().push_back(result);
+                    }
+                });
+
                 continue;
             }
             FiberStatus::Panicked(msg) => {
@@ -166,6 +213,10 @@ async fn handle_connection_async_fast(
     custom_methods: Arc<Mutex<HashMap<String, HashMap<String, Value>>>>,
 ) {
     use tokio::time::{Duration, timeout};
+
+    // Disable Nagle's algorithm for real-time streaming responses
+    // This ensures each write is sent immediately without buffering
+    let _ = stream.set_nodelay(true);
 
     // Get peer IP address before splitting
     let peer_ip = stream
@@ -764,6 +815,11 @@ async fn write_response_to_stream(
     use std::fmt::Write;
     use tokio::io::AsyncWriteExt;
 
+    // Check if this is a StreamingResponse
+    if let Value::StreamingResponse(streaming) = response {
+        return write_streaming_response_to_stream(stream, streaming, close_connection).await;
+    }
+
     let (status, headers, body) = if let Value::Object(obj) = response {
         let status = match obj.fields.get("status") {
             Some(Value::Numeric(n)) => match n {
@@ -836,6 +892,106 @@ async fn write_response_to_stream(
 
     stream.write_all(response_str.as_bytes()).await?;
     stream.flush().await?;
+    Ok(())
+}
+
+/// Write a streaming HTTP response using chunked transfer encoding
+/// Each message from the body_channel becomes an HTTP chunk
+async fn write_streaming_response_to_stream(
+    stream: &mut OwnedWriteHalf,
+    response: &crate::value::StreamingResponseData,
+    close_connection: bool,
+) -> std::io::Result<()> {
+    use std::fmt::Write;
+    use tokio::io::AsyncWriteExt;
+
+    let status = response.status;
+    let status_text = match status {
+        200 => "OK",
+        201 => "Created",
+        204 => "No Content",
+        400 => "Bad Request",
+        404 => "Not Found",
+        500 => "Internal Server Error",
+        _ => "OK",
+    };
+
+    // Build headers
+    let mut header_str = String::with_capacity(256);
+    let _ = write!(header_str, "HTTP/1.1 {} {}\r\n", status, status_text);
+
+    // Chunked transfer encoding for streaming
+    header_str.push_str("Transfer-Encoding: chunked\r\n");
+
+    // Connection handling
+    if close_connection {
+        header_str.push_str("Connection: close\r\n");
+    } else {
+        header_str.push_str("Connection: keep-alive\r\n");
+        header_str.push_str("Keep-Alive: timeout=30\r\n");
+    }
+
+    // Add user-provided headers
+    for (key, val) in &response.headers {
+        // Skip headers we control
+        if key.eq_ignore_ascii_case("transfer-encoding")
+            || key.eq_ignore_ascii_case("content-length")
+            || key.eq_ignore_ascii_case("connection")
+            || key.eq_ignore_ascii_case("keep-alive")
+        {
+            continue;
+        }
+        let _ = write!(header_str, "{}: {}\r\n", key, val);
+    }
+
+    // End headers
+    header_str.push_str("\r\n");
+
+    // Write headers
+    stream.write_all(header_str.as_bytes()).await?;
+    stream.flush().await?;
+
+    // Stream chunks from the channel
+    let channel = &response.body_channel;
+    loop {
+        // Try to receive a chunk from the channel
+        let chunk = {
+            let mut buffer = channel.buffer.lock().unwrap();
+            buffer.pop_front()
+        };
+
+        match chunk {
+            Some(value) => {
+                // Convert value to string
+                let chunk_data = match value {
+                    Value::String(s) => s,
+                    _ => value.to_string(),
+                };
+
+                // Write chunk in chunked transfer encoding format:
+                // <hex size>\r\n<data>\r\n
+                let chunk_header = format!("{:x}\r\n", chunk_data.len());
+                stream.write_all(chunk_header.as_bytes()).await?;
+                stream.write_all(chunk_data.as_bytes()).await?;
+                stream.write_all(b"\r\n").await?;
+                stream.flush().await?;
+            }
+            None => {
+                // Check if channel is closed
+                let is_closed = *channel.is_closed.lock().unwrap();
+                if is_closed {
+                    // Send final chunk (0-length) to signal end of stream
+                    stream.write_all(b"0\r\n\r\n").await?;
+                    stream.flush().await?;
+                    break;
+                } else {
+                    // Channel is open but empty, yield and try again
+                    tokio::task::yield_now().await;
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 

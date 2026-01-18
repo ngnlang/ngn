@@ -1202,6 +1202,47 @@ impl Fiber {
                     }
                 }
 
+                // Handle StreamingResponse specially - create a StreamingResponse Value
+                if model_name == "StreamingResponse" {
+                    let status = match fields.get("status") {
+                        Some(Value::Numeric(crate::value::Number::I64(s))) => *s as u16,
+                        Some(Value::Numeric(crate::value::Number::I32(s))) => *s as u16,
+                        _ => 200, // Default status
+                    };
+
+                    let headers = match fields.get("headers") {
+                        Some(Value::Map(m)) => {
+                            let mut h = std::collections::HashMap::new();
+                            for (k, v) in m {
+                                if let (Value::String(key), Value::String(val)) = (k, v) {
+                                    h.insert(key.clone(), val.clone());
+                                }
+                            }
+                            h
+                        }
+                        Some(Value::Object(o)) => {
+                            let mut h = std::collections::HashMap::new();
+                            for (key, val) in &o.fields {
+                                if let Value::String(v) = val {
+                                    h.insert(key.clone(), v.clone());
+                                }
+                            }
+                            h
+                        }
+                        _ => std::collections::HashMap::new(),
+                    };
+
+                    let body_channel = match fields.get("body") {
+                        Some(Value::Channel(c)) => c.clone(),
+                        _ => panic!("Runtime Error: StreamingResponse body must be a channel"),
+                    };
+
+                    let streaming =
+                        crate::value::StreamingResponseData::new(status, headers, body_channel);
+                    self.set_reg_at(dest, streaming.into_value());
+                    return FiberStatus::Running;
+                }
+
                 self.set_reg_at(dest, ObjectData::into_value(model_name, fields));
             }
             OpCode::GetField(dest, obj_reg, field_idx) => {
