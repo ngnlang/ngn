@@ -1667,6 +1667,37 @@ export default {
 - `json()`: Parses the body as JSON, returns a Result enum
 - `formData()`: Parses URL-encoded body, returns a `Map<string, string>`
 
+## `StreamingResponse`
+Send HTTP responses with chunked transfer encoding, allowing data to be streamed to the client as it becomes available. Perfect for LLM inference, large file downloads, or any scenario where you want to send data incrementally.
+
+```ngn
+fn handler(req: Request): StreamingResponse {
+  const chunks = channel<string>()
+  
+  // Background thread produces data
+  thread(|| {
+    chunks <- "First chunk\n"
+    sleep(500)
+    chunks <- "Second chunk\n"
+    sleep(500)
+    chunks <- "Done!\n"
+    chunks.close()  // Signals end of stream
+  })
+  
+  return StreamingResponse {
+    headers: { "Content-Type": "text/plain" },
+    body: chunks
+  }
+}
+
+export default { fetch: handler }
+```
+
+### `StreamingResponse` properties
+- `status`: The HTTP status code - default is 200
+- `headers`: The headers to include in the response
+- `body`: A `channel<string>` that produces chunks. Close the channel to end the stream.
+
 ## Modules
 You can use `export` and `import` to create modules in your project. This is a functions-only feature.
 
