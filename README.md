@@ -1762,3 +1762,56 @@ fn fetch(req: Request): Response {
 
 export default { fetch: fetch }
 ```
+
+### tbx::io
+
+File I/O operations. Import from `tbx::io`:
+
+```ngn
+import { read, write, append, exists, delete } from "tbx::io"
+```
+
+### `read(path)`
+Read entire file contents as a string. Returns `Result<string, string>`.
+
+```ngn
+const result = read("config.txt")
+match (result) {
+  Ok(content) => print(content),
+  Error(e) => print("Failed: ${e}"),
+}
+```
+
+### `write(path, content)`
+Write content to a file. Creates the file if it doesn't exist, or overwrites if it does. Returns `Result<void, string>`.
+
+```ngn
+const result = write("output.txt", "Hello, file!")
+match (result) {
+  Ok(v) => print("Saved!"),
+  Error(e) => print("Failed: ${e}"),
+}
+```
+
+### `append(path, content)`
+Append content to a file. Creates the file if it doesn't exist. Returns `Result<void, string>`.
+
+```ngn
+append("log.txt", "New line\n")
+```
+
+### `exists(path)`
+Check if a file exists. Returns `bool`.
+
+```ngn
+if (exists("config.txt")) {
+  print("Config found!")
+}
+```
+
+### `delete(path)`
+Delete a file. Returns `Result<void, string>`.
+
+```ngn
+delete("temp.txt")
+```
