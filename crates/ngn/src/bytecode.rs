@@ -128,4 +128,8 @@ pub enum OpCode {
     // Null Coalescing (??)
     // If MaybeReg is Maybe::Value, unwrap to DestReg; else set DestReg = FallbackReg
     NullCoalesce(u16, u16, u16), // (DestReg, MaybeReg, FallbackReg)
+
+    // Environment Variables
+    EnvGet(u16, u16), // (DestReg, KeyReg) - returns Maybe<string>
+    EnvHas(u16, u16), // (DestReg, KeyReg) - returns bool
 }

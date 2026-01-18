@@ -1460,6 +1460,44 @@ impl Fiber {
                     panic!("spawn.race() expects an array of tasks");
                 }
             }
+            OpCode::EnvGet(dest_reg, key_reg) => {
+                // Get environment variable, returns Maybe<string>
+                let key_val = self.get_reg_at(key_reg);
+                if let Value::String(key) = key_val {
+                    match std::env::var(&key) {
+                        Ok(value) => {
+                            // Return Maybe::Value(value)
+                            self.set_reg_at(
+                                dest_reg,
+                                EnumData::into_value(
+                                    "Maybe".to_string(),
+                                    "Value".to_string(),
+                                    Some(Box::new(Value::String(value))),
+                                ),
+                            );
+                        }
+                        Err(_) => {
+                            // Return Maybe::Null
+                            self.set_reg_at(
+                                dest_reg,
+                                EnumData::into_value("Maybe".to_string(), "Null".to_string(), None),
+                            );
+                        }
+                    }
+                } else {
+                    panic!("Runtime Error: env.get() expects a string key");
+                }
+            }
+            OpCode::EnvHas(dest_reg, key_reg) => {
+                // Check if environment variable exists, returns bool
+                let key_val = self.get_reg_at(key_reg);
+                if let Value::String(key) = key_val {
+                    let exists = std::env::var(&key).is_ok();
+                    self.set_reg_at(dest_reg, Value::Bool(exists));
+                } else {
+                    panic!("Runtime Error: env.has() expects a string key");
+                }
+            }
             OpCode::Halt => {
                 self.status = FiberStatus::Finished;
                 return FiberStatus::Finished;

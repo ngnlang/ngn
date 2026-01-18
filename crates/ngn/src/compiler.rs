@@ -856,6 +856,26 @@ impl Compiler {
                             _ => {}
                         }
                     }
+
+                    // Handle env.get(), env.has()
+                    if var_name == "env" {
+                        let dest = self.alloc_reg();
+                        match method.as_str() {
+                            "get" => {
+                                let arg_reg = self.compile_expr(&args[0]);
+                                self.instructions.push(OpCode::EnvGet(dest, arg_reg));
+                                self.reg_top = dest + 1;
+                                return dest;
+                            }
+                            "has" => {
+                                let arg_reg = self.compile_expr(&args[0]);
+                                self.instructions.push(OpCode::EnvHas(dest, arg_reg));
+                                self.reg_top = dest + 1;
+                                return dest;
+                            }
+                            _ => {}
+                        }
+                    }
                 }
 
                 let obj_reg = self.compile_expr(obj_expr);

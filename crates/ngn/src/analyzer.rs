@@ -2502,6 +2502,60 @@ impl Analyzer {
                         }
                     }
 
+                    // Allow method calls on Type::Env (for env.get, env.has)
+                    Type::Env => {
+                        match method.as_str() {
+                            "get" => {
+                                // env.get(key) returns Maybe<string>
+                                if args.len() != 1 {
+                                    self.add_error(
+                                        "Type Error: env.get() requires exactly 1 argument"
+                                            .to_string(),
+                                        expr.span,
+                                    );
+                                } else {
+                                    let arg_ty = self.check_expression(&args[0]);
+                                    if !self.types_compatible(&Type::String, &arg_ty) {
+                                        self.add_error(
+                                            format!("Type Error: env.get() expects string key, got {:?}", arg_ty),
+                                            expr.span,
+                                        );
+                                    }
+                                }
+                                Type::Generic("Maybe".to_string(), vec![Type::String])
+                            }
+                            "has" => {
+                                // env.has(key) returns bool
+                                if args.len() != 1 {
+                                    self.add_error(
+                                        "Type Error: env.has() requires exactly 1 argument"
+                                            .to_string(),
+                                        expr.span,
+                                    );
+                                } else {
+                                    let arg_ty = self.check_expression(&args[0]);
+                                    if !self.types_compatible(&Type::String, &arg_ty) {
+                                        self.add_error(
+                                            format!("Type Error: env.has() expects string key, got {:?}", arg_ty),
+                                            expr.span,
+                                        );
+                                    }
+                                }
+                                Type::Bool
+                            }
+                            _ => {
+                                self.add_error(
+                                    format!(
+                                        "Type Error: Unknown env method '{}'. Available: get, has",
+                                        method
+                                    ),
+                                    expr.span,
+                                );
+                                Type::Any
+                            }
+                        }
+                    }
+
                     _ => {
                         self.add_error(
                             format!("Type Error: Methods not supported for type {:?}", obj_ty),

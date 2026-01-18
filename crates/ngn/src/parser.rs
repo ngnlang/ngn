@@ -35,6 +35,7 @@ pub enum Type {
     Number,            // Generic number type for extends
     Json,              // Built-in json module type
     Spawn,             // Built-in spawn module type
+    Env,               // Built-in env module type for environment variables
     TypeParam(String), // Type parameter reference (e.g., T in model Container<T>)
 }
 
