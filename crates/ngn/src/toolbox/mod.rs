@@ -1,5 +1,6 @@
 pub mod core;
 pub mod http;
+pub mod io;
 pub mod math;
 pub mod test;
 
@@ -8,6 +9,11 @@ pub const NATIVE_ASSERT: u16 = 2;
 pub const NATIVE_ROUND: u16 = 3;
 pub const NATIVE_SERVE: u16 = 4;
 pub const NATIVE_SERVE_TLS: u16 = 5;
+pub const NATIVE_FILE_READ: u16 = 6;
+pub const NATIVE_FILE_WRITE: u16 = 7;
+pub const NATIVE_FILE_APPEND: u16 = 8;
+pub const NATIVE_FILE_EXISTS: u16 = 9;
+pub const NATIVE_FILE_DELETE: u16 = 10;
 
 use std::{collections::HashMap, path::Path};
 
@@ -29,6 +35,7 @@ impl Toolbox {
         modules.insert("math".to_string(), math::create_module());
         modules.insert("test".to_string(), test::create_module());
         modules.insert("http".to_string(), http::create_module());
+        modules.insert("io".to_string(), io::create_module());
 
         Self { modules }
     }
@@ -72,6 +79,11 @@ pub fn get_native_id(module: &str, name: &str) -> Option<u16> {
         ("math", "round") => Some(NATIVE_ROUND),
         ("http", "serve") => Some(NATIVE_SERVE),
         ("http", "serve_tls") => Some(NATIVE_SERVE_TLS),
+        ("io", "read") => Some(NATIVE_FILE_READ),
+        ("io", "write") => Some(NATIVE_FILE_WRITE),
+        ("io", "append") => Some(NATIVE_FILE_APPEND),
+        ("io", "exists") => Some(NATIVE_FILE_EXISTS),
+        ("io", "delete") => Some(NATIVE_FILE_DELETE),
         _ => None,
     }
 }

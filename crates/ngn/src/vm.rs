@@ -424,9 +424,14 @@ impl Fiber {
 
                         // Dispatch to the appropriate toolbox function
                         let result = match id {
-                            1 => crate::toolbox::math::abs(args),    // NATIVE_ABS
-                            2 => crate::toolbox::test::assert(args), // NATIVE_ASSERT
-                            3 => crate::toolbox::math::round(args),  // NATIVE_ROUND
+                            1 => crate::toolbox::math::abs(args),        // NATIVE_ABS
+                            2 => crate::toolbox::test::assert(args),     // NATIVE_ASSERT
+                            3 => crate::toolbox::math::round(args),      // NATIVE_ROUND
+                            6 => crate::toolbox::io::file_read(args),    // NATIVE_FILE_READ
+                            7 => crate::toolbox::io::file_write(args),   // NATIVE_FILE_WRITE
+                            8 => crate::toolbox::io::file_append(args),  // NATIVE_FILE_APPEND
+                            9 => crate::toolbox::io::file_exists(args),  // NATIVE_FILE_EXISTS
+                            10 => crate::toolbox::io::file_delete(args), // NATIVE_FILE_DELETE
                             _ => panic!("Runtime Error: Unknown native function ID: {}", id),
                         };
 

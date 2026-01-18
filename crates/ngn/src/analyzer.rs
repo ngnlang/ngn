@@ -742,6 +742,36 @@ impl Analyzer {
                                 optional_count: 0,
                                 return_type: Box::new(Type::Void),
                             },
+                            // io module
+                            ("io", "read") => Type::Function {
+                                params: vec![Type::String], // path
+                                optional_count: 0,
+                                return_type: Box::new(Type::Generic(
+                                    "Result".to_string(),
+                                    vec![Type::String, Type::String],
+                                )),
+                            },
+                            ("io", "write") | ("io", "append") => Type::Function {
+                                params: vec![Type::String, Type::String], // path, content
+                                optional_count: 0,
+                                return_type: Box::new(Type::Generic(
+                                    "Result".to_string(),
+                                    vec![Type::Void, Type::String],
+                                )),
+                            },
+                            ("io", "exists") => Type::Function {
+                                params: vec![Type::String], // path
+                                optional_count: 0,
+                                return_type: Box::new(Type::Bool),
+                            },
+                            ("io", "delete") => Type::Function {
+                                params: vec![Type::String], // path
+                                optional_count: 0,
+                                return_type: Box::new(Type::Generic(
+                                    "Result".to_string(),
+                                    vec![Type::Void, Type::String],
+                                )),
+                            },
                             _ => Type::Function {
                                 params: vec![Type::Any],
                                 optional_count: 0,
