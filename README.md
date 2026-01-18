@@ -141,25 +141,43 @@ print(str) // {"name": "ngn"}
 
 ## env
 
-Access process environment variables at runtime.
+Access environment variables from both process environment and `.env` files.
 
-### `get(key)`
-Get an environment variable by name. Returns `Maybe<string>` - `Value(string)` if the variable exists, or `Null` if it doesn't.
+### Automatic .env Loading
+
+ngn automatically loads `.env` files at startup in this order (later overrides earlier):
+1. `.env` - Base configuration
+2. `.env.{mode}` - Mode-specific (production, development, test)
+3. `.env.local` - Local overrides (should be gitignored)
+
+The mode is determined by the `NGN_MODE` environment variable (default: `development`).
+
+### Property Access
+
+Access environment variables directly as properties. Returns `Maybe<string>`:
 
 ```ngn
-const path = env.get("PATH")
-match (path) {
-  Value(p) => print("PATH is: ${p}"),
-  Null => print("PATH not set"),
-}
+// Direct property access
+const db = env.DATABASE_URL ?? "localhost"
+const port = env.PORT ?? "3000"
 
-// Use with null coalescing for defaults
-const db = env.get("DATABASE_URL") ?? "postgres://localhost/dev"
-print(db)
+// With pattern matching
+match (env.API_KEY) {
+  Value(key) => print("Key: ${key}"),
+  Null => panic("API_KEY is required!"),
+}
+```
+
+### `get(key)`
+Get by dynamic key. Returns `Maybe<string>`.
+
+```ngn
+const key = "DATABASE_URL"
+const value = env.get(key) ?? "default"
 ```
 
 ### `has(key)`
-Check if an environment variable exists. Returns `bool`.
+Check if a variable exists. Returns `bool`.
 
 ```ngn
 if (env.has("DEBUG")) {
