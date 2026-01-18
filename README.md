@@ -139,6 +139,34 @@ const str = json.stringify(data)
 print(str) // {"name": "ngn"}
 ```
 
+## env
+
+Access process environment variables at runtime.
+
+### `get(key)`
+Get an environment variable by name. Returns `Maybe<string>` - `Value(string)` if the variable exists, or `Null` if it doesn't.
+
+```ngn
+const path = env.get("PATH")
+match (path) {
+  Value(p) => print("PATH is: ${p}"),
+  Null => print("PATH not set"),
+}
+
+// Use with null coalescing for defaults
+const db = env.get("DATABASE_URL") ?? "postgres://localhost/dev"
+print(db)
+```
+
+### `has(key)`
+Check if an environment variable exists. Returns `bool`.
+
+```ngn
+if (env.has("DEBUG")) {
+  print("Debug mode enabled")
+}
+```
+
 ## Strings
 
 ### `length()`
