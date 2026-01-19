@@ -1,4 +1,7 @@
-use crate::{error::RuntimeError, value::{Number, Value}};
+use crate::{
+    error::RuntimeError,
+    value::{Number, Value},
+};
 
 use super::ToolboxModule;
 use std::collections::HashMap;
@@ -108,7 +111,7 @@ pub fn sin(args: Vec<Value>) -> Result<Value, RuntimeError> {
             let result_num = match num {
                 Number::F64(n) => Number::F64(n.sin()),
                 Number::F32(n) => Number::F32(n.sin()),
-                _ => return Err(RuntimeError::TypeError("numeric type not supported".into()))
+                _ => return Err(RuntimeError::TypeError("numeric type not supported".into())),
             };
             Ok(Value::Numeric(result_num))
         }
@@ -118,11 +121,26 @@ pub fn sin(args: Vec<Value>) -> Result<Value, RuntimeError> {
 
 pub fn create_module() -> ToolboxModule {
     let mut functions = HashMap::new();
-    functions.insert("abs".to_string(), abs as fn(Vec<Value>) -> Result<Value, RuntimeError>);
-    functions.insert("round".to_string(), round as fn(Vec<Value>) -> Result<Value, RuntimeError>);
-    functions.insert("floor".to_string(), floor as fn(Vec<Value>) -> Result<Value, RuntimeError>);
-    functions.insert("ceil".to_string(), ceil as fn(Vec<Value>) -> Result<Value, RuntimeError>);
-    functions.insert("sin".to_string(), sin as fn(Vec<Value>) -> Result<Value, RuntimeError>);
-    
+    functions.insert(
+        "abs".to_string(),
+        abs as fn(Vec<Value>) -> Result<Value, RuntimeError>,
+    );
+    functions.insert(
+        "round".to_string(),
+        round as fn(Vec<Value>) -> Result<Value, RuntimeError>,
+    );
+    functions.insert(
+        "floor".to_string(),
+        floor as fn(Vec<Value>) -> Result<Value, RuntimeError>,
+    );
+    functions.insert(
+        "ceil".to_string(),
+        ceil as fn(Vec<Value>) -> Result<Value, RuntimeError>,
+    );
+    functions.insert(
+        "sin".to_string(),
+        sin as fn(Vec<Value>) -> Result<Value, RuntimeError>,
+    );
+
     ToolboxModule { functions }
 }

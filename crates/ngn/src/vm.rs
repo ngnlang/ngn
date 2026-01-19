@@ -360,65 +360,113 @@ impl Fiber {
                         }
 
                         // Handle serve specially - it blocks forever and needs thread-safe globals
-                        if id == 4 || id == 5 {
-                            // NATIVE_SERVE or NATIVE_SERVE_TLS
+                        if id == 4 {
                             if args.is_empty() {
                                 panic!(
-                                    "Runtime Error: serve requires at least 2 arguments (port, handler)"
+                                    "Runtime Error: serve requires at least 1 argument (handler)"
                                 );
                             }
 
-                            let port = match &args[0] {
-                                Value::Numeric(crate::value::Number::I64(p)) => *p as u16,
-                                Value::Numeric(crate::value::Number::I32(p)) => *p as u16,
-                                _ => panic!("Runtime Error: serve port must be a number"),
-                            };
-
                             let handler = args
-                                .get(1)
+                                .get(0)
                                 .cloned()
                                 .expect("Runtime Error: serve requires a handler function");
+
+                            // Optional config in the 2nd argument position:
+                            // - serve(handler)
+                            // - serve(handler, { port: 3000, tls: { cert: "./cert.pem", key: "./key.pem" } })
+                            let mut port: u16 = 3000;
+                            let mut keep_alive_timeout_ms: u64 = 30_000;
+                            let mut max_requests_per_connection: usize = 1000;
+                            let mut tls_cert: Option<String> = None;
+                            let mut tls_key: Option<String> = None;
+
+                            if let Some(Value::Object(cfg)) = args.get(1) {
+                                if let Some(Value::Numeric(n)) = cfg.fields.get("port") {
+                                    port = match n {
+                                        crate::value::Number::I64(v) => *v as u16,
+                                        crate::value::Number::I32(v) => *v as u16,
+                                        _ => port,
+                                    };
+                                }
+
+                                if let Some(Value::Numeric(n)) =
+                                    cfg.fields.get("keepAliveTimeoutMs")
+                                {
+                                    keep_alive_timeout_ms = match n {
+                                        crate::value::Number::I64(v) if *v > 0 => *v as u64,
+                                        crate::value::Number::I32(v) if *v > 0 => *v as u64,
+                                        _ => keep_alive_timeout_ms,
+                                    };
+                                }
+
+                                if let Some(Value::Numeric(n)) =
+                                    cfg.fields.get("maxRequestsPerConnection")
+                                {
+                                    max_requests_per_connection = match n {
+                                        crate::value::Number::I64(v) if *v > 0 => *v as usize,
+                                        crate::value::Number::I32(v) if *v > 0 => *v as usize,
+                                        _ => max_requests_per_connection,
+                                    };
+                                }
+
+                                if let Some(Value::Object(tls)) = cfg.fields.get("tls") {
+                                    tls_cert = tls.fields.get("cert").and_then(|v| {
+                                        if let Value::String(s) = v {
+                                            Some(s.clone())
+                                        } else {
+                                            None
+                                        }
+                                    });
+                                    tls_key = tls.fields.get("key").and_then(|v| {
+                                        if let Value::String(s) = v {
+                                            Some(s.clone())
+                                        } else {
+                                            None
+                                        }
+                                    });
+                                }
+                            }
 
                             // Wrap globals and custom_methods in Arc<Mutex> for thread safety
                             let shared_globals = Arc::new(Mutex::new(globals.clone()));
                             let shared_methods = custom_methods.clone();
 
-                            if id == 4 {
-                                // HTTP (async tokio)
-                                if let Err(e) = crate::toolbox::http::serve(
+                            let options = crate::toolbox::http::HttpServerOptions {
+                                keep_alive_timeout: std::time::Duration::from_millis(
+                                    keep_alive_timeout_ms,
+                                ),
+                                max_requests_per_connection,
+                            };
+
+                            let has_tls = tls_cert.is_some() || tls_key.is_some();
+
+                            if let (Some(cert), Some(key)) = (&tls_cert, &tls_key) {
+                                if let Err(e) = crate::toolbox::http::serve_tls_with_options(
                                     port,
                                     handler,
+                                    cert,
+                                    key,
+                                    options,
                                     shared_globals,
                                     shared_methods,
                                 ) {
                                     panic!("Runtime Error: {}", e);
                                 }
+                            } else if has_tls {
+                                panic!("Runtime Error: tls config requires both cert and key");
                             } else {
-                                // HTTPS (id == 5)
-                                let cert = match args.get(2) {
-                                    Some(Value::String(s)) => s.clone(),
-                                    _ => panic!(
-                                        "Runtime Error: serve_tls requires cert path as 3rd arg"
-                                    ),
-                                };
-                                let key = match args.get(3) {
-                                    Some(Value::String(s)) => s.clone(),
-                                    _ => panic!(
-                                        "Runtime Error: serve_tls requires key path as 4th arg"
-                                    ),
-                                };
-                                if let Err(e) = crate::toolbox::http::serve_tls(
+                                if let Err(e) = crate::toolbox::http::serve_with_options(
                                     port,
                                     handler,
-                                    &cert,
-                                    &key,
+                                    options,
                                     shared_globals,
                                     shared_methods,
                                 ) {
                                     panic!("Runtime Error: {}", e);
                                 }
                             }
-                            // serve never returns (blocks forever), but just in case:
+
                             self.set_reg_at(dest, Value::Void);
                             return FiberStatus::Finished;
                         }
@@ -1204,6 +1252,28 @@ impl Fiber {
                     }
                 }
 
+                // Add defaults for SseResponse models
+                if model_name == "SseResponse" {
+                    if !fields.contains_key("status") {
+                        fields.insert(
+                            "status".to_string(),
+                            Value::Numeric(crate::value::Number::I64(200)),
+                        );
+                    }
+                    if !fields.contains_key("headers") {
+                        fields.insert(
+                            "headers".to_string(),
+                            Value::Map(std::collections::HashMap::new()),
+                        );
+                    }
+                    if !fields.contains_key("keepAliveMs") {
+                        fields.insert(
+                            "keepAliveMs".to_string(),
+                            Value::Numeric(crate::value::Number::I64(0)),
+                        );
+                    }
+                }
+
                 // Handle StreamingResponse specially - create a StreamingResponse Value
                 if model_name == "StreamingResponse" {
                     let status = match fields.get("status") {
@@ -1242,6 +1312,61 @@ impl Fiber {
                     let streaming =
                         crate::value::StreamingResponseData::new(status, headers, body_channel);
                     self.set_reg_at(dest, streaming.into_value());
+                    return FiberStatus::Running;
+                }
+
+                // Handle SseResponse specially - create an SseResponse Value
+                if model_name == "SseResponse" {
+                    let status = match fields.get("status") {
+                        Some(Value::Numeric(crate::value::Number::I64(s))) => *s as u16,
+                        Some(Value::Numeric(crate::value::Number::I32(s))) => *s as u16,
+                        _ => 200,
+                    };
+
+                    let headers = match fields.get("headers") {
+                        Some(Value::Map(m)) => {
+                            let mut h = std::collections::HashMap::new();
+                            for (k, v) in m {
+                                if let (Value::String(key), Value::String(val)) = (k, v) {
+                                    h.insert(key.clone(), val.clone());
+                                }
+                            }
+                            h
+                        }
+                        Some(Value::Object(o)) => {
+                            let mut h = std::collections::HashMap::new();
+                            for (key, val) in &o.fields {
+                                if let Value::String(v) = val {
+                                    h.insert(key.clone(), v.clone());
+                                }
+                            }
+                            h
+                        }
+                        _ => std::collections::HashMap::new(),
+                    };
+
+                    let body_channel = match fields.get("body") {
+                        Some(Value::Channel(c)) => c.clone(),
+                        _ => panic!("Runtime Error: SseResponse body must be a channel"),
+                    };
+
+                    let keep_alive_ms = match fields.get("keepAliveMs") {
+                        Some(Value::Numeric(crate::value::Number::I64(ms))) if *ms > 0 => {
+                            *ms as u64
+                        }
+                        Some(Value::Numeric(crate::value::Number::I32(ms))) if *ms > 0 => {
+                            *ms as u64
+                        }
+                        _ => 0,
+                    };
+
+                    let sse = crate::value::SseResponseData::new(
+                        status,
+                        headers,
+                        body_channel,
+                        keep_alive_ms,
+                    );
+                    self.set_reg_at(dest, sse.into_value());
                     return FiberStatus::Running;
                 }
 
@@ -1310,43 +1435,82 @@ impl Fiber {
                 let handler = globals[handler_idx].clone();
 
                 // Extract config from handler.config field
-                let (port, tls_cert, tls_key) = if let Value::Object(obj) = &handler {
-                    if let Some(Value::Object(config)) = obj.fields.get("config") {
-                        let port = match config.fields.get("port") {
-                            Some(Value::Numeric(n)) => match n {
-                                crate::value::Number::I64(v) => *v as u16,
-                                crate::value::Number::I32(v) => *v as u16,
+                // Supported config keys:
+                // - port: i64
+                // - keepAliveTimeoutMs: i64
+                // - maxRequestsPerConnection: i64
+                // - tls: { cert: string, key: string }
+                let (port, tls_cert, tls_key, keep_alive_timeout_ms, max_requests_per_connection) =
+                    if let Value::Object(obj) = &handler {
+                        if let Some(Value::Object(config)) = obj.fields.get("config") {
+                            let port = match config.fields.get("port") {
+                                Some(Value::Numeric(n)) => match n {
+                                    crate::value::Number::I64(v) => *v as u16,
+                                    crate::value::Number::I32(v) => *v as u16,
+                                    _ => 3000,
+                                },
                                 _ => 3000,
-                            },
-                            _ => 3000,
-                        };
-                        let (cert, key) = match config.fields.get("tls") {
-                            Some(Value::Object(tls)) => {
-                                let cert = tls.fields.get("cert").and_then(|v| {
-                                    if let Value::String(s) = v {
-                                        Some(s.clone())
-                                    } else {
-                                        None
-                                    }
-                                });
-                                let key = tls.fields.get("key").and_then(|v| {
-                                    if let Value::String(s) = v {
-                                        Some(s.clone())
-                                    } else {
-                                        None
-                                    }
-                                });
-                                (cert, key)
-                            }
-                            _ => (None, None),
-                        };
-                        (port, cert, key)
+                            };
+
+                            let keep_alive_timeout_ms = match config
+                                .fields
+                                .get("keepAliveTimeoutMs")
+                            {
+                                Some(Value::Numeric(crate::value::Number::I64(v))) if *v > 0 => {
+                                    *v as u64
+                                }
+                                Some(Value::Numeric(crate::value::Number::I32(v))) if *v > 0 => {
+                                    *v as u64
+                                }
+                                _ => 30_000,
+                            };
+
+                            let max_requests_per_connection = match config
+                                .fields
+                                .get("maxRequestsPerConnection")
+                            {
+                                Some(Value::Numeric(crate::value::Number::I64(v))) if *v > 0 => {
+                                    *v as usize
+                                }
+                                Some(Value::Numeric(crate::value::Number::I32(v))) if *v > 0 => {
+                                    *v as usize
+                                }
+                                _ => 1000,
+                            };
+
+                            let (cert, key) = match config.fields.get("tls") {
+                                Some(Value::Object(tls)) => {
+                                    let cert = tls.fields.get("cert").and_then(|v| {
+                                        if let Value::String(s) = v {
+                                            Some(s.clone())
+                                        } else {
+                                            None
+                                        }
+                                    });
+                                    let key = tls.fields.get("key").and_then(|v| {
+                                        if let Value::String(s) = v {
+                                            Some(s.clone())
+                                        } else {
+                                            None
+                                        }
+                                    });
+                                    (cert, key)
+                                }
+                                _ => (None, None),
+                            };
+                            (
+                                port,
+                                cert,
+                                key,
+                                keep_alive_timeout_ms,
+                                max_requests_per_connection,
+                            )
+                        } else {
+                            (3000, None, None, 30_000, 1000)
+                        }
                     } else {
-                        (3000, None, None)
-                    }
-                } else {
-                    (3000, None, None)
-                };
+                        (3000, None, None, 30_000, 1000)
+                    };
 
                 let fetch_handler = if let Value::Object(obj) = &handler {
                     if !obj.model_name.is_empty() && obj.model_name != "__anon__" {
@@ -1370,19 +1534,31 @@ impl Fiber {
                     let globals_arc = std::sync::Arc::new(std::sync::Mutex::new(globals.clone()));
                     let methods_arc = custom_methods.clone();
 
+                    let options = http::HttpServerOptions {
+                        keep_alive_timeout: std::time::Duration::from_millis(keep_alive_timeout_ms),
+                        max_requests_per_connection,
+                    };
+
                     if let (Some(cert), Some(key)) = (tls_cert, tls_key) {
-                        if let Err(e) = http::serve_tls(
+                        if let Err(e) = http::serve_tls_with_options(
                             port,
                             fetch_handler,
                             &cert,
                             &key,
+                            options,
                             globals_arc,
                             methods_arc,
                         ) {
                             eprintln!("HTTPS Server Error: {}", e);
                         }
                     } else {
-                        if let Err(e) = http::serve(port, fetch_handler, globals_arc, methods_arc) {
+                        if let Err(e) = http::serve_with_options(
+                            port,
+                            fetch_handler,
+                            options,
+                            globals_arc,
+                            methods_arc,
+                        ) {
                             eprintln!("HTTP Server Error: {}", e);
                         }
                     }

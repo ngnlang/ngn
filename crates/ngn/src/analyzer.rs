@@ -162,6 +162,58 @@ impl Analyzer {
             },
         );
 
+        // Built-in SseEvent and SseResponse models for Server-Sent Events (SSE)
+        analyzer.models.insert(
+            "SseEvent".to_string(),
+            ModelDef {
+                name: "SseEvent".to_string(),
+                type_params: vec![],
+                fields: vec![
+                    ("data".to_string(), Type::String),
+                    ("event".to_string(), Type::String),
+                    ("id".to_string(), Type::String),
+                    ("retryMs".to_string(), Type::I64),
+                    ("comment".to_string(), Type::String),
+                ],
+            },
+        );
+
+        // SseMessage is the typed payload for SseResponse.body.
+        // Data(string) becomes one SSE event record with only data lines.
+        // Event(SseEvent) emits full SSE fields.
+        let sse_message_enum = EnumDef {
+            name: "SseMessage".to_string(),
+            type_params: vec![],
+            variants: vec![
+                EnumVariantDef {
+                    name: "Data".to_string(),
+                    data_type: Some(Type::String),
+                },
+                EnumVariantDef {
+                    name: "Event".to_string(),
+                    data_type: Some(Type::Model("SseEvent".to_string())),
+                },
+            ],
+        };
+        analyzer.register_enum(&sse_message_enum, Span::default());
+
+        analyzer.models.insert(
+            "SseResponse".to_string(),
+            ModelDef {
+                name: "SseResponse".to_string(),
+                type_params: vec![],
+                fields: vec![
+                    ("status".to_string(), Type::I64),
+                    ("headers".to_string(), Type::Any), // accepts map or object literal
+                    (
+                        "body".to_string(),
+                        Type::Channel(Box::new(Type::Enum("SseMessage".to_string()))),
+                    ),
+                    ("keepAliveMs".to_string(), Type::I64),
+                ],
+            },
+        );
+
         // Built-in FetchOptions model for fetch()
         analyzer.models.insert(
             "FetchOptions".to_string(),
@@ -747,13 +799,8 @@ impl Analyzer {
                                 return_type: Box::new(Type::F64),
                             },
                             ("http", "serve") => Type::Function {
-                                params: vec![Type::I64, Type::Any], // port, handler
-                                optional_count: 0,
-                                return_type: Box::new(Type::Void),
-                            },
-                            ("http", "serve_tls") => Type::Function {
-                                params: vec![Type::I64, Type::Any, Type::String, Type::String], // port, handler, cert, key
-                                optional_count: 0,
+                                params: vec![Type::Any, Type::Any], // handler, config?
+                                optional_count: 1,
                                 return_type: Box::new(Type::Void),
                             },
                             // io module
@@ -1443,8 +1490,8 @@ impl Analyzer {
                         }
                     }
 
-                    // Check for missing fields (skip for Response/StreamingResponse where fields have defaults)
-                    if name != "Response" && name != "StreamingResponse" {
+                    // Check for missing fields (skip for models where fields have defaults)
+                    if name != "Response" && name != "StreamingResponse" && name != "SseResponse" {
                         for (f_name, _) in &model_def.fields {
                             if !fields.iter().any(|(n, _)| n == f_name) {
                                 self.add_error(
@@ -2784,7 +2831,9 @@ impl Analyzer {
     fn normalize_type(&self, ty: Type) -> Type {
         match ty {
             Type::Model(name) => {
-                if self.roles.contains_key(&name) {
+                if self.enums.contains_key(&name) {
+                    Type::Enum(name)
+                } else if self.roles.contains_key(&name) {
                     Type::Role(name)
                 } else {
                     Type::Model(name)

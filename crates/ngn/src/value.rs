@@ -533,6 +533,36 @@ pub struct StreamingResponseData {
     pub body_channel: Channel, // Channel<string> that produces chunks
 }
 
+/// Server-Sent Events (SSE) response backed by a channel
+/// Each message from the channel becomes one SSE record (framed and flushed)
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SseResponseData {
+    pub status: u16,
+    pub headers: std::collections::HashMap<String, String>,
+    pub body_channel: Channel, // Channel<string | SseEvent | any>
+    pub keep_alive_ms: u64,    // 0 disables keepalive
+}
+
+impl SseResponseData {
+    pub fn new(
+        status: u16,
+        headers: std::collections::HashMap<String, String>,
+        body_channel: Channel,
+        keep_alive_ms: u64,
+    ) -> Self {
+        Self {
+            status,
+            headers,
+            body_channel,
+            keep_alive_ms,
+        }
+    }
+
+    pub fn into_value(self) -> Value {
+        Value::SseResponse(Box::new(self))
+    }
+}
+
 impl StreamingResponseData {
     pub fn new(
         status: u16,
@@ -571,6 +601,7 @@ pub enum Value {
     Set(indexmap::IndexSet<Value>),
     Response(Box<ResponseData>),
     StreamingResponse(Box<StreamingResponseData>),
+    SseResponse(Box<SseResponseData>),
     Void,
     Regex(String),
 }
@@ -802,6 +833,7 @@ impl Value {
             Value::Function(_) | Value::Closure(_) | Value::NativeFunction(_) => "function",
             Value::Response(_) => "Response",
             Value::StreamingResponse(_) => "StreamingResponse",
+            Value::SseResponse(_) => "SseResponse",
             Value::Void => "void",
             Value::Reference(_, _) => "reference",
         }
@@ -921,6 +953,20 @@ impl fmt::Display for Value {
                     headers_str.join(", ")
                 )
             }
+            Value::SseResponse(r) => {
+                let headers_str: Vec<String> = r
+                    .headers
+                    .iter()
+                    .map(|(k, v)| format!("\"{}\": \"{}\"", k, v))
+                    .collect();
+                write!(
+                    f,
+                    "SseResponse {{ status: {}, headers: {{ {} }}, body: <channel>, keepAliveMs: {} }}",
+                    r.status,
+                    headers_str.join(", "),
+                    r.keep_alive_ms
+                )
+            }
         }
     }
 }
@@ -988,6 +1034,9 @@ impl std::hash::Hash for Value {
                 panic!(
                     "Runtime Error: StreamingResponse values cannot be used as map keys or set values"
                 )
+            }
+            Value::SseResponse(_) => {
+                panic!("Runtime Error: SseResponse values cannot be used as map keys or set values")
             }
         }
     }
