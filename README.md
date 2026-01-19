@@ -5,8 +5,37 @@ Pronounced "engine".
 An expressive and easy to use high-level programming language.
 
 ## Status
-
 Make it work - early development.
+
+## Aims
+Right now, these are the two major aims I have for ngn:
+- building APIs and MCP servers
+- doing some AI things, like LLM inference
+
+In other words, I'm hoping devs think of building APIs with ngn instead of Go or Typescript, and building some AI things with ngn instead of Python.
+
+## Inspiration
+
+I've long thought of creating a programming language, and now that AI is getting better at coding I've taken the plunge - because, you know, skill issues. In the syntax, you'll see familiar things from other languages; of course, I've added some twists here and there.
+
+## Why ngn?
+Here are some highlights:
+
+1. Multi-threaded/parallelism - whichever phrase you'd prefer
+
+2. Channels & Threads for async.
+  - no async/await contagion
+  - creating a thread returns a channel, then you can simply `return` data from the thread and it'll be sent to that channel
+  - beautiful "await" syntax for channel messages; `<- channel` (one message), `<-3 channel` (three messages), `<-tasks.size() channel`
+  - we even built this model into our `fetch` implementation: `const res = <- fetch("https://api.example.com")`
+
+3. Shared, mutable, atomic state for threads and closures. (oh, what are "closures"?)
+  - `var count = state(0)`; then you can have multiple threads mutate `count` via the `.update()` state method.
+
+4. Powerful inline `if` syntax, inspired by ternaries: `if (x > 10) print("greater") : (x < 10) print("less") : print("equal")`
+
+5. Built-in http(s) server.
+  - via `serve(handler)` or `export default { fetch: handler }`
 
 ## `main()`
 
@@ -27,6 +56,8 @@ Defines a variable who's value can be changed.
 var x = "hello"
 x = "goodbye" ✅
 ```
+
+> Why "var"? Because, to me, it fits better with "const" than "let" does. In other words, `var` is more congruent with `const`.
 
 ### `const`
 Defines a constant who's value cannot be changed.
