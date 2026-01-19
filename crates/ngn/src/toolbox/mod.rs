@@ -3,6 +3,7 @@ pub mod encoding;
 pub mod http;
 pub mod io;
 pub mod math;
+pub mod process;
 pub mod test;
 
 pub const NATIVE_ABS: u16 = 1;
@@ -18,6 +19,9 @@ pub const NATIVE_FILE_WRITE: u16 = 7;
 pub const NATIVE_FILE_APPEND: u16 = 8;
 pub const NATIVE_FILE_EXISTS: u16 = 9;
 pub const NATIVE_FILE_DELETE: u16 = 10;
+pub const NATIVE_PROCESS_RUN: u16 = 14;
+pub const NATIVE_PROCESS_STREAM: u16 = 15;
+pub const NATIVE_PROCESS_STREAM_RAW: u16 = 16;
 
 use std::{collections::HashMap, path::Path};
 
@@ -40,6 +44,7 @@ impl Toolbox {
         modules.insert("test".to_string(), test::create_module());
         modules.insert("http".to_string(), http::create_module());
         modules.insert("io".to_string(), io::create_module());
+        modules.insert("process".to_string(), process::create_module());
         modules.insert("encoding".to_string(), encoding::create_module());
 
         Self { modules }
@@ -92,6 +97,9 @@ pub fn get_native_id(module: &str, name: &str) -> Option<u16> {
         ("io", "append") => Some(NATIVE_FILE_APPEND),
         ("io", "exists") => Some(NATIVE_FILE_EXISTS),
         ("io", "delete") => Some(NATIVE_FILE_DELETE),
+        ("process", "run") => Some(NATIVE_PROCESS_RUN),
+        ("process", "stream") => Some(NATIVE_PROCESS_STREAM),
+        ("process", "streamRaw") => Some(NATIVE_PROCESS_STREAM_RAW),
         _ => None,
     }
 }

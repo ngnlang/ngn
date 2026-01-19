@@ -485,6 +485,9 @@ impl Fiber {
                             11 => crate::toolbox::encoding::hex_decode(args), // NATIVE_HEX_DECODE
                             12 => crate::toolbox::encoding::base64_encode(args), // NATIVE_BASE64_ENCODE
                             13 => crate::toolbox::encoding::base64_decode(args), // NATIVE_BASE64_DECODE
+                            14 => crate::toolbox::process::process_run(args), // NATIVE_PROCESS_RUN
+                            15 => crate::toolbox::process::process_stream(args), // NATIVE_PROCESS_STREAM
+                            16 => crate::toolbox::process::process_stream_raw(args), // NATIVE_PROCESS_STREAM_RAW
                             _ => panic!("Runtime Error: Unknown native function ID: {}", id),
                         };
 

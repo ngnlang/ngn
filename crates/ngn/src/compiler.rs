@@ -111,29 +111,31 @@ impl Compiler {
 
     pub fn inject_builtins(&mut self) {
         // Built-in Result
+        // Result<T, E> { Ok(T), Error(E) }
         let result_enum = EnumDef {
             name: "Result".to_string(),
             type_params: vec!["T".to_string(), "E".to_string()],
             variants: vec![
                 crate::parser::EnumVariantDef {
                     name: "Ok".to_string(),
-                    data_type: Some(crate::parser::Type::Any),
+                    data_type: Some(crate::parser::Type::TypeParam("T".to_string())),
                 },
                 crate::parser::EnumVariantDef {
                     name: "Error".to_string(),
-                    data_type: Some(crate::parser::Type::Any),
+                    data_type: Some(crate::parser::Type::TypeParam("E".to_string())),
                 },
             ],
         };
 
         // Built-in Maybe
+        // Maybe<T> { Value(T), Null }
         let maybe_enum = EnumDef {
             name: "Maybe".to_string(),
             type_params: vec!["T".to_string()],
             variants: vec![
                 crate::parser::EnumVariantDef {
                     name: "Value".to_string(),
-                    data_type: Some(crate::parser::Type::Any),
+                    data_type: Some(crate::parser::Type::TypeParam("T".to_string())),
                 },
                 crate::parser::EnumVariantDef {
                     name: "Null".to_string(),

@@ -432,6 +432,7 @@ impl Number {
     }
 }
 
+use std::any::Any;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
@@ -441,6 +442,34 @@ pub struct Channel {
     pub buffer: Arc<Mutex<VecDeque<Value>>>,
     pub capacity: usize,
     pub is_closed: Arc<Mutex<bool>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExternalValue {
+    pub type_tag: String,
+    pub inner: Arc<dyn Any + Send + Sync>,
+}
+
+impl serde::Serialize for ExternalValue {
+    fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        Err(serde::ser::Error::custom(
+            "External values cannot be serialized",
+        ))
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ExternalValue {
+    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Err(serde::de::Error::custom(
+            "External values cannot be deserialized",
+        ))
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -639,6 +668,7 @@ pub enum Value {
     StreamingResponse(Box<StreamingResponseData>),
     SseResponse(Box<SseResponseData>),
     WebSocketResponse(Box<WebSocketResponseData>),
+    External(ExternalValue),
     Void,
     Regex(String),
 }
@@ -874,6 +904,7 @@ impl Value {
             Value::StreamingResponse(_) => "StreamingResponse",
             Value::SseResponse(_) => "SseResponse",
             Value::WebSocketResponse(_) => "WebSocketResponse",
+            Value::External(_) => "External",
             Value::Void => "void",
             Value::Reference(_, _) => "reference",
         }
@@ -1020,6 +1051,7 @@ impl fmt::Display for Value {
                     headers_str.join(", ")
                 )
             }
+            Value::External(e) => write!(f, "<external {}>", e.type_tag),
         }
     }
 }
@@ -1097,6 +1129,9 @@ impl std::hash::Hash for Value {
                     "Runtime Error: WebSocketResponse values cannot be used as map keys or set values"
                 )
             }
+            Value::External(_) => {
+                panic!("Runtime Error: External values cannot be used as map keys or set values")
+            }
         }
     }
 }
@@ -1155,6 +1190,9 @@ impl Value {
             Value::Set(s) => {
                 // Set serializes to JSON array
                 serde_json::Value::Array(s.iter().map(|v| v.to_json()).collect())
+            }
+            Value::External(_) => {
+                panic!("Runtime Error: Cannot convert External value to JSON")
             }
             // Non-serializable types become null
             _ => serde_json::Value::Null,

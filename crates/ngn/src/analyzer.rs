@@ -57,29 +57,31 @@ impl Analyzer {
         }
 
         // Built-in Result
+        // Result<T, E> { Ok(T), Error(E) }
         let result_enum = EnumDef {
             name: "Result".to_string(),
             type_params: vec!["T".to_string(), "E".to_string()],
             variants: vec![
                 EnumVariantDef {
                     name: "Ok".to_string(),
-                    data_type: Some(Type::Any),
+                    data_type: Some(Type::TypeParam("T".to_string())),
                 },
                 EnumVariantDef {
                     name: "Error".to_string(),
-                    data_type: Some(Type::Any),
+                    data_type: Some(Type::TypeParam("E".to_string())),
                 },
             ],
         };
 
         // Built-in Maybe
+        // Maybe<T> { Value(T), Null }
         let maybe_enum = EnumDef {
             name: "Maybe".to_string(),
             type_params: vec!["T".to_string()],
             variants: vec![
                 EnumVariantDef {
                     name: "Value".to_string(),
-                    data_type: Some(Type::Any),
+                    data_type: Some(Type::TypeParam("T".to_string())),
                 },
                 EnumVariantDef {
                     name: "Null".to_string(),
@@ -193,6 +195,13 @@ impl Analyzer {
             Type::Union(vec![Type::String, Type::Bytes]),
         );
 
+        // ProcessChunk is the typed payload for ProcessStream stdout/stderr.
+        // In line-based mode it's string; in raw mode it's bytes.
+        analyzer.type_aliases.insert(
+            "ProcessChunk".to_string(),
+            Type::Union(vec![Type::String, Type::Bytes]),
+        );
+
         analyzer.models.insert(
             "SseResponse".to_string(),
             ModelDef {
@@ -228,6 +237,45 @@ impl Analyzer {
                     (
                         "send".to_string(),
                         Type::Channel(Box::new(Type::Model("WsMessage".to_string()))),
+                    ),
+                ],
+            },
+        );
+
+        // ProcessOutput/ProcessStream models for tbx::process
+        analyzer.models.insert(
+            "ProcessOutput".to_string(),
+            ModelDef {
+                name: "ProcessOutput".to_string(),
+                type_params: vec![],
+                fields: vec![
+                    ("code".to_string(), Type::I64),
+                    ("stdout".to_string(), Type::String),
+                    ("stderr".to_string(), Type::String),
+                ],
+            },
+        );
+
+        analyzer.models.insert(
+            "ProcessStream".to_string(),
+            ModelDef {
+                name: "ProcessStream".to_string(),
+                type_params: vec![],
+                fields: vec![
+                    (
+                        "stdout".to_string(),
+                        Type::Channel(Box::new(Type::Model("ProcessChunk".to_string()))),
+                    ),
+                    (
+                        "stderr".to_string(),
+                        Type::Channel(Box::new(Type::Model("ProcessChunk".to_string()))),
+                    ),
+                    (
+                        "done".to_string(),
+                        Type::Channel(Box::new(Type::Generic(
+                            "Result".to_string(),
+                            vec![Type::Model("ProcessOutput".to_string()), Type::String],
+                        ))),
                     ),
                 ],
             },
@@ -877,6 +925,30 @@ impl Analyzer {
                                 optional_count: 0,
                                 return_type: Box::new(Type::Bytes),
                             },
+                            ("process", "run") => Type::Function {
+                                params: vec![Type::String, Type::Any],
+                                optional_count: 1,
+                                return_type: Box::new(Type::Channel(Box::new(Type::Generic(
+                                    "Result".to_string(),
+                                    vec![Type::Model("ProcessOutput".to_string()), Type::String],
+                                )))),
+                            },
+                            ("process", "stream") => Type::Function {
+                                params: vec![Type::String, Type::Any],
+                                optional_count: 1,
+                                return_type: Box::new(Type::Generic(
+                                    "Result".to_string(),
+                                    vec![Type::Model("ProcessStream".to_string()), Type::String],
+                                )),
+                            },
+                            ("process", "streamRaw") => Type::Function {
+                                params: vec![Type::String, Type::Any],
+                                optional_count: 1,
+                                return_type: Box::new(Type::Generic(
+                                    "Result".to_string(),
+                                    vec![Type::Model("ProcessStream".to_string()), Type::String],
+                                )),
+                            },
                             _ => Type::Function {
                                 params: vec![Type::Any],
                                 optional_count: 0,
@@ -1479,8 +1551,9 @@ impl Analyzer {
             }
             ExprKind::ReceiveMaybe(chan_expr) => {
                 let chan_ty = self.check_expression(chan_expr);
-                if let Type::Channel(_) = chan_ty {
-                    Type::Enum("Maybe".to_string())
+                if let Type::Channel(inner) = chan_ty {
+                    // <-? channel<T> yields Maybe<T>
+                    Type::Generic("Maybe".to_string(), vec![*inner])
                 } else {
                     self.add_error(
                         format!(
@@ -1489,7 +1562,7 @@ impl Analyzer {
                         ),
                         expr.span,
                     );
-                    Type::Enum("Maybe".to_string())
+                    Type::Generic("Maybe".to_string(), vec![Type::Any])
                 }
             }
             ExprKind::State(initial_expr) => {
@@ -2119,6 +2192,31 @@ impl Analyzer {
                             Type::Any
                         }
                     },
+
+                    // Union methods (very small support: allow bytes/string toString variants)
+                    Type::Union(types) => {
+                        // If every variant supports the method, allow it.
+                        // For now, only handle toString/toStringStrict which works for both string and bytes.
+                        if (method == "toString" || method == "toStringStrict")
+                            && types
+                                .iter()
+                                .all(|t| matches!(t, Type::String | Type::Bytes))
+                        {
+                            if !args.is_empty() {
+                                self.add_error(
+                                    format!("Type Error: .{}() takes no arguments", method),
+                                    expr.span,
+                                );
+                            }
+                            Type::String
+                        } else {
+                            self.add_error(
+                                format!("Type Error: Methods not supported for type {:?}", obj_ty),
+                                expr.span,
+                            );
+                            Type::Any
+                        }
+                    }
 
                     // String methods
                     Type::String => {
