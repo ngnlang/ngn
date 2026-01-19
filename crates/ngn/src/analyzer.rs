@@ -204,6 +204,23 @@ impl Analyzer {
             },
         );
 
+        // Built-in WebSocketResponse model for WebSockets
+        // A WebSocketResponse upgrades the request and binds two channels:
+        // - recv: channel<string> (client -> server)
+        // - send: channel<string> (server -> client)
+        analyzer.models.insert(
+            "WebSocketResponse".to_string(),
+            ModelDef {
+                name: "WebSocketResponse".to_string(),
+                type_params: vec![],
+                fields: vec![
+                    ("headers".to_string(), Type::Any), // accepts map or object literal
+                    ("recv".to_string(), Type::Channel(Box::new(Type::String))),
+                    ("send".to_string(), Type::Channel(Box::new(Type::String))),
+                ],
+            },
+        );
+
         // Built-in FetchOptions model for fetch()
         analyzer.models.insert(
             "FetchOptions".to_string(),
@@ -1486,7 +1503,23 @@ impl Analyzer {
                     }
 
                     // Check for missing fields (skip for models where fields have defaults)
-                    if name != "Response" && name != "StreamingResponse" && name != "SseResponse" {
+                    if name == "WebSocketResponse" {
+                        // headers is optional (defaults to empty map). recv/send are required.
+                        for f_name in ["recv", "send"] {
+                            if !fields.iter().any(|(n, _)| n == f_name) {
+                                self.add_error(
+                                    format!(
+                                        "Type Error: Missing field '{}' in instantiation of model '{}'",
+                                        f_name, name
+                                    ),
+                                    expr.span,
+                                );
+                            }
+                        }
+                    } else if name != "Response"
+                        && name != "StreamingResponse"
+                        && name != "SseResponse"
+                    {
                         for (f_name, _) in &model_def.fields {
                             if !fields.iter().any(|(n, _)| n == f_name) {
                                 self.add_error(

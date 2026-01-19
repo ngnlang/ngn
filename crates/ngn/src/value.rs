@@ -543,6 +543,34 @@ pub struct SseResponseData {
     pub keep_alive_ms: u64,    // 0 disables keepalive
 }
 
+/// WebSocket response backed by channels
+/// - recv_channel: messages received from the client
+/// - send_channel: messages to send to the client
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WebSocketResponseData {
+    pub headers: std::collections::HashMap<String, String>,
+    pub recv_channel: Channel, // Channel<string>
+    pub send_channel: Channel, // Channel<string>
+}
+
+impl WebSocketResponseData {
+    pub fn new(
+        headers: std::collections::HashMap<String, String>,
+        recv_channel: Channel,
+        send_channel: Channel,
+    ) -> Self {
+        Self {
+            headers,
+            recv_channel,
+            send_channel,
+        }
+    }
+
+    pub fn into_value(self) -> Value {
+        Value::WebSocketResponse(Box::new(self))
+    }
+}
+
 impl SseResponseData {
     pub fn new(
         status: u16,
@@ -602,6 +630,7 @@ pub enum Value {
     Response(Box<ResponseData>),
     StreamingResponse(Box<StreamingResponseData>),
     SseResponse(Box<SseResponseData>),
+    WebSocketResponse(Box<WebSocketResponseData>),
     Void,
     Regex(String),
 }
@@ -834,6 +863,7 @@ impl Value {
             Value::Response(_) => "Response",
             Value::StreamingResponse(_) => "StreamingResponse",
             Value::SseResponse(_) => "SseResponse",
+            Value::WebSocketResponse(_) => "WebSocketResponse",
             Value::Void => "void",
             Value::Reference(_, _) => "reference",
         }
@@ -967,6 +997,18 @@ impl fmt::Display for Value {
                     r.keep_alive_ms
                 )
             }
+            Value::WebSocketResponse(r) => {
+                let headers_str: Vec<String> = r
+                    .headers
+                    .iter()
+                    .map(|(k, v)| format!("\"{}\": \"{}\"", k, v))
+                    .collect();
+                write!(
+                    f,
+                    "WebSocketResponse {{ headers: {{ {} }}, recv: <channel>, send: <channel> }}",
+                    headers_str.join(", ")
+                )
+            }
         }
     }
 }
@@ -1037,6 +1079,11 @@ impl std::hash::Hash for Value {
             }
             Value::SseResponse(_) => {
                 panic!("Runtime Error: SseResponse values cannot be used as map keys or set values")
+            }
+            Value::WebSocketResponse(_) => {
+                panic!(
+                    "Runtime Error: WebSocketResponse values cannot be used as map keys or set values"
+                )
             }
         }
     }

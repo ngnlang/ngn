@@ -291,8 +291,52 @@ async fn handle_connection_async_fast(
             Ok(Some((req, should_close))) => {
                 if should_close {
                     // Client requested connection close, handle this last request
-                    let response = execute_handler(&handler, req, &globals, &custom_methods).await;
-                    let _ = write_response_to_stream(&mut write_half, &response, true).await;
+                    let request = req;
+                    let response =
+                        execute_handler(&handler, request.clone(), &globals, &custom_methods).await;
+
+                    if let Value::WebSocketResponse(ws) = &response {
+                        // Upgrade (handshake) + websocket session
+                        let sec_key = match is_valid_websocket_upgrade_request(&request) {
+                            Ok(k) => k,
+                            Err(msg) => {
+                                let body = format!("Bad Request: {}", msg);
+                                let mut fields = std::collections::HashMap::new();
+                                fields.insert(
+                                    "status".to_string(),
+                                    Value::Numeric(crate::value::Number::I64(400)),
+                                );
+                                fields.insert("body".to_string(), Value::String(body));
+                                fields.insert(
+                                    "headers".to_string(),
+                                    Value::Map(std::collections::HashMap::new()),
+                                );
+                                let resp = ObjectData::into_value("Response".to_string(), fields);
+                                let _ = write_response_to_stream(
+                                    &mut write_half,
+                                    &request,
+                                    &resp,
+                                    true,
+                                )
+                                .await;
+                                break;
+                            }
+                        };
+
+                        let accept = websocket_accept_key(&sec_key);
+                        let _ =
+                            write_websocket_handshake(&mut write_half, &accept, &ws.headers).await;
+
+                        let recv = ws.recv_channel.clone();
+                        let send = ws.send_channel.clone();
+
+                        // Run websocket session and then close.
+                        let _ = run_websocket_session(reader, write_half, recv, send).await;
+                        break;
+                    }
+
+                    let _ =
+                        write_response_to_stream(&mut write_half, &request, &response, true).await;
                     break;
                 }
                 req
@@ -302,13 +346,45 @@ async fn handle_connection_async_fast(
         };
 
         // Execute handler
-        let response = execute_handler(&handler, request, &globals, &custom_methods).await;
+        let response = execute_handler(&handler, request.clone(), &globals, &custom_methods).await;
+
+        if let Value::WebSocketResponse(ws) = &response {
+            // Upgrade (handshake) + websocket session
+            let sec_key = match is_valid_websocket_upgrade_request(&request) {
+                Ok(k) => k,
+                Err(msg) => {
+                    let body = format!("Bad Request: {}", msg);
+                    let mut fields = std::collections::HashMap::new();
+                    fields.insert(
+                        "status".to_string(),
+                        Value::Numeric(crate::value::Number::I64(400)),
+                    );
+                    fields.insert("body".to_string(), Value::String(body));
+                    fields.insert(
+                        "headers".to_string(),
+                        Value::Map(std::collections::HashMap::new()),
+                    );
+                    let resp = ObjectData::into_value("Response".to_string(), fields);
+                    let _ = write_response_to_stream(&mut write_half, &request, &resp, true).await;
+                    break;
+                }
+            };
+
+            let accept = websocket_accept_key(&sec_key);
+            let _ = write_websocket_handshake(&mut write_half, &accept, &ws.headers).await;
+
+            let recv = ws.recv_channel.clone();
+            let send = ws.send_channel.clone();
+
+            let _ = run_websocket_session(reader, write_half, recv, send).await;
+            break;
+        }
 
         // Check if we're at the connection limit - if so, tell client we're closing
         let should_close = request_count >= max_requests_per_connection;
 
         // Write response (with close flag if at limit)
-        if write_response_to_stream(&mut write_half, &response, should_close)
+        if write_response_to_stream(&mut write_half, &request, &response, should_close)
             .await
             .is_err()
         {
@@ -520,7 +596,7 @@ async fn handle_tls_connection_async<S>(
     custom_methods: Arc<Mutex<HashMap<String, HashMap<String, Value>>>>,
     peer_ip: String,
 ) where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     use tokio::time::timeout;
 
@@ -545,8 +621,50 @@ async fn handle_tls_connection_async<S>(
         {
             Ok(Some((req, should_close))) => {
                 if should_close {
-                    let response = execute_handler(&handler, req, &globals, &custom_methods).await;
-                    let _ = write_response_to_stream(&mut write_half, &response, true).await;
+                    let request = req;
+                    let response =
+                        execute_handler(&handler, request.clone(), &globals, &custom_methods).await;
+
+                    if let Value::WebSocketResponse(ws) = &response {
+                        let sec_key = match is_valid_websocket_upgrade_request(&request) {
+                            Ok(k) => k,
+                            Err(msg) => {
+                                let body = format!("Bad Request: {}", msg);
+                                let mut fields = std::collections::HashMap::new();
+                                fields.insert(
+                                    "status".to_string(),
+                                    Value::Numeric(crate::value::Number::I64(400)),
+                                );
+                                fields.insert("body".to_string(), Value::String(body));
+                                fields.insert(
+                                    "headers".to_string(),
+                                    Value::Map(std::collections::HashMap::new()),
+                                );
+                                let resp = ObjectData::into_value("Response".to_string(), fields);
+                                let _ = write_response_to_stream(
+                                    &mut write_half,
+                                    &request,
+                                    &resp,
+                                    true,
+                                )
+                                .await;
+                                break;
+                            }
+                        };
+
+                        let accept = websocket_accept_key(&sec_key);
+                        let _ =
+                            write_websocket_handshake(&mut write_half, &accept, &ws.headers).await;
+
+                        let recv = ws.recv_channel.clone();
+                        let send = ws.send_channel.clone();
+
+                        let _ = run_websocket_session(reader, write_half, recv, send).await;
+                        break;
+                    }
+
+                    let _ =
+                        write_response_to_stream(&mut write_half, &request, &response, true).await;
                     break;
                 }
                 req
@@ -555,11 +673,42 @@ async fn handle_tls_connection_async<S>(
             Err(_) => break,
         };
 
-        let response = execute_handler(&handler, request, &globals, &custom_methods).await;
+        let response = execute_handler(&handler, request.clone(), &globals, &custom_methods).await;
+
+        if let Value::WebSocketResponse(ws) = &response {
+            let sec_key = match is_valid_websocket_upgrade_request(&request) {
+                Ok(k) => k,
+                Err(msg) => {
+                    let body = format!("Bad Request: {}", msg);
+                    let mut fields = std::collections::HashMap::new();
+                    fields.insert(
+                        "status".to_string(),
+                        Value::Numeric(crate::value::Number::I64(400)),
+                    );
+                    fields.insert("body".to_string(), Value::String(body));
+                    fields.insert(
+                        "headers".to_string(),
+                        Value::Map(std::collections::HashMap::new()),
+                    );
+                    let resp = ObjectData::into_value("Response".to_string(), fields);
+                    let _ = write_response_to_stream(&mut write_half, &request, &resp, true).await;
+                    break;
+                }
+            };
+
+            let accept = websocket_accept_key(&sec_key);
+            let _ = write_websocket_handshake(&mut write_half, &accept, &ws.headers).await;
+
+            let recv = ws.recv_channel.clone();
+            let send = ws.send_channel.clone();
+
+            let _ = run_websocket_session(reader, write_half, recv, send).await;
+            break;
+        }
 
         let should_close = request_count >= max_requests_per_connection;
 
-        if write_response_to_stream(&mut write_half, &response, should_close)
+        if write_response_to_stream(&mut write_half, &request, &response, should_close)
             .await
             .is_err()
         {
@@ -714,9 +863,360 @@ where
     ))
 }
 
+fn get_lowercase_request_header(req: &Value, name: &str) -> Option<String> {
+    let name = name.to_ascii_lowercase();
+    if let Value::Object(o) = req {
+        if o.model_name != "Request" {
+            return None;
+        }
+        if let Some(Value::Map(headers)) = o.fields.get("headers") {
+            for (k, v) in headers {
+                if let (Value::String(key), Value::String(val)) = (k, v) {
+                    if key.eq_ignore_ascii_case(&name) {
+                        return Some(val.clone());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn connection_header_has_token(connection_value: &str, token: &str) -> bool {
+    let token = token.to_ascii_lowercase();
+    for part in connection_value.split(',') {
+        if part.trim().to_ascii_lowercase() == token {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_valid_websocket_upgrade_request(req: &Value) -> Result<String, String> {
+    let upgrade = get_lowercase_request_header(req, "upgrade").unwrap_or_default();
+    if upgrade.to_ascii_lowercase() != "websocket" {
+        return Err("Missing/invalid Upgrade: websocket".to_string());
+    }
+
+    let connection = get_lowercase_request_header(req, "connection").unwrap_or_default();
+    if !connection_header_has_token(&connection, "upgrade") {
+        return Err("Missing/invalid Connection: Upgrade".to_string());
+    }
+
+    let version = get_lowercase_request_header(req, "sec-websocket-version").unwrap_or_default();
+    if version.trim() != "13" {
+        return Err("Missing/invalid Sec-WebSocket-Version (expected 13)".to_string());
+    }
+
+    let key = get_lowercase_request_header(req, "sec-websocket-key")
+        .ok_or_else(|| "Missing Sec-WebSocket-Key".to_string())?;
+
+    Ok(key)
+}
+
+fn websocket_accept_key(sec_websocket_key: &str) -> String {
+    use base64::Engine;
+    use sha1::Digest;
+
+    const GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+    let mut hasher = sha1::Sha1::new();
+    hasher.update(sec_websocket_key.as_bytes());
+    hasher.update(GUID.as_bytes());
+    let digest = hasher.finalize();
+
+    base64::engine::general_purpose::STANDARD.encode(digest)
+}
+
+async fn write_websocket_handshake<W>(
+    stream: &mut W,
+    accept_key: &str,
+    user_headers: &std::collections::HashMap<String, String>,
+) -> std::io::Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    use std::fmt::Write;
+    use tokio::io::AsyncWriteExt;
+
+    let mut resp = String::with_capacity(256);
+    resp.push_str("HTTP/1.1 101 Switching Protocols\r\n");
+    resp.push_str("Upgrade: websocket\r\n");
+    resp.push_str("Connection: Upgrade\r\n");
+    let _ = write!(resp, "Sec-WebSocket-Accept: {}\r\n", accept_key);
+
+    for (k, v) in user_headers {
+        if k.eq_ignore_ascii_case("upgrade")
+            || k.eq_ignore_ascii_case("connection")
+            || k.eq_ignore_ascii_case("sec-websocket-accept")
+            || k.eq_ignore_ascii_case("sec-websocket-protocol")
+        {
+            continue;
+        }
+        let _ = write!(resp, "{}: {}\r\n", k, v);
+    }
+
+    resp.push_str("\r\n");
+
+    stream.write_all(resp.as_bytes()).await?;
+    stream.flush().await?;
+    Ok(())
+}
+
+fn close_channel(chan: &crate::value::Channel) {
+    let mut closed = chan.is_closed.lock().unwrap();
+    *closed = true;
+}
+
+#[derive(Debug)]
+enum WsControl {
+    Pong(Vec<u8>),
+    Close(u16),
+}
+
+async fn read_ws_frame<R>(reader: &mut R) -> std::io::Result<Option<(u8, bool, Vec<u8>)>>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    use tokio::io::AsyncReadExt;
+
+    let mut hdr = [0u8; 2];
+    match reader.read_exact(&mut hdr).await {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(e) => return Err(e),
+    }
+
+    let b1 = hdr[0];
+    let b2 = hdr[1];
+
+    let fin = (b1 & 0x80) != 0;
+    let opcode = b1 & 0x0f;
+
+    let masked = (b2 & 0x80) != 0;
+    let mut len: u64 = (b2 & 0x7f) as u64;
+
+    if len == 126 {
+        let mut ext = [0u8; 2];
+        reader.read_exact(&mut ext).await?;
+        len = u16::from_be_bytes(ext) as u64;
+    } else if len == 127 {
+        let mut ext = [0u8; 8];
+        reader.read_exact(&mut ext).await?;
+        len = u64::from_be_bytes(ext);
+    }
+
+    if !masked {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WebSocket protocol error: unmasked client frame",
+        ));
+    }
+
+    let mut mask = [0u8; 4];
+    reader.read_exact(&mut mask).await?;
+
+    let mut payload = vec![0u8; len as usize];
+    if len > 0 {
+        reader.read_exact(&mut payload).await?;
+        for i in 0..payload.len() {
+            payload[i] ^= mask[i % 4];
+        }
+    }
+
+    Ok(Some((opcode, fin, payload)))
+}
+
+async fn write_ws_frame<W>(writer: &mut W, opcode: u8, payload: &[u8]) -> std::io::Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    use tokio::io::AsyncWriteExt;
+
+    let fin_opcode = 0x80u8 | (opcode & 0x0f);
+
+    // Server-to-client frames are never masked.
+    let mut header = Vec::with_capacity(14);
+    header.push(fin_opcode);
+
+    let len = payload.len() as u64;
+    if len <= 125 {
+        header.push(len as u8);
+    } else if len <= 65535 {
+        header.push(126);
+        header.extend_from_slice(&(len as u16).to_be_bytes());
+    } else {
+        header.push(127);
+        header.extend_from_slice(&(len as u64).to_be_bytes());
+    }
+
+    writer.write_all(&header).await?;
+    if !payload.is_empty() {
+        writer.write_all(payload).await?;
+    }
+    writer.flush().await?;
+    Ok(())
+}
+
+async fn write_ws_text<W>(writer: &mut W, text: &str) -> std::io::Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    write_ws_frame(writer, 0x1, text.as_bytes()).await
+}
+
+async fn write_ws_close<W>(writer: &mut W, code: u16) -> std::io::Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    let payload = code.to_be_bytes();
+    write_ws_frame(writer, 0x8, &payload).await
+}
+
+async fn write_ws_pong<W>(writer: &mut W, payload: &[u8]) -> std::io::Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    write_ws_frame(writer, 0xA, payload).await
+}
+
+async fn run_websocket_session<R, W>(
+    mut reader: R,
+    mut writer: W,
+    recv_channel: crate::value::Channel,
+    send_channel: crate::value::Channel,
+) -> std::io::Result<()>
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+    W: tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    use tokio::sync::mpsc;
+
+    let (ctrl_tx, mut ctrl_rx) = mpsc::channel::<WsControl>(16);
+
+    let send_for_writer = send_channel.clone();
+    let writer_task = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                cmd = ctrl_rx.recv() => {
+                    match cmd {
+                        Some(WsControl::Pong(payload)) => {
+                            let _ = write_ws_pong(&mut writer, &payload).await;
+                        }
+                        Some(WsControl::Close(code)) => {
+                            let _ = write_ws_close(&mut writer, code).await;
+                            break;
+                        }
+                        None => {
+                            // reader ended
+                            break;
+                        }
+                    }
+                }
+                _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {
+                    // Drain application sends
+                    loop {
+                        let next = {
+                            let mut buf = send_for_writer.buffer.lock().unwrap();
+                            buf.pop_front()
+                        };
+                        match next {
+                            Some(v) => {
+                                let s = match v {
+                                    Value::String(s) => s,
+                                    other => other.to_string(),
+                                };
+                                let _ = write_ws_text(&mut writer, &s).await;
+                            }
+                            None => break,
+                        }
+                    }
+
+                    let is_closed = *send_for_writer.is_closed.lock().unwrap();
+                    let is_empty = send_for_writer.buffer.lock().unwrap().is_empty();
+                    if is_closed && is_empty {
+                        let _ = write_ws_close(&mut writer, 1000).await;
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    // Reader loop runs here so it is not cancel-interrupted.
+    loop {
+        let frame = read_ws_frame(&mut reader).await;
+        let frame = match frame {
+            Ok(v) => v,
+            Err(_) => {
+                let _ = ctrl_tx.send(WsControl::Close(1002)).await;
+                break;
+            }
+        };
+
+        let (opcode, fin, payload) = match frame {
+            Some(x) => x,
+            None => break,
+        };
+
+        // v1: reject fragmentation
+        if !fin {
+            let _ = ctrl_tx.send(WsControl::Close(1002)).await;
+            break;
+        }
+
+        match opcode {
+            0x1 => {
+                match String::from_utf8(payload) {
+                    Ok(text) => {
+                        recv_channel
+                            .buffer
+                            .lock()
+                            .unwrap()
+                            .push_back(Value::String(text));
+                    }
+                    Err(_) => {
+                        let _ = ctrl_tx.send(WsControl::Close(1007)).await; // invalid frame payload data
+                        break;
+                    }
+                }
+            }
+            0x2 => {
+                let _ = ctrl_tx.send(WsControl::Close(1003)).await; // unsupported data
+                break;
+            }
+            0x8 => {
+                let _ = ctrl_tx.send(WsControl::Close(1000)).await;
+                break;
+            }
+            0x9 => {
+                let _ = ctrl_tx.send(WsControl::Pong(payload)).await;
+            }
+            0xA => {
+                // pong - ignore
+            }
+            _ => {
+                let _ = ctrl_tx.send(WsControl::Close(1002)).await;
+                break;
+            }
+        }
+    }
+
+    // Close both channels (per v1 decision)
+    close_channel(&recv_channel);
+    close_channel(&send_channel);
+
+    // Ensure writer task finishes
+    drop(ctrl_tx);
+    let _ = writer_task.await;
+
+    Ok(())
+}
+
 /// Write HTTP response to split write half with proper error handling
 async fn write_response_to_stream<W>(
     stream: &mut W,
+    _request: &Value,
     response: &Value,
     close_connection: bool,
 ) -> std::io::Result<()>
@@ -735,6 +1235,9 @@ where
     if let Value::SseResponse(sse) = response {
         return write_sse_response_to_stream(stream, sse, close_connection).await;
     }
+
+    // WebSocketResponse is handled at the connection loop level (upgrade + session)
+    // because it needs access to both the read and write halves.
 
     let (status, headers, body) = if let Value::Object(obj) = response {
         let status = match obj.fields.get("status") {

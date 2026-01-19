@@ -1274,6 +1274,16 @@ impl Fiber {
                     }
                 }
 
+                // Add defaults for WebSocketResponse models
+                if model_name == "WebSocketResponse" {
+                    if !fields.contains_key("headers") {
+                        fields.insert(
+                            "headers".to_string(),
+                            Value::Map(std::collections::HashMap::new()),
+                        );
+                    }
+                }
+
                 // Handle StreamingResponse specially - create a StreamingResponse Value
                 if model_name == "StreamingResponse" {
                     let status = match fields.get("status") {
@@ -1367,6 +1377,49 @@ impl Fiber {
                         keep_alive_ms,
                     );
                     self.set_reg_at(dest, sse.into_value());
+                    return FiberStatus::Running;
+                }
+
+                // Handle WebSocketResponse specially - create a WebSocketResponse Value
+                if model_name == "WebSocketResponse" {
+                    let headers = match fields.get("headers") {
+                        Some(Value::Map(m)) => {
+                            let mut h = std::collections::HashMap::new();
+                            for (k, v) in m {
+                                if let (Value::String(key), Value::String(val)) = (k, v) {
+                                    h.insert(key.clone(), val.clone());
+                                }
+                            }
+                            h
+                        }
+                        Some(Value::Object(o)) => {
+                            let mut h = std::collections::HashMap::new();
+                            for (key, val) in &o.fields {
+                                if let Value::String(v) = val {
+                                    h.insert(key.clone(), v.clone());
+                                }
+                            }
+                            h
+                        }
+                        _ => std::collections::HashMap::new(),
+                    };
+
+                    let recv_channel = match fields.get("recv") {
+                        Some(Value::Channel(c)) => c.clone(),
+                        _ => panic!("Runtime Error: WebSocketResponse recv must be a channel"),
+                    };
+
+                    let send_channel = match fields.get("send") {
+                        Some(Value::Channel(c)) => c.clone(),
+                        _ => panic!("Runtime Error: WebSocketResponse send must be a channel"),
+                    };
+
+                    let ws = crate::value::WebSocketResponseData::new(
+                        headers,
+                        recv_channel,
+                        send_channel,
+                    );
+                    self.set_reg_at(dest, ws.into_value());
                     return FiberStatus::Running;
                 }
 
