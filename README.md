@@ -90,6 +90,7 @@ fn main() {
 - `i64`, `i32`, `i16`, `i8`, `u64`, `u32`, `u16`, `u8`, `f64`, `f32`
 - `bool`
 - `array<type>`
+- `bytes`
 - `void`
 - `map<key_type, value_type>`
 - `set<value_type>`
@@ -172,6 +173,72 @@ print("World")
 // Hello
 // World
 ```
+
+## Bytes
+`bytes` is a built-in binary data type. It represents an arbitrary sequence of raw bytes (0..255).
+
+You will most commonly use `bytes` for binary WebSocket frames, encoding/decoding, and other I/O-style APIs.
+
+### Constructors
+
+### `bytes()`
+Create an empty bytes value.
+
+### `bytes(string)`
+Create bytes from a UTF-8 string.
+
+```ngn
+const b = bytes("hello")
+print(b.length()) // 5
+```
+
+### `bytes(array<u8>)`
+Create bytes from an array of numeric byte values.
+
+Each element must be in the range 0..255.
+
+```ngn
+const raw: array<u8> = [0, 255, 16]
+const b = bytes(raw)
+print(b.length()) // 3
+```
+
+### Methods
+
+### `length()`
+Return the number of bytes.
+
+### `copy(start?, stop?)`
+Copy an entire bytes value or a section of it, based on indices. This does not change the bytes you copied from.
+
+- If `start` is provided but `stop` is not, it copies everything upto and including the end.
+- If `stop` is provided (implies `start`), the copy excludes the item at that index.
+- If neither is provided, the entire bytes is copied.
+
+### `slice(start, stop?)`
+Remove a section of bytes by providing a start index and an optional stop index. This changes the original bytes value and returns the sliced bytes.
+
+- If `stop` is provided, the slice excludes the item at that index.
+- If `stop` is not provided, it removes everything upto and including the last byte.
+- Since you're mutating the original bytes, it must be declared with `var`.
+
+```ngn
+var b = bytes("abcd")
+const sliced = b.slice(1, 3)
+
+print(sliced.toStringStrict()) // bc
+print(b.toStringStrict()) // ad
+```
+
+### `toString()`
+Decode bytes as UTF-8 using a lossy conversion. Invalid sequences are replaced.
+
+This is useful for logging/debugging or when you are working with "mostly" UTF-8 data.
+
+### `toStringStrict()`
+Decode bytes as UTF-8 using a strict conversion.
+
+If the bytes are not valid UTF-8, this throws a runtime error.
 
 ## String Interpolation
 ```ngn
@@ -1816,13 +1883,13 @@ In ngn, a WebSocket connection is represented by two channels:
 - `send`: messages to the client (server -> client)
 
 v1 notes:
-- text-only (binary frames are rejected)
+- supports `string` (text frames) and `bytes` (binary frames) - i.e. `WsMessage` type
 - no subprotocol selection
 
 ```ngn
 fn handler(req: Request): WebSocketResponse {
-  const recv = channel<string>()
-  const send = channel<string>()
+  const recv = channel<WsMessage>()
+  const send = channel<WsMessage>()
 
   // Echo everything back
   thread(|| {
@@ -1840,8 +1907,8 @@ export default { fetch: handler }
 
 ### `WebSocketResponse` properties
 - `headers`: The headers to include in the 101 Switching Protocols response (optional)
-- `recv`: A `channel<string>` that receives client messages. It is closed when the client disconnects.
-- `send`: A `channel<string>` used to send messages to the client. Close it to close the websocket.
+- `recv`: A `channel<WsMessage>` that receives client messages. It is closed when the client disconnects.
+- `send`: A `channel<WsMessage>` used to send messages to the client. Close it to close the websocket.
 
 ## Modules
 You can use `export` and `import` to create modules in your project. This is a functions-only feature.
