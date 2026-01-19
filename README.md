@@ -1698,6 +1698,49 @@ export default { fetch: handler }
 - `headers`: The headers to include in the response
 - `body`: A `channel<string>` that produces chunks. Close the channel to end the stream.
 
+## `SseResponse` (Server-Sent Events)
+Server-Sent Events (SSE) streams a sequence of events over a single HTTP response. This is useful for realtime updates (notifications, progress updates, model inference tokens, etc.).
+
+SSE works over both HTTP and HTTPS in ngn.
+
+```ngn
+fn handler(req: Request): SseResponse {
+  const events = channel<SseMessage>()
+
+  thread(|| {
+    events <- SseMessage::Event(SseEvent { data: "Hello", event: "hello", id: "", retryMs: 0, comment: "" })
+    sleep(500)
+
+    // Wrap raw strings as SseMessage::Data(...)
+    events <- SseMessage::Data("World")
+
+    events.close()
+  })
+
+  return SseResponse {
+    status: 200,
+    headers: { "Access-Control-Allow-Origin": "*" },
+    body: events,
+    keepAliveMs: 15000,
+  }
+}
+
+export default { fetch: handler }
+```
+
+### `SseResponse` properties
+- `status`: The HTTP status code - default is 200
+- `headers`: The headers to include in the response
+- `body`: A `channel<SseMessage>` that can send either `SseMessage::Data(string)` or `SseMessage::Event(SseEvent)` values
+- `keepAliveMs`: Optional keepalive interval (in milliseconds). If > 0, the server periodically sends `: keepalive` comments while idle.
+
+### `SseEvent` properties
+- `data`: Event payload (string). Newlines are sent as multiple `data:` lines.
+- `event`: Optional event name (maps to the SSE `event:` field)
+- `id`: Optional event id (maps to the SSE `id:` field)
+- `retryMs`: Optional client reconnection hint (maps to the SSE `retry:` field)
+- `comment`: Optional comment line (maps to the SSE `: ...` field)
+
 ## Modules
 You can use `export` and `import` to create modules in your project. This is a functions-only feature.
 
@@ -1781,7 +1824,10 @@ fn main() {
 ### tbx::http
 Create an HTTP server.
 
-- `serve`: create an HTTP server
+- `serve(handler, config?)`: create an HTTP/HTTPS server
+
+If `config.tls` is present, ngn starts an HTTPS server. Otherwise it starts HTTP.
+
 ```ngn
 import { serve } from "tbx::http"
 
@@ -1794,9 +1840,23 @@ fn handleRequest(req: Request): Response {
 }
 
 fn main() {
-  print("Starting HTTP server on port 3000...")
-  serve(3000, handleRequest)
+  serve(handleRequest)
 }
+```
+
+- `serve` config (2nd arg)
+```ngn
+serve(handleRequest, {
+  port: 3000,
+  keepAliveTimeoutMs: 30000,
+  maxRequestsPerConnection: 1000,
+
+  // If present, server starts in HTTPS mode.
+  tls: {
+    cert: "./cert.pem",
+    key: "./key.pem",
+  },
+})
 ```
 
 - default export with fetch method (serve called under the hood)
@@ -1810,6 +1870,28 @@ fn fetch(req: Request): Response {
 }
 
 export default { fetch: fetch }
+```
+
+- export default `config`
+
+If you export an object with a `config` field, ngn reads it when booting the server:
+
+```ngn
+export default {
+  config: {
+    port: 3000,
+    keepAliveTimeoutMs: 30000,
+    maxRequestsPerConnection: 1000,
+
+    // Optional TLS config. If present, the server starts in HTTPS mode.
+    tls: {
+      cert: "./cert.pem",
+      key: "./key.pem",
+    },
+  },
+
+  fetch: fetch,
+}
 ```
 
 ### tbx::io
