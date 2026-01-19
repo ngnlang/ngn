@@ -13,6 +13,7 @@ pub enum Type {
     F64,
     F32,
     String,
+    Bytes,
     Bool,
     Void,
     Array(Box<Type>),
@@ -233,6 +234,7 @@ pub enum ExprKind {
     ReceiveMaybe(Box<Expr>),
     Channel(Option<Type>),
     State(Box<Expr>),
+    Bytes(Option<Box<Expr>>),
     MethodCall(Box<Expr>, String, Vec<Expr>),
     Index(Box<Expr>, Box<Expr>),
     Unary {
@@ -787,6 +789,10 @@ impl Parser {
                 "string" => {
                     self.advance();
                     Type::String
+                }
+                "bytes" => {
+                    self.advance();
+                    Type::Bytes
                 }
                 "bool" => {
                     self.advance();
@@ -1522,6 +1528,29 @@ impl Parser {
                     span: Span::new(start, self.previous_span.end),
                 }
             }
+            Token::Bytes => {
+                let start = self.current_span.start;
+                self.advance();
+                self.expect(Token::LParen);
+
+                let arg = if self.current_token == Token::RParen {
+                    None
+                } else {
+                    let expr = self.parse_expression();
+                    Some(Box::new(expr))
+                };
+
+                if self.current_token == Token::Comma {
+                    // bytes() takes 0 or 1 arguments
+                    panic!("Parse Error: bytes() takes at most 1 argument");
+                }
+
+                self.expect(Token::RParen);
+                Expr {
+                    kind: ExprKind::Bytes(arg),
+                    span: Span::new(start, self.previous_span.end),
+                }
+            }
             Token::Map => {
                 let start = self.current_span.start;
                 self.advance(); // consume 'map'
@@ -1769,6 +1798,7 @@ impl Parser {
                 | Token::Thread
                 | Token::LArrow
                 | Token::Channel
+                | Token::Bytes
                 | Token::State
                 | Token::Bool(_)
                 | Token::Enum

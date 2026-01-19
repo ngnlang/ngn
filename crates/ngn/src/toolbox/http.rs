@@ -1122,11 +1122,17 @@ where
                         };
                         match next {
                             Some(v) => {
-                                let s = match v {
-                                    Value::String(s) => s,
-                                    other => other.to_string(),
-                                };
-                                let _ = write_ws_text(&mut writer, &s).await;
+                                match v {
+                                    Value::String(s) => {
+                                        let _ = write_ws_text(&mut writer, &s).await;
+                                    }
+                                    Value::Bytes(b) => {
+                                        let _ = write_ws_frame(&mut writer, 0x2, b.as_slice()).await;
+                                    }
+                                    other => {
+                                        let _ = write_ws_text(&mut writer, &other.to_string()).await;
+                                    }
+                                }
                             }
                             None => break,
                         }
@@ -1182,8 +1188,12 @@ where
                 }
             }
             0x2 => {
-                let _ = ctrl_tx.send(WsControl::Close(1003)).await; // unsupported data
-                break;
+                // binary
+                recv_channel
+                    .buffer
+                    .lock()
+                    .unwrap()
+                    .push_back(Value::Bytes(std::sync::Arc::new(payload)));
             }
             0x8 => {
                 let _ = ctrl_tx.send(WsControl::Close(1000)).await;

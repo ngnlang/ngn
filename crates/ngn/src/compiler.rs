@@ -697,6 +697,17 @@ impl Compiler {
                 self.reg_top = dest + 1;
                 dest
             }
+            ExprKind::Bytes(arg) => {
+                let dest = self.alloc_reg();
+                let arg_reg = if let Some(expr) = arg {
+                    self.compile_expr(expr)
+                } else {
+                    u16::MAX
+                };
+                self.instructions.push(OpCode::CreateBytes(dest, arg_reg));
+                self.reg_top = dest + 1;
+                dest
+            }
             ExprKind::ModelInstance { name, fields } => {
                 let model_name_idx = self.add_constant(Value::String(name.clone()));
                 // Collect field names and compile values into consecutive registers

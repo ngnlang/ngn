@@ -5,8 +5,8 @@ use crate::parser::Type;
 
 /// All core global names - these are auto-injected into every module
 pub const GLOBAL_NAMES: &[&str] = &[
-    "print", "echo", "sleep", "thread", "state", "channel", "json", "spawn", "map", "set", "fetch",
-    "panic", "env",
+    "print", "echo", "sleep", "thread", "state", "channel", "bytes", "json", "spawn", "map", "set",
+    "fetch", "panic", "env",
 ];
 
 /// Type definition for a global symbol

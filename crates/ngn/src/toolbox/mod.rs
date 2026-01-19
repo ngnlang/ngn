@@ -1,4 +1,5 @@
 pub mod core;
+pub mod encoding;
 pub mod http;
 pub mod io;
 pub mod math;
@@ -8,6 +9,10 @@ pub const NATIVE_ABS: u16 = 1;
 pub const NATIVE_ASSERT: u16 = 2;
 pub const NATIVE_ROUND: u16 = 3;
 pub const NATIVE_SERVE: u16 = 4;
+pub const NATIVE_HEX_ENCODE: u16 = 5;
+pub const NATIVE_HEX_DECODE: u16 = 11;
+pub const NATIVE_BASE64_ENCODE: u16 = 12;
+pub const NATIVE_BASE64_DECODE: u16 = 13;
 pub const NATIVE_FILE_READ: u16 = 6;
 pub const NATIVE_FILE_WRITE: u16 = 7;
 pub const NATIVE_FILE_APPEND: u16 = 8;
@@ -35,6 +40,7 @@ impl Toolbox {
         modules.insert("test".to_string(), test::create_module());
         modules.insert("http".to_string(), http::create_module());
         modules.insert("io".to_string(), io::create_module());
+        modules.insert("encoding".to_string(), encoding::create_module());
 
         Self { modules }
     }
@@ -77,6 +83,10 @@ pub fn get_native_id(module: &str, name: &str) -> Option<u16> {
         ("test", "assert") => Some(NATIVE_ASSERT),
         ("math", "round") => Some(NATIVE_ROUND),
         ("http", "serve") => Some(NATIVE_SERVE),
+        ("encoding", "hexEncode") => Some(NATIVE_HEX_ENCODE),
+        ("encoding", "hexDecode") => Some(NATIVE_HEX_DECODE),
+        ("encoding", "base64Encode") => Some(NATIVE_BASE64_ENCODE),
+        ("encoding", "base64Decode") => Some(NATIVE_BASE64_DECODE),
         ("io", "read") => Some(NATIVE_FILE_READ),
         ("io", "write") => Some(NATIVE_FILE_WRITE),
         ("io", "append") => Some(NATIVE_FILE_APPEND),

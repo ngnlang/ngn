@@ -384,21 +384,28 @@ impl Number {
             (Number::I64(v), 9) => Number::F32(v as f32), // Precision loss possible
             (Number::I64(v), 10) => Number::F64(v as f64), // Precision loss possible
 
+            // Unsigned integer promotion rules.
+            // Note: we allow promotion to i64 to support mixed signed/unsigned arithmetic and
+            // comparisons (e.g. u8 from bytes indexing compared with i64 literals).
             (Number::U8(v), 2) => Number::U16(v as u16),
             (Number::U8(v), 3) => Number::U32(v as u32),
             (Number::U8(v), 4) => Number::U64(v as u64),
+            (Number::U8(v), 8) => Number::I64(v as i64), // Allow mixed
             (Number::U8(v), 9) => Number::F32(v as f32),
             (Number::U8(v), 10) => Number::F64(v as f64),
 
             (Number::U16(v), 3) => Number::U32(v as u32),
             (Number::U16(v), 4) => Number::U64(v as u64),
+            (Number::U16(v), 8) => Number::I64(v as i64), // Allow mixed
             (Number::U16(v), 9) => Number::F32(v as f32),
             (Number::U16(v), 10) => Number::F64(v as f64),
 
             (Number::U32(v), 4) => Number::U64(v as u64),
+            (Number::U32(v), 8) => Number::I64(v as i64), // Allow mixed
             (Number::U32(v), 9) => Number::F32(v as f32), // Precision loss possible
             (Number::U32(v), 10) => Number::F64(v as f64),
 
+            (Number::U64(v), 8) => Number::I64(v as i64), // Allow mixed
             (Number::U64(v), 9) => Number::F32(v as f32), // Precision loss possible
             (Number::U64(v), 10) => Number::F64(v as f64), // Precision loss possible
 
@@ -618,6 +625,7 @@ pub enum Value {
     NativeFunction(u16),
     Numeric(Number),
     String(String),
+    Bytes(Arc<Vec<u8>>),
     Reference(usize, usize), // (EnvironmentIndex, VariableIndex)
     Array(Vec<Value>),
     Tuple(Vec<Value>),
@@ -738,6 +746,7 @@ impl Value {
             }
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::String(a), Value::String(b)) => a == b,
+            (Value::Bytes(a), Value::Bytes(b)) => a.as_slice() == b.as_slice(),
             (Value::Array(a), Value::Array(b)) => {
                 if a.len() != b.len() {
                     return false;
@@ -849,6 +858,7 @@ impl Value {
                 Number::F64(_) | Number::F32(_) => "f64",
             },
             Value::String(_) => "string",
+            Value::Bytes(_) => "bytes",
             Value::Bool(_) => "bool",
             Value::Array(_) => "array",
             Value::Tuple(_) => "tuple",
@@ -878,6 +888,7 @@ impl fmt::Display for Value {
             Value::NativeFunction(id) => write!(f, "<fn {}>", id),
             Value::Numeric(n) => write!(f, "{}", n),
             Value::String(s) => write!(f, "{}", s),
+            Value::Bytes(b) => write!(f, "<bytes len={}>", b.len()),
             Value::Reference(env_idx, var_idx) => write!(f, "&({}:{})", env_idx, var_idx),
             Value::Array(arr) => {
                 write!(f, "[")?;
@@ -1033,6 +1044,7 @@ impl std::hash::Hash for Value {
                 }
             }
             Value::String(s) => s.hash(state),
+            Value::Bytes(b) => b.as_slice().hash(state),
             Value::Bool(b) => b.hash(state),
             Value::Void => 0.hash(state),
             Value::Regex(r) => r.hash(state),
@@ -1105,6 +1117,7 @@ impl Value {
             Value::Void => serde_json::Value::Null,
             Value::Bool(b) => serde_json::Value::Bool(*b),
             Value::String(s) => serde_json::Value::String(s.clone()),
+            Value::Bytes(_) => serde_json::Value::Null,
             Value::Numeric(n) => match n {
                 Number::I64(v) => serde_json::json!(*v),
                 Number::I32(v) => serde_json::json!(*v),

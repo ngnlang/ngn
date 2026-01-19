@@ -187,6 +187,12 @@ impl Analyzer {
             Type::Union(vec![Type::String, Type::Model("SseEvent".to_string())]),
         );
 
+        // WsMessage is the typed payload for WebSocketResponse.recv/send.
+        analyzer.type_aliases.insert(
+            "WsMessage".to_string(),
+            Type::Union(vec![Type::String, Type::Bytes]),
+        );
+
         analyzer.models.insert(
             "SseResponse".to_string(),
             ModelDef {
@@ -215,8 +221,14 @@ impl Analyzer {
                 type_params: vec![],
                 fields: vec![
                     ("headers".to_string(), Type::Any), // accepts map or object literal
-                    ("recv".to_string(), Type::Channel(Box::new(Type::String))),
-                    ("send".to_string(), Type::Channel(Box::new(Type::String))),
+                    (
+                        "recv".to_string(),
+                        Type::Channel(Box::new(Type::Model("WsMessage".to_string()))),
+                    ),
+                    (
+                        "send".to_string(),
+                        Type::Channel(Box::new(Type::Model("WsMessage".to_string()))),
+                    ),
                 ],
             },
         );
@@ -845,6 +857,26 @@ impl Analyzer {
                                     vec![Type::Void, Type::String],
                                 )),
                             },
+                            ("encoding", "hexEncode") => Type::Function {
+                                params: vec![Type::Bytes],
+                                optional_count: 0,
+                                return_type: Box::new(Type::String),
+                            },
+                            ("encoding", "hexDecode") => Type::Function {
+                                params: vec![Type::String],
+                                optional_count: 0,
+                                return_type: Box::new(Type::Bytes),
+                            },
+                            ("encoding", "base64Encode") => Type::Function {
+                                params: vec![Type::Bytes],
+                                optional_count: 0,
+                                return_type: Box::new(Type::String),
+                            },
+                            ("encoding", "base64Decode") => Type::Function {
+                                params: vec![Type::String],
+                                optional_count: 0,
+                                return_type: Box::new(Type::Bytes),
+                            },
                             _ => Type::Function {
                                 params: vec![Type::Any],
                                 optional_count: 0,
@@ -1401,12 +1433,33 @@ impl Analyzer {
                     self.add_error(
                         format!(
                             "Type Error: channel() requires a type parameter (e.g. channel<i64>())"
-                        ),
+                        )
+                        .to_string(),
                         expr.span,
                     );
                 }
                 Type::Channel(Box::new(inner_ty.clone().unwrap_or(Type::Any)))
             }
+            ExprKind::Bytes(arg) => match arg {
+                None => Type::Bytes,
+                Some(e) => {
+                    let ty = self.check_expression(e);
+                    match ty {
+                        Type::String => Type::Bytes,
+                        Type::Array(inner) if *inner == Type::U8 => Type::Bytes,
+                        _ => {
+                            self.add_error(
+                                    format!(
+                                        "Type Error: bytes() expects a string or array<u8> argument, got {:?}",
+                                        ty
+                                    ),
+                                    expr.span,
+                                );
+                            Type::Bytes
+                        }
+                    }
+                }
+            },
             ExprKind::ReceiveCount(chan_expr, count_expr) => {
                 let chan_ty = self.check_expression(chan_expr);
                 let _count_ty = self.check_expression(count_expr);
@@ -2022,6 +2075,50 @@ impl Analyzer {
                             }
                         }
                     }
+
+                    // Bytes methods
+                    Type::Bytes => match method.as_str() {
+                        "length" => {
+                            if !args.is_empty() {
+                                self.add_error(
+                                    "Type Error: .length() takes no arguments".to_string(),
+                                    expr.span,
+                                );
+                            }
+                            Type::I64
+                        }
+                        "copy" | "slice" => {
+                            for arg in args {
+                                let arg_ty = self.check_expression(arg);
+                                if !self.types_compatible(&Type::I64, &arg_ty) {
+                                    self.add_error(
+                                        format!(
+                                            "Type Error: {} index must be I64, got {:?}",
+                                            method, arg_ty
+                                        ),
+                                        expr.span,
+                                    );
+                                }
+                            }
+                            Type::Bytes
+                        }
+                        "toString" | "toStringStrict" => {
+                            if !args.is_empty() {
+                                self.add_error(
+                                    format!("Type Error: .{}() takes no arguments", method),
+                                    expr.span,
+                                );
+                            }
+                            Type::String
+                        }
+                        _ => {
+                            self.add_error(
+                                format!("Type Error: Unknown bytes method '{}'", method),
+                                expr.span,
+                            );
+                            Type::Any
+                        }
+                    },
 
                     // String methods
                     Type::String => {
@@ -2700,6 +2797,7 @@ impl Analyzer {
                 match obj_ty {
                     Type::Array(inner) => *inner,
                     Type::String => Type::String,
+                    Type::Bytes => Type::U8,
                     Type::Any => Type::Any,
                     _ => {
                         self.add_error(

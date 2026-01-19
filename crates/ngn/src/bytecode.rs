@@ -73,6 +73,7 @@ pub enum OpCode {
     Receive(u16, u16),           // (DestReg, ChannelReg)
     CreateChannel(u16, u16),     // (DestReg, Capacity)
     CreateState(u16, u16),       // (DestReg, InitialValueReg)
+    CreateBytes(u16, u16),       // (DestReg, ArgReg) - ArgReg=u16::MAX means no args
     StateRead(u16, u16),         // (DestReg, StateReg)
     StateWrite(u16, u16),        // (StateReg, ValueReg)
     StateUpdate(u16, u16),       // (StateReg, ClosureReg)

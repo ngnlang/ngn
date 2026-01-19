@@ -21,3 +21,4 @@ urlencoding = "2.1.3"
 indexmap = { version = "2.0", features = ["serde"] }
 sha1 = "0.10"
 base64 = "0.22"
+hex = "0.4"

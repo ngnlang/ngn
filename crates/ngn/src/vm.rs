@@ -473,14 +473,18 @@ impl Fiber {
 
                         // Dispatch to the appropriate toolbox function
                         let result = match id {
-                            1 => crate::toolbox::math::abs(args),        // NATIVE_ABS
-                            2 => crate::toolbox::test::assert(args),     // NATIVE_ASSERT
-                            3 => crate::toolbox::math::round(args),      // NATIVE_ROUND
-                            6 => crate::toolbox::io::file_read(args),    // NATIVE_FILE_READ
-                            7 => crate::toolbox::io::file_write(args),   // NATIVE_FILE_WRITE
-                            8 => crate::toolbox::io::file_append(args),  // NATIVE_FILE_APPEND
-                            9 => crate::toolbox::io::file_exists(args),  // NATIVE_FILE_EXISTS
-                            10 => crate::toolbox::io::file_delete(args), // NATIVE_FILE_DELETE
+                            1 => crate::toolbox::math::abs(args),             // NATIVE_ABS
+                            2 => crate::toolbox::test::assert(args),          // NATIVE_ASSERT
+                            3 => crate::toolbox::math::round(args),           // NATIVE_ROUND
+                            6 => crate::toolbox::io::file_read(args),         // NATIVE_FILE_READ
+                            7 => crate::toolbox::io::file_write(args),        // NATIVE_FILE_WRITE
+                            8 => crate::toolbox::io::file_append(args),       // NATIVE_FILE_APPEND
+                            9 => crate::toolbox::io::file_exists(args),       // NATIVE_FILE_EXISTS
+                            5 => crate::toolbox::encoding::hex_encode(args),  // NATIVE_HEX_ENCODE
+                            10 => crate::toolbox::io::file_delete(args),      // NATIVE_FILE_DELETE
+                            11 => crate::toolbox::encoding::hex_decode(args), // NATIVE_HEX_DECODE
+                            12 => crate::toolbox::encoding::base64_encode(args), // NATIVE_BASE64_ENCODE
+                            13 => crate::toolbox::encoding::base64_decode(args), // NATIVE_BASE64_DECODE
                             _ => panic!("Runtime Error: Unknown native function ID: {}", id),
                         };
 
@@ -782,6 +786,13 @@ impl Fiber {
                         let char = s.chars().nth(idx as usize).unwrap();
                         self.set_reg_at(dest, Value::String(char.to_string()));
                     }
+                    (Value::Bytes(b), Value::Numeric(crate::value::Number::I64(idx))) => {
+                        if idx < 0 || idx >= b.len() as i64 {
+                            panic!("Runtime Error: Bytes index out of bounds: {}", idx);
+                        }
+                        let byte = b[idx as usize];
+                        self.set_reg_at(dest, Value::Numeric(crate::value::Number::U8(byte)));
+                    }
                     _ => panic!("Runtime Error: Invalid indexing operation"),
                 }
             }
@@ -999,6 +1010,52 @@ impl Fiber {
                 let initial = self.get_reg_at(initial_reg);
                 let state = Value::State(Arc::new(Mutex::new(initial)));
                 self.set_reg_at(dest, state);
+            }
+            OpCode::CreateBytes(dest, arg_reg) => {
+                if arg_reg == u16::MAX {
+                    self.set_reg_at(dest, Value::Bytes(Arc::new(Vec::new())));
+                } else {
+                    let arg = self.get_reg_at(arg_reg);
+                    match arg {
+                        Value::String(s) => {
+                            self.set_reg_at(dest, Value::Bytes(Arc::new(s.into_bytes())));
+                        }
+                        Value::Array(items) => {
+                            let mut out = Vec::with_capacity(items.len());
+                            for v in items {
+                                match v {
+                                    Value::Numeric(n) => {
+                                        let x: i64 = match n {
+                                            crate::value::Number::I64(v) => v,
+                                            crate::value::Number::I32(v) => v as i64,
+                                            crate::value::Number::I16(v) => v as i64,
+                                            crate::value::Number::I8(v) => v as i64,
+                                            crate::value::Number::U64(v) => v as i64,
+                                            crate::value::Number::U32(v) => v as i64,
+                                            crate::value::Number::U16(v) => v as i64,
+                                            crate::value::Number::U8(v) => v as i64,
+                                            crate::value::Number::F64(_)
+                                            | crate::value::Number::F32(_) => {
+                                                panic!(
+                                                    "Runtime Error: bytes(array) expects array<u8>"
+                                                )
+                                            }
+                                        };
+                                        if x < 0 || x > 255 {
+                                            panic!("Runtime Error: bytes(array) expects array<u8>");
+                                        }
+                                        out.push(x as u8);
+                                    }
+                                    _ => panic!("Runtime Error: bytes(array) expects array<u8>"),
+                                }
+                            }
+                            self.set_reg_at(dest, Value::Bytes(Arc::new(out)));
+                        }
+                        _ => {
+                            panic!("Runtime Error: bytes() expects a string or array<u8> argument")
+                        }
+                    }
+                }
             }
             OpCode::StateRead(dest, state_reg) => {
                 let state_val = self.get_reg_at(state_reg);
@@ -1847,6 +1904,7 @@ impl Fiber {
         match obj {
             Value::Array(arr) => self.array_method(arr, method, args),
             Value::String(s) => self.string_method(&s, method, args),
+            Value::Bytes(b) => self.bytes_method(b, method, args),
             Value::Tuple(t) => self.tuple_method(&t, method, args),
             Value::Map(map) => self.map_method(map, method, args),
             Value::Set(set) => self.set_method(set, method, args),
@@ -1871,6 +1929,7 @@ impl Fiber {
         match obj {
             Value::Array(arr) => self.array_method_mut(arr, method, args),
             Value::String(s) => self.string_method_mut(s, method, args),
+            Value::Bytes(b) => self.bytes_method_mut(b, method, args),
             Value::Map(map) => self.map_method_mut(map, method, args),
             Value::Set(set) => self.set_method_mut(set, method, args),
             _ => panic!(
@@ -2512,6 +2571,80 @@ impl Fiber {
                 (Value::String(removed), Value::String(new_s))
             }
             _ => panic!("Runtime Error: Unknown mutating string method '{}'", method),
+        }
+    }
+
+    /// Bytes non-mutating methods: length, copy, toString, toStringStrict
+    fn bytes_method(&self, b: Arc<Vec<u8>>, method: &str, args: Vec<Value>) -> Value {
+        match method {
+            "length" => {
+                if !args.is_empty() {
+                    panic!("Runtime Error: .length() takes no arguments");
+                }
+                Value::Numeric(crate::value::Number::I64(b.len() as i64))
+            }
+            "copy" => {
+                let start = if !args.is_empty() {
+                    self.to_usize(&args[0]).unwrap_or(0)
+                } else {
+                    0
+                };
+                let end = if args.len() > 1 {
+                    self.to_usize(&args[1]).unwrap_or(b.len())
+                } else {
+                    b.len()
+                };
+                if start > end || end > b.len() {
+                    panic!("Range out of bounds");
+                }
+                Value::Bytes(Arc::new(b[start..end].to_vec()))
+            }
+            "toString" => {
+                if !args.is_empty() {
+                    panic!("Runtime Error: .toString() takes no arguments");
+                }
+                Value::String(String::from_utf8_lossy(&b).to_string())
+            }
+            "toStringStrict" => {
+                if !args.is_empty() {
+                    panic!("Runtime Error: .toStringStrict() takes no arguments");
+                }
+                let s = String::from_utf8(b.as_slice().to_vec())
+                    .expect("Runtime Error: Invalid UTF-8 in bytes");
+                Value::String(s)
+            }
+            _ => panic!(
+                "Runtime Error: Unknown non-mutating bytes method '{}'",
+                method
+            ),
+        }
+    }
+
+    /// Bytes mutating methods: slice
+    fn bytes_method_mut(&self, b: Arc<Vec<u8>>, method: &str, args: Vec<Value>) -> (Value, Value) {
+        match method {
+            "slice" => {
+                let start = self
+                    .to_usize(&args[0])
+                    .expect("slice() start must be integer");
+                let end = if args.len() > 1 {
+                    self.to_usize(&args[1])
+                        .expect("slice() stop must be integer")
+                } else {
+                    b.len()
+                };
+                if start > end || end > b.len() {
+                    panic!("Range out of bounds");
+                }
+
+                let mut owned = b.as_slice().to_vec();
+                let removed: Vec<u8> = owned.drain(start..end).collect();
+                (
+                    Value::Bytes(Arc::new(removed)),
+                    Value::Bytes(Arc::new(owned)),
+                )
+            }
+            _ => panic!("Runtime Error: Unknown mutating bytes method '{}'", method),
         }
     }
 
