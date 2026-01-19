@@ -1808,6 +1808,41 @@ export default { fetch: handler }
 - `retryMs`: Optional client reconnection hint (maps to the SSE `retry:` field)
 - `comment`: Optional comment line (maps to the SSE `: ...` field)
 
+## `WebSocketResponse`
+WebSockets provides a full-duplex channel between a client and your server over a single upgraded HTTP connection.
+
+In ngn, a WebSocket connection is represented by two channels:
+- `recv`: messages from the client (client -> server)
+- `send`: messages to the client (server -> client)
+
+v1 notes:
+- text-only (binary frames are rejected)
+- no subprotocol selection
+
+```ngn
+fn handler(req: Request): WebSocketResponse {
+  const recv = channel<string>()
+  const send = channel<string>()
+
+  // Echo everything back
+  thread(|| {
+    for (msg in <-? recv) {
+      send <- msg
+    }
+    send.close()
+  })
+
+  return WebSocketResponse { recv, send }
+}
+
+export default { fetch: handler }
+```
+
+### `WebSocketResponse` properties
+- `headers`: The headers to include in the 101 Switching Protocols response (optional)
+- `recv`: A `channel<string>` that receives client messages. It is closed when the client disconnects.
+- `send`: A `channel<string>` used to send messages to the client. Close it to close the websocket.
+
 ## Modules
 You can use `export` and `import` to create modules in your project. This is a functions-only feature.
 
