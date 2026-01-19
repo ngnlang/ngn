@@ -1001,80 +1001,112 @@ where
             Some(value) => {
                 let mut event_buf = String::new();
 
-                match value {
-                    Value::Enum(ref e) if e.enum_name == "SseMessage" => {
-                        match (e.variant_name.as_str(), e.data.as_ref()) {
-                            ("Data", Some(v)) => {
-                                if let Value::String(s) = v.as_ref() {
-                                    sse_data_lines(&mut event_buf, s);
-                                    event_buf.push('\n');
-                                } else {
-                                    sse_data_lines(&mut event_buf, &v.to_string());
-                                    event_buf.push('\n');
-                                }
+                fn is_sse_event_shaped_object(o: &crate::value::ObjectData) -> bool {
+                    let mut has_any = false;
+                    for k in o.fields.keys() {
+                        match k.as_str() {
+                            "data" | "event" | "id" | "retryMs" | "comment" => {
+                                has_any = true;
                             }
-                            ("Event", Some(v)) => {
-                                if let Value::Object(o) = v.as_ref() {
-                                    // SseEvent fields: data/event/id/retryMs/comment
-                                    let get_str = |name: &str| -> Option<String> {
-                                        o.fields.get(name).and_then(|vv| {
-                                            if let Value::String(s) = vv {
-                                                Some(s.clone())
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                    };
-                                    let get_i64 = |name: &str| -> Option<i64> {
-                                        o.fields.get(name).and_then(|vv| match vv {
-                                            Value::Numeric(crate::value::Number::I64(n)) => {
-                                                Some(*n)
-                                            }
-                                            Value::Numeric(crate::value::Number::I32(n)) => {
-                                                Some(*n as i64)
-                                            }
-                                            _ => None,
-                                        })
-                                    };
-
-                                    if let Some(c) = get_str("comment") {
-                                        if !c.is_empty() {
-                                            let _ = write!(event_buf, ": {}\n", c);
-                                        }
-                                    }
-                                    if let Some(id) = get_str("id") {
-                                        if !id.is_empty() {
-                                            let _ = write!(event_buf, "id: {}\n", id);
-                                        }
-                                    }
-                                    if let Some(ev) = get_str("event") {
-                                        if !ev.is_empty() {
-                                            let _ = write!(event_buf, "event: {}\n", ev);
-                                        }
-                                    }
-                                    if let Some(ms) = get_i64("retryMs") {
-                                        if ms > 0 {
-                                            let _ = write!(event_buf, "retry: {}\n", ms);
-                                        }
-                                    }
-
-                                    let data = get_str("data").unwrap_or_default();
-                                    sse_data_lines(&mut event_buf, &data);
-                                    event_buf.push('\n');
-                                } else {
-                                    // If it's not an object for some reason, stringify and treat as data.
-                                    sse_data_lines(&mut event_buf, &v.to_string());
-                                    event_buf.push('\n');
-                                }
-                            }
-                            _ => {
-                                sse_data_lines(&mut event_buf, &value.to_string());
-                                event_buf.push('\n');
-                            }
+                            _ => return false,
                         }
                     }
+                    has_any
+                }
+
+                fn get_stringified_field(
+                    o: &crate::value::ObjectData,
+                    name: &str,
+                ) -> Option<String> {
+                    o.fields.get(name).map(|v| match v {
+                        Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    })
+                }
+
+                fn get_retry_ms(o: &crate::value::ObjectData) -> Option<i64> {
+                    o.fields.get("retryMs").and_then(|v| match v {
+                        Value::Numeric(n) => match n {
+                            crate::value::Number::I64(x) => Some(*x),
+                            crate::value::Number::I32(x) => Some(*x as i64),
+                            crate::value::Number::I16(x) => Some(*x as i64),
+                            crate::value::Number::I8(x) => Some(*x as i64),
+                            crate::value::Number::U64(x) => i64::try_from(*x).ok(),
+                            crate::value::Number::U32(x) => Some(*x as i64),
+                            crate::value::Number::U16(x) => Some(*x as i64),
+                            crate::value::Number::U8(x) => Some(*x as i64),
+                            _ => None,
+                        },
+                        _ => None,
+                    })
+                }
+
+                fn write_sse_event_object(out: &mut String, o: &crate::value::ObjectData) {
+                    use std::fmt::Write;
+
+                    if let Some(c) = get_stringified_field(o, "comment") {
+                        if !c.is_empty() {
+                            let _ = write!(
+                                out,
+                                ": {}\n",
+                                c.replace("\r\n", " ").replace(['\r', '\n'], " ")
+                            );
+                        }
+                    }
+                    if let Some(id) = o.fields.get("id").and_then(|v| {
+                        if let Value::String(s) = v {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    }) {
+                        if !id.is_empty() {
+                            let _ = write!(
+                                out,
+                                "id: {}\n",
+                                id.replace("\r\n", " ").replace(['\r', '\n'], " ")
+                            );
+                        }
+                    }
+                    if let Some(ev) = o.fields.get("event").and_then(|v| {
+                        if let Value::String(s) = v {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    }) {
+                        if !ev.is_empty() {
+                            let _ = write!(
+                                out,
+                                "event: {}\n",
+                                ev.replace("\r\n", " ").replace(['\r', '\n'], " ")
+                            );
+                        }
+                    }
+                    if let Some(ms) = get_retry_ms(o) {
+                        if ms > 0 {
+                            let _ = write!(out, "retry: {}\n", ms);
+                        }
+                    }
+
+                    let data = get_stringified_field(o, "data").unwrap_or_default();
+                    sse_data_lines(out, &data);
+                    out.push('\n');
+                }
+
+                match value {
+                    Value::Object(o)
+                        if o.model_name == "SseEvent"
+                            || (o.model_name == "__anon__" && is_sse_event_shaped_object(&o)) =>
+                    {
+                        write_sse_event_object(&mut event_buf, &o);
+                    }
+                    Value::String(s) => {
+                        sse_data_lines(&mut event_buf, &s);
+                        event_buf.push('\n');
+                    }
+                    // best effort for sending data
                     _ => {
-                        // If user code somehow sends a non-SseMessage value, stringify and treat as data.
                         sse_data_lines(&mut event_buf, &value.to_string());
                         event_buf.push('\n');
                     }

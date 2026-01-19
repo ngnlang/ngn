@@ -37,6 +37,7 @@ pub enum Type {
     Spawn,             // Built-in spawn module type
     Env,               // Built-in env module type for environment variables
     TypeParam(String), // Type parameter reference (e.g., T in model Container<T>)
+    Union(Vec<Type>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -87,6 +88,10 @@ pub struct Statement {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum StatementKind {
+    TypeAlias {
+        name: String,
+        target: Type,
+    },
     Declaration {
         name: String,
         is_mutable: bool,
@@ -448,6 +453,30 @@ impl Parser {
         }
     }
 
+    fn parse_type_alias_stmt(&mut self) -> Statement {
+        let start = self.current_span.start;
+        self.advance(); // consume 'type'
+
+        if self.in_function {
+            let msg = "Syntax Error: 'type' declarations must be in global scope".to_string();
+            eprintln!("{}", msg);
+            return Statement {
+                kind: StatementKind::Error(msg),
+                span: Span::new(start, self.current_span.end),
+            };
+        }
+
+        let name = self.expect_identifier();
+        self.expect(Token::Equal);
+        let target = self.parse_type();
+        let end = self.previous_span.end;
+
+        Statement {
+            kind: StatementKind::TypeAlias { name, target },
+            span: Span::new(start, end),
+        }
+    }
+
     fn parse_import_statement(&mut self) -> Statement {
         let start = self.current_span.start;
         self.advance(); // consume 'import'
@@ -549,6 +578,7 @@ impl Parser {
                 }
                 self.parse_declaration()
             }
+            Token::Type => self.parse_type_alias_stmt(),
             Token::Fn => self.parse_function(),
             Token::Export => {
                 self.advance(); // consume 'export'
@@ -711,149 +741,145 @@ impl Parser {
         }
     }
 
-    fn parse_type(&mut self) -> Type {
+    fn parse_type_unit(&mut self) -> Type {
         let base_type = match &self.current_token {
-            Token::Identifier(name) => {
-                match name.as_str() {
-                    "i64" => {
+            Token::Identifier(name) => match name.as_str() {
+                "i64" => {
+                    self.advance();
+                    Type::I64
+                }
+                "i32" => {
+                    self.advance();
+                    Type::I32
+                }
+                "i16" => {
+                    self.advance();
+                    Type::I16
+                }
+                "i8" => {
+                    self.advance();
+                    Type::I8
+                }
+                "u64" => {
+                    self.advance();
+                    Type::U64
+                }
+                "u32" => {
+                    self.advance();
+                    Type::U32
+                }
+                "u16" => {
+                    self.advance();
+                    Type::U16
+                }
+                "u8" => {
+                    self.advance();
+                    Type::U8
+                }
+                "f64" => {
+                    self.advance();
+                    Type::F64
+                }
+                "f32" => {
+                    self.advance();
+                    Type::F32
+                }
+                "string" => {
+                    self.advance();
+                    Type::String
+                }
+                "bool" => {
+                    self.advance();
+                    Type::Bool
+                }
+                "void" => {
+                    self.advance();
+                    Type::Void
+                }
+                "number" => {
+                    self.advance();
+                    Type::Number
+                }
+                "array" => {
+                    self.advance();
+                    if self.current_token == Token::LessThan {
                         self.advance();
-                        Type::I64
-                    }
-                    "i32" => {
-                        self.advance();
-                        Type::I32
-                    }
-                    "i16" => {
-                        self.advance();
-                        Type::I16
-                    }
-                    "i8" => {
-                        self.advance();
-                        Type::I8
-                    }
-                    "u64" => {
-                        self.advance();
-                        Type::U64
-                    }
-                    "u32" => {
-                        self.advance();
-                        Type::U32
-                    }
-                    "u16" => {
-                        self.advance();
-                        Type::U16
-                    }
-                    "u8" => {
-                        self.advance();
-                        Type::U8
-                    }
-                    "f64" => {
-                        self.advance();
-                        Type::F64
-                    }
-                    "f32" => {
-                        self.advance();
-                        Type::F32
-                    }
-                    "string" => {
-                        self.advance();
-                        Type::String
-                    }
-                    "bool" => {
-                        self.advance();
-                        Type::Bool
-                    }
-                    "void" => {
-                        self.advance();
-                        Type::Void
-                    }
-                    "number" => {
-                        self.advance();
-                        Type::Number
-                    }
-                    "array" => {
-                        self.advance();
-                        if self.current_token == Token::LessThan {
-                            self.advance();
-                            let inner = self.parse_type();
-                            self.expect(Token::GreaterThan);
-                            Type::Array(Box::new(inner))
-                        } else {
-                            Type::Array(Box::new(Type::I64))
-                        }
-                    }
-                    "tuple" => {
-                        self.advance();
-                        if self.current_token == Token::LessThan {
-                            self.advance();
-                            let mut base_types = Vec::new();
-                            let mut last_type = None;
-                            let mut size: Option<i64> = None;
-
-                            while self.current_token != Token::GreaterThan {
-                                if let Token::Number(n) = self.current_token {
-                                    size = Some(n);
-                                    self.advance();
-                                } else {
-                                    let ty = self.parse_type();
-                                    last_type = Some(ty.clone());
-                                    base_types.push(ty);
-                                }
-                                if self.current_token == Token::Comma {
-                                    self.advance();
-                                }
-                            }
-                            self.expect(Token::GreaterThan);
-
-                            if let Some(n) = size {
-                                if let Some(t) = last_type {
-                                    let mut actual_types = Vec::new();
-                                    for _ in 0..n {
-                                        actual_types.push(t.clone());
-                                    }
-                                    return Type::Tuple(actual_types);
-                                }
-                            }
-                            Type::Tuple(base_types)
-                        } else {
-                            Type::Tuple(vec![])
-                        }
-                    }
-                    _ => {
-                        let n = name.clone();
-                        self.advance();
-
-                        // Check if this is a type parameter currently in scope
-                        if self.type_params_in_scope.contains(&n) {
-                            return Type::TypeParam(n);
-                        }
-
-                        // Check for generics <T, U>
-                        if self.current_token == Token::LessThan {
-                            self.advance(); // consume <
-                            let mut args = Vec::new();
-                            while self.current_token != Token::GreaterThan {
-                                args.push(self.parse_type());
-                                if self.current_token == Token::Comma {
-                                    self.advance();
-                                }
-                            }
-                            self.expect(Token::GreaterThan);
-                            Type::Generic(n, args)
-                        } else {
-                            Type::Model(n)
-                        }
+                        let inner = self.parse_type();
+                        self.expect(Token::GreaterThan);
+                        Type::Array(Box::new(inner))
+                    } else {
+                        Type::Array(Box::new(Type::I64))
                     }
                 }
-            }
+                "tuple" => {
+                    self.advance();
+                    if self.current_token == Token::LessThan {
+                        self.advance();
+                        let mut base_types = Vec::new();
+                        let mut last_type = None;
+                        let mut size: Option<i64> = None;
+
+                        while self.current_token != Token::GreaterThan {
+                            if let Token::Number(n) = self.current_token {
+                                size = Some(n);
+                                self.advance();
+                            } else {
+                                let ty = self.parse_type();
+                                last_type = Some(ty.clone());
+                                base_types.push(ty);
+                            }
+                            if self.current_token == Token::Comma {
+                                self.advance();
+                            }
+                        }
+                        self.expect(Token::GreaterThan);
+
+                        if let Some(n) = size {
+                            if let Some(t) = last_type {
+                                let mut actual_types = Vec::new();
+                                for _ in 0..n {
+                                    actual_types.push(t.clone());
+                                }
+                                return Type::Tuple(actual_types);
+                            }
+                        }
+                        Type::Tuple(base_types)
+                    } else {
+                        Type::Tuple(vec![])
+                    }
+                }
+                _ => {
+                    let n = name.clone();
+                    self.advance();
+
+                    if self.type_params_in_scope.contains(&n) {
+                        return Type::TypeParam(n);
+                    }
+
+                    if self.current_token == Token::LessThan {
+                        self.advance();
+                        let mut args = Vec::new();
+                        while self.current_token != Token::GreaterThan {
+                            args.push(self.parse_type());
+                            if self.current_token == Token::Comma {
+                                self.advance();
+                            }
+                        }
+                        self.expect(Token::GreaterThan);
+                        Type::Generic(n, args)
+                    } else {
+                        Type::Model(n)
+                    }
+                }
+            },
             Token::Fn => {
-                self.advance(); // consume 'fn'
+                self.advance();
                 self.parse_fn_type()
             }
             Token::Channel => {
-                self.advance(); // consume 'channel'
+                self.advance();
                 if self.current_token == Token::LessThan {
-                    self.advance(); // consume '<'
+                    self.advance();
                     let inner = self.parse_type();
                     self.expect(Token::GreaterThan);
                     Type::Channel(Box::new(inner))
@@ -864,7 +890,7 @@ impl Parser {
                 }
             }
             Token::Map => {
-                self.advance(); // consume 'map'
+                self.advance();
                 self.expect(Token::LessThan);
                 let key_type = self.parse_type();
                 self.expect(Token::Comma);
@@ -873,7 +899,7 @@ impl Parser {
                 Type::Map(Box::new(key_type), Box::new(value_type))
             }
             Token::Set => {
-                self.advance(); // consume 'set'
+                self.advance();
                 self.expect(Token::LessThan);
                 let element_type = self.parse_type();
                 self.expect(Token::GreaterThan);
@@ -897,12 +923,46 @@ impl Parser {
             ),
         };
 
-        // Check for T? syntax - wrap in Maybe<T>
         if self.current_token == Token::Question {
-            self.advance(); // consume '?'
+            self.advance();
             Type::Generic("Maybe".to_string(), vec![base_type])
         } else {
             base_type
+        }
+    }
+
+    fn parse_type(&mut self) -> Type {
+        // Union types: A | B | C
+        let first = self.parse_type_unit();
+        if self.current_token != Token::Pipe {
+            return first;
+        }
+
+        let mut members = vec![first];
+        while self.current_token == Token::Pipe {
+            self.advance();
+            members.push(self.parse_type_unit());
+        }
+
+        let mut flat: Vec<Type> = Vec::new();
+        for t in members {
+            match t {
+                Type::Union(inner) => flat.extend(inner),
+                other => flat.push(other),
+            }
+        }
+
+        let mut out: Vec<Type> = Vec::new();
+        for t in flat {
+            if !out.contains(&t) {
+                out.push(t);
+            }
+        }
+
+        if out.len() == 1 {
+            out.remove(0)
+        } else {
+            Type::Union(out)
         }
     }
 
@@ -2398,7 +2458,10 @@ impl Parser {
                         self.advance();
                     }
 
-                    ty = Some(self.parse_type());
+                    // In closure param lists, `|` is also the parameter-list terminator.
+                    // We therefore parse a single type unit here (including trailing `?`)
+                    // rather than a full union type.
+                    ty = Some(self.parse_type_unit());
                 }
                 let p_end = self.previous_span.end;
 

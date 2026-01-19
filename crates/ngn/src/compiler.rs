@@ -1225,6 +1225,7 @@ impl Compiler {
 
     pub fn compile_statement(&mut self, stmt: Statement) {
         match stmt.kind {
+            StatementKind::TypeAlias { .. } => {}
             StatementKind::Enum(enum_def) => {
                 self.enums.insert(enum_def.name.clone(), enum_def);
             }

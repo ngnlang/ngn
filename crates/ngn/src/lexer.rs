@@ -4,6 +4,7 @@ pub enum Token {
     Var,
     Const,
     Global,
+    Type,
     Fn,
     Return,
     If,
@@ -182,6 +183,7 @@ impl Span {
     }
 }
 
+#[derive(Clone)]
 pub struct Lexer {
     source: Vec<char>,
     byte_offsets: Vec<usize>, // byte offset for each char index
@@ -502,6 +504,7 @@ impl Lexer {
             "match" => Token::Match,
             "next" => Token::Next,
             "break" => Token::Break,
+            "type" => Token::Type,
             "fn" => Token::Fn,
             "return" => Token::Return,
             "print" => Token::Print,

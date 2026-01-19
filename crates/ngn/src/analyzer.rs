@@ -33,6 +33,7 @@ pub struct Analyzer {
     enums: HashMap<String, EnumDef>,
     models: HashMap<String, ModelDef>,
     roles: HashMap<String, RoleDef>,
+    type_aliases: HashMap<String, Type>,
     custom_methods: HashMap<Type, HashMap<String, Type>>,
     model_roles: HashMap<Type, HashSet<String>>,
 }
@@ -97,6 +98,7 @@ impl Analyzer {
             enums: HashMap::new(),
             models: HashMap::new(),
             roles: HashMap::new(),
+            type_aliases: HashMap::new(),
             custom_methods: HashMap::new(),
             model_roles: HashMap::new(),
         };
@@ -179,23 +181,11 @@ impl Analyzer {
         );
 
         // SseMessage is the typed payload for SseResponse.body.
-        // Data(string) becomes one SSE event record with only data lines.
-        // Event(SseEvent) emits full SSE fields.
-        let sse_message_enum = EnumDef {
-            name: "SseMessage".to_string(),
-            type_params: vec![],
-            variants: vec![
-                EnumVariantDef {
-                    name: "Data".to_string(),
-                    data_type: Some(Type::String),
-                },
-                EnumVariantDef {
-                    name: "Event".to_string(),
-                    data_type: Some(Type::Model("SseEvent".to_string())),
-                },
-            ],
-        };
-        analyzer.register_enum(&sse_message_enum, Span::default());
+        // It is a built-in type alias: string | SseEvent.
+        analyzer.type_aliases.insert(
+            "SseMessage".to_string(),
+            Type::Union(vec![Type::String, Type::Model("SseEvent".to_string())]),
+        );
 
         analyzer.models.insert(
             "SseResponse".to_string(),
@@ -207,7 +197,7 @@ impl Analyzer {
                     ("headers".to_string(), Type::Any), // accepts map or object literal
                     (
                         "body".to_string(),
-                        Type::Channel(Box::new(Type::Enum("SseMessage".to_string()))),
+                        Type::Channel(Box::new(Type::Model("SseMessage".to_string()))),
                     ),
                     ("keepAliveMs".to_string(), Type::I64),
                 ],
@@ -267,7 +257,7 @@ impl Analyzer {
     }
 
     pub fn analyze(&mut self, statements: &[Statement]) -> Result<(), Vec<Diagnostic>> {
-        // Pass 1a: Collect all top-level types (Enums, Models, Roles)
+        // Pass 1a: Collect all top-level types (Enums, Models, Roles, TypeAliases)
         for stmt in statements {
             match &stmt.kind {
                 StatementKind::Enum(enum_def) => {
@@ -279,6 +269,10 @@ impl Analyzer {
                 }
                 StatementKind::Role(role_def) => {
                     self.roles.insert(role_def.name.clone(), role_def.clone());
+                }
+                StatementKind::TypeAlias { name, target } => {
+                    let normalized = self.normalize_type(target.clone());
+                    self.type_aliases.insert(name.clone(), normalized);
                 }
                 _ => {}
             }
@@ -441,6 +435,7 @@ impl Analyzer {
 
     fn check_statement(&mut self, stmt: &Statement) -> Type {
         match &stmt.kind {
+            StatementKind::TypeAlias { .. } => Type::Void,
             StatementKind::Declaration {
                 name,
                 is_mutable,
@@ -2737,7 +2732,7 @@ impl Analyzer {
                 | Type::F32
                 | Type::Number
                 | Type::Any
-        )
+        ) || matches!(ty, Type::Union(members) if members.iter().all(|m| self.is_numeric(m)) )
     }
 
     fn validate_role_impl(
@@ -2828,7 +2823,70 @@ impl Analyzer {
         }
     }
 
+    fn resolve_type_aliases(&self, ty: Type) -> Type {
+        fn resolve(analyzer: &Analyzer, ty: Type, visiting: &mut HashSet<String>) -> Type {
+            match ty {
+                Type::Model(name) => {
+                    if let Some(target) = analyzer.type_aliases.get(&name).cloned() {
+                        if !visiting.insert(name.clone()) {
+                            return Type::Any;
+                        }
+                        let resolved = resolve(analyzer, target, visiting);
+                        visiting.remove(&name);
+                        resolved
+                    } else {
+                        Type::Model(name)
+                    }
+                }
+                Type::Array(inner) => Type::Array(Box::new(resolve(analyzer, *inner, visiting))),
+                Type::Tuple(elements) => Type::Tuple(
+                    elements
+                        .into_iter()
+                        .map(|t| resolve(analyzer, t, visiting))
+                        .collect(),
+                ),
+                Type::Channel(inner) => {
+                    Type::Channel(Box::new(resolve(analyzer, *inner, visiting)))
+                }
+                Type::State(inner) => Type::State(Box::new(resolve(analyzer, *inner, visiting))),
+                Type::Map(k, v) => Type::Map(
+                    Box::new(resolve(analyzer, *k, visiting)),
+                    Box::new(resolve(analyzer, *v, visiting)),
+                ),
+                Type::Set(inner) => Type::Set(Box::new(resolve(analyzer, *inner, visiting))),
+                Type::Function {
+                    params,
+                    optional_count,
+                    return_type,
+                } => Type::Function {
+                    params: params
+                        .into_iter()
+                        .map(|p| resolve(analyzer, p, visiting))
+                        .collect(),
+                    optional_count,
+                    return_type: Box::new(resolve(analyzer, *return_type, visiting)),
+                },
+                Type::Generic(name, args) => Type::Generic(
+                    name,
+                    args.into_iter()
+                        .map(|a| resolve(analyzer, a, visiting))
+                        .collect(),
+                ),
+                Type::Union(members) => Type::Union(
+                    members
+                        .into_iter()
+                        .map(|m| resolve(analyzer, m, visiting))
+                        .collect(),
+                ),
+                other => other,
+            }
+        }
+
+        resolve(self, ty, &mut HashSet::new())
+    }
+
     fn normalize_type(&self, ty: Type) -> Type {
+        let ty = self.resolve_type_aliases(ty);
         match ty {
             Type::Model(name) => {
                 if self.enums.contains_key(&name) {
@@ -2869,6 +2927,26 @@ impl Analyzer {
                     )
                 }
             }
+            Type::Union(members) => {
+                let mut out: Vec<Type> = Vec::new();
+                for m in members {
+                    let nm = self.normalize_type(m);
+                    match nm {
+                        Type::Union(inner) => out.extend(inner),
+                        other => out.push(other),
+                    }
+                }
+
+                // Dedup and make ordering stable for hashing/equality
+                out.sort_by(|a, b| format!("{:?}", a).cmp(&format!("{:?}", b)));
+                out.dedup();
+
+                if out.len() == 1 {
+                    out.remove(0)
+                } else {
+                    Type::Union(out)
+                }
+            }
             _ => ty,
         }
     }
@@ -2881,6 +2959,9 @@ impl Analyzer {
             Type::Array(_) => Type::Array(Box::new(Type::Any)), // All arrays map to array<any>
             Type::Map(_, _) => Type::Map(Box::new(Type::Any), Box::new(Type::Any)), // All maps map to map<any, any>
             Type::Set(_) => Type::Set(Box::new(Type::Any)), // All sets map to set<any>
+            Type::Union(members) => {
+                Type::Union(members.iter().map(|m| self.generic_type(m)).collect())
+            }
             // All numeric types map to Number for extend number { }
             Type::I64
             | Type::I32
@@ -2906,6 +2987,26 @@ impl Analyzer {
 
         if expected == actual {
             return true;
+        }
+
+        // Union rules
+        // - expected is union: actual must match at least one member
+        // - actual is union: every member must match expected
+        match (&expected, &actual) {
+            (Type::Union(e_members), Type::Union(a_members)) => {
+                return a_members
+                    .iter()
+                    .all(|a| e_members.iter().any(|e| self.types_compatible(e, a)));
+            }
+            (Type::Union(e_members), _) => {
+                return e_members.iter().any(|e| self.types_compatible(e, &actual));
+            }
+            (_, Type::Union(a_members)) => {
+                return a_members
+                    .iter()
+                    .all(|a| self.types_compatible(&expected, a));
+            }
+            _ => {}
         }
 
         if self.is_numeric(&expected) && self.is_numeric(&actual) {
@@ -3102,6 +3203,12 @@ impl Analyzer {
                         .collect(),
                 )
             }
+            Type::Union(members) => Type::Union(
+                members
+                    .iter()
+                    .map(|m| self.substitute_type_params(m, type_params, type_args))
+                    .collect(),
+            ),
             // All other types (primitives, Model, Enum, etc.) pass through unchanged
             _ => ty.clone(),
         }
