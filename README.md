@@ -95,6 +95,38 @@ fn main() {
 - `set<value_type>`
 - `channel<type>`
 - `fn<...paramN, return_type>`
+- `A | B` (union types)
+
+### Union types
+Union types let you declare that a value may be one of several types.
+
+```ngn
+var x: string | i64 = "hello"
+x = 42
+
+// unions can be used in generics too
+const ch = channel<string | i64>()
+ch <- "a"
+ch <- 2
+```
+
+Note: without narrowing, operations on a union-typed value are conservative. In practice, unions are most useful at boundaries (channels, response bodies, etc.) until narrowing lands.
+
+### Type aliases
+Type aliases name a type expression.
+
+```ngn
+type UserId = i64
+type Token = string | i64
+
+type Token2 = Token
+
+fn main() {
+  var id: UserId = 123
+  var t: Token = "abc"
+  t = 99
+}
+```
 
 ### explicit
 ```ngn
@@ -1739,11 +1771,15 @@ fn handler(req: Request): SseResponse {
   const events = channel<SseMessage>()
 
   thread(|| {
-    events <- SseMessage::Event(SseEvent { data: "Hello", event: "hello", id: "", retryMs: 0, comment: "" })
+    events <- SseEvent { data: "Hello", event: "hello", id: "", retryMs: 0, comment: "" }
     sleep(500)
 
-    // Wrap raw strings as SseMessage::Data(...)
-    events <- SseMessage::Data("World")
+    // Send raw strings as event data
+    events <- "World"
+    sleep(500)
+
+    // Send raw objects shaped like SseEvent
+    events <- { data: "Hello", event: "hello", id: "", retryMs: 0, comment: "" }
 
     events.close()
   })
@@ -1762,7 +1798,7 @@ export default { fetch: handler }
 ### `SseResponse` properties
 - `status`: The HTTP status code - default is 200
 - `headers`: The headers to include in the response
-- `body`: A `channel<SseMessage>` that can send either `SseMessage::Data(string)` or `SseMessage::Event(SseEvent)` values
+- `body`: A `channel<SseMessage>` that can send either a `string` (treated as event data), an `SseEvent`, or a raw object that represents an `SseEvent`
 - `keepAliveMs`: Optional keepalive interval (in milliseconds). If > 0, the server periodically sends `: keepalive` comments while idle.
 
 ### `SseEvent` properties
