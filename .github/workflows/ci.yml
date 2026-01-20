@@ -52,3 +52,5 @@ jobs:
           ./target/release/ngn run test_process_stream.ngn
           ./target/release/ngn run test_process_stream_raw.ngn
           ./target/release/ngn run test_llm_fake.ngn
+          ./target/release/ngn run test_thread_capture_snapshot.ngn
+          ./target/release/ngn run test_thread_state_shared.ngn
