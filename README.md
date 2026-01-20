@@ -2063,6 +2063,46 @@ export default {
 }
 ```
 
+### tbx::llm
+
+Language-level LLM APIs.
+
+This milestone currently ships a fake backend (for API + VM integration testing). The llama.cpp backend will replace it.
+
+Import from `tbx::llm`:
+
+```ngn
+import { load, generate, stream } from "tbx::llm"
+```
+
+### `load(path, opts?)`
+Load a model from disk and return an `LlmModel` handle.
+
+### `generate(model, prompt, opts?)`
+Run a one-shot generation.
+
+Returns `Result<string, string>`.
+
+### `stream(model, prompt, opts?)`
+Stream generated text chunks. Returns `channel<string>`.
+
+If the consumer closes the channel (e.g. client disconnects during `StreamingResponse`), generation should stop early.
+
+```ngn
+import { load, stream } from "tbx::llm"
+
+fn main() {
+  const m = load("./model.gguf")
+  const ch = stream(m, "hello")
+  for (chunk in <-? ch) {
+    match (chunk) {
+      Value(s) => echo(s),
+      Null => break,
+    }
+  }
+}
+```
+
 ### tbx::process
 
 OS process execution utilities.
