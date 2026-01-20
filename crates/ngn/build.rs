@@ -116,7 +116,8 @@ fn compile_llama_bridge(
     let mut bridge = cc::Build::new();
     bridge.cpp(true);
     bridge.flag_if_supported("-std=c++17");
-    bridge.warnings(true);
+    // Vendored upstream code can be very noisy; keep warnings for Rust/ngn itself.
+    bridge.warnings(false);
     bridge.cargo_metadata(false);
     bridge.include(llama_include);
     bridge.include(ggml_include);
@@ -162,7 +163,8 @@ fn build_llama_cpu(llama_src: &Path, llama_include: &Path, ggml_include: &Path, 
     let mut build_cpp = cc::Build::new();
     build_cpp.cpp(true);
     build_cpp.flag_if_supported("-std=c++17");
-    build_cpp.warnings(true);
+    // Vendored upstream code can be very noisy; keep warnings for Rust/ngn itself.
+    build_cpp.warnings(false);
     build_cpp.cargo_metadata(false);
     build_cpp.include(llama_include);
     build_cpp.include(ggml_include);
@@ -180,7 +182,8 @@ fn build_llama_cpu(llama_src: &Path, llama_include: &Path, ggml_include: &Path, 
     build_cpp.compile("llama_cpp");
 
     let mut build_c = cc::Build::new();
-    build_c.warnings(true);
+    // Vendored upstream code can be very noisy; keep warnings for Rust/ngn itself.
+    build_c.warnings(false);
     build_c.cargo_metadata(false);
     build_c.include(llama_include);
     build_c.include(ggml_include);
