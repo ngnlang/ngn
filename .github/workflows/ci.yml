@@ -1,0 +1,54 @@
+name: ci
+
+"on":
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux-cpu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      NGN_LLAMA_BACKEND: cpu
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ngn-linux-cpu
+
+      - name: "Guard: no GGUF files committed"
+        run: |
+          set -euo pipefail
+          if [ -n "$(git ls-files '*.gguf')" ]; then
+            echo "ERROR: .gguf model files must not be committed to the repo."
+            echo "Remove them from git history and keep them local (they should be in .gitignore)."
+            echo "Committed .gguf files:"
+            git ls-files '*.gguf'
+            exit 1
+          fi
+
+      - name: Build Release (embedded runtime)
+        run: make release
+
+      - name: Run ngn test suite
+        run: ./target/release/ngn run main.ngn
+
+      - name: Run Rust tests
+        run: cargo test -q -p ngn
+
+      - name: Smoke toolbox tests
+        run: |
+          ./target/release/ngn run test_process_run.ngn
+          ./target/release/ngn run test_process_stream.ngn
+          ./target/release/ngn run test_process_stream_raw.ngn
+          ./target/release/ngn run test_llm_fake.ngn
