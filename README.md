@@ -2067,7 +2067,9 @@ export default {
 
 Language-level LLM APIs.
 
-This milestone currently ships a fake backend (for API + VM integration testing). The llama.cpp backend will replace it.
+ngn vendors llama.cpp at `vendor/llama.cpp` and builds it into the runtime (no external installs needed for end users).
+
+`tbx::llm` uses llama.cpp directly. Provide a local `.gguf` model file.
 
 Import from `tbx::llm`:
 
@@ -2076,7 +2078,9 @@ import { load, generate, stream } from "tbx::llm"
 ```
 
 ### `load(path, opts?)`
-Load a model from disk and return an `LlmModel` handle.
+Load a model from disk.
+
+Returns `Result<LlmModel, string>`.
 
 ### `generate(model, prompt, opts?)`
 Run a one-shot generation.
@@ -2092,13 +2096,18 @@ If the consumer closes the channel (e.g. client disconnects during `StreamingRes
 import { load, stream } from "tbx::llm"
 
 fn main() {
-  const m = load("./model.gguf")
-  const ch = stream(m, "hello")
-  for (chunk in <-? ch) {
-    match (chunk) {
-      Value(s) => echo(s),
-      Null => break,
-    }
+  const r = load("./model.gguf")
+  match (r) {
+    Ok(m) => {
+      const ch = stream(m, "hello")
+      for (chunk in <-? ch) {
+        match (chunk) {
+          Value(s) => echo(s),
+          Null => break,
+        }
+      }
+    },
+    Error(e) => print(e)
   }
 }
 ```
