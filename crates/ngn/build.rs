@@ -142,6 +142,23 @@ fn build_llama_cpu(llama_src: &Path, llama_include: &Path, ggml_include: &Path, 
     // For the CPU build we only compile the top-level ggml/src files.
     collect_sources_shallow(ggml_src, &mut c_files, &mut cpp_files);
 
+    // But we do need the CPU backend implementation so ggml can register a backend.
+    // Only compile the top-level ggml-cpu sources. Arch-specific sources under
+    // ggml-cpu/arch/* are not meant to be compiled as standalone translation units.
+    collect_sources_shallow(&ggml_src.join("ggml-cpu"), &mut c_files, &mut cpp_files);
+
+    // However, the top-level ggml-cpu sources rely on arch-specific implementations
+    // for quantization kernels on some platforms. Compile the current target's arch
+    // directory so the expected symbols exist.
+    let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    if target_arch == "x86_64" || target_arch == "x86" {
+        collect_sources_shallow(
+            &ggml_src.join("ggml-cpu").join("arch").join("x86"),
+            &mut c_files,
+            &mut cpp_files,
+        );
+    }
+
     let mut build_cpp = cc::Build::new();
     build_cpp.cpp(true);
     build_cpp.flag_if_supported("-std=c++17");
@@ -151,8 +168,11 @@ fn build_llama_cpu(llama_src: &Path, llama_include: &Path, ggml_include: &Path, 
     build_cpp.include(ggml_include);
     build_cpp.include(&llama_src.join("src"));
     build_cpp.include(ggml_src);
+    build_cpp.include(&ggml_src.join("ggml-cpu"));
     build_cpp.define("GGML_VERSION", "\"vendored\"");
     build_cpp.define("GGML_COMMIT", "\"vendored\"");
+    build_cpp.define("GGML_USE_CPU", None);
+    build_cpp.define("_GNU_SOURCE", None);
 
     for f in &cpp_files {
         build_cpp.file(f);
@@ -166,8 +186,11 @@ fn build_llama_cpu(llama_src: &Path, llama_include: &Path, ggml_include: &Path, 
     build_c.include(ggml_include);
     build_c.include(&llama_src.join("src"));
     build_c.include(ggml_src);
+    build_c.include(&ggml_src.join("ggml-cpu"));
     build_c.define("GGML_VERSION", "\"vendored\"");
     build_c.define("GGML_COMMIT", "\"vendored\"");
+    build_c.define("GGML_USE_CPU", None);
+    build_c.define("_GNU_SOURCE", None);
     for f in &c_files {
         build_c.file(f);
     }

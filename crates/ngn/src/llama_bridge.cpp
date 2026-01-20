@@ -116,7 +116,23 @@ static bool tokenize(const llama_vocab * vocab, const char * text, std::vector<l
     int32_t cap = len + 8;
     out.assign((size_t) cap, 0);
 
-    int32_t n = llama_tokenize(vocab, text, len, out.data(), cap, true, true);
+    // Avoid double-BOS when the prompt already includes a BOS token (e.g. "<s>")
+    // and we're also asking llama_tokenize() to add special tokens.
+    bool add_special = true;
+    {
+        const char * p = text;
+        while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') {
+            ++p;
+        }
+        if (std::strncmp(p, "<s>", 3) == 0) {
+            add_special = false;
+        }
+        if (std::strncmp(p, "<|begin_of_text|>", 17) == 0) {
+            add_special = false;
+        }
+    }
+
+    int32_t n = llama_tokenize(vocab, text, len, out.data(), cap, add_special, true);
     if (n == INT32_MIN) {
         err = "tokenize overflow";
         return false;
@@ -124,7 +140,7 @@ static bool tokenize(const llama_vocab * vocab, const char * text, std::vector<l
     if (n < 0) {
         const int32_t need = -n;
         out.assign((size_t) need, 0);
-        n = llama_tokenize(vocab, text, len, out.data(), need, true, true);
+        n = llama_tokenize(vocab, text, len, out.data(), need, add_special, true);
         if (n < 0) {
             err = "tokenize failed";
             return false;
