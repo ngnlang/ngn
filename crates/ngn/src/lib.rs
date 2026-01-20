@@ -1,4 +1,5 @@
 pub mod analyzer;
+pub(crate) mod blocking_pool;
 pub mod bytecode;
 pub mod compiler;
 pub mod env;

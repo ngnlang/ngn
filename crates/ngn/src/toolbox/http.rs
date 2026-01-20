@@ -1379,12 +1379,18 @@ where
     // End headers
     header_str.push_str("\r\n");
 
-    // Write headers
-    stream.write_all(header_str.as_bytes()).await?;
-    stream.flush().await?;
-
     // Stream chunks from the channel
     let channel = &response.body_channel;
+
+    // Write headers
+    if let Err(e) = stream.write_all(header_str.as_bytes()).await {
+        close_channel(channel);
+        return Err(e);
+    }
+    if let Err(e) = stream.flush().await {
+        close_channel(channel);
+        return Err(e);
+    }
     loop {
         // Try to receive a chunk from the channel
         let chunk = {
@@ -1403,18 +1409,36 @@ where
                 // Write chunk in chunked transfer encoding format:
                 // <hex size>\r\n<data>\r\n
                 let chunk_header = format!("{:x}\r\n", chunk_data.len());
-                stream.write_all(chunk_header.as_bytes()).await?;
-                stream.write_all(chunk_data.as_bytes()).await?;
-                stream.write_all(b"\r\n").await?;
-                stream.flush().await?;
+                if let Err(e) = stream.write_all(chunk_header.as_bytes()).await {
+                    close_channel(channel);
+                    return Err(e);
+                }
+                if let Err(e) = stream.write_all(chunk_data.as_bytes()).await {
+                    close_channel(channel);
+                    return Err(e);
+                }
+                if let Err(e) = stream.write_all(b"\r\n").await {
+                    close_channel(channel);
+                    return Err(e);
+                }
+                if let Err(e) = stream.flush().await {
+                    close_channel(channel);
+                    return Err(e);
+                }
             }
             None => {
                 // Check if channel is closed
                 let is_closed = *channel.is_closed.lock().unwrap();
                 if is_closed {
                     // Send final chunk (0-length) to signal end of stream
-                    stream.write_all(b"0\r\n\r\n").await?;
-                    stream.flush().await?;
+                    if let Err(e) = stream.write_all(b"0\r\n\r\n").await {
+                        close_channel(channel);
+                        return Err(e);
+                    }
+                    if let Err(e) = stream.flush().await {
+                        close_channel(channel);
+                        return Err(e);
+                    }
                     break;
                 } else {
                     // Channel is open but empty, avoid busy spinning
@@ -1462,19 +1486,19 @@ where
         }
     }
 
-    // Build headers
+    let status = response.status;
+
     let mut header_str = String::with_capacity(256);
     let _ = write!(
         header_str,
         "HTTP/1.1 {} {}\r\n",
-        response.status,
-        status_text(response.status)
+        status,
+        status_text(status)
     );
 
     header_str.push_str("Transfer-Encoding: chunked\r\n");
     header_str.push_str("Content-Type: text/event-stream\r\n");
     header_str.push_str("Cache-Control: no-cache\r\n");
-    header_str.push_str("X-Accel-Buffering: no\r\n");
 
     if close_connection {
         header_str.push_str("Connection: close\r\n");
@@ -1497,10 +1521,17 @@ where
 
     header_str.push_str("\r\n");
 
-    stream.write_all(header_str.as_bytes()).await?;
-    stream.flush().await?;
-
     let channel = &response.body_channel;
+
+    if let Err(e) = stream.write_all(header_str.as_bytes()).await {
+        close_channel(channel);
+        return Err(e);
+    }
+    if let Err(e) = stream.flush().await {
+        close_channel(channel);
+        return Err(e);
+    }
+
     let keep_alive_ms = response.keep_alive_ms;
     let mut last_write = std::time::Instant::now();
 

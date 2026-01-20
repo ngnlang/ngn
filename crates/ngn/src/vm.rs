@@ -1912,6 +1912,7 @@ impl Fiber {
             Value::Map(map) => self.map_method(map, method, args),
             Value::Set(set) => self.set_method(set, method, args),
             Value::Response(r) => self.response_method(&r, method, args),
+            Value::Channel(c) => self.channel_method(&c, method, args),
             Value::Object(ref o) if o.model_name == "Request" => {
                 self.request_method(o, method, args)
             }
@@ -2934,6 +2935,25 @@ impl Fiber {
                 Value::Map(form_data)
             }
             _ => panic!("Runtime Error: Unknown Request method '{}'", method),
+        }
+    }
+
+    /// Channel methods: close()
+    fn channel_method(
+        &self,
+        channel: &crate::value::Channel,
+        method: &str,
+        args: Vec<Value>,
+    ) -> Value {
+        match method {
+            "close" => {
+                if !args.is_empty() {
+                    panic!("Runtime Error: .close() takes no arguments");
+                }
+                *channel.is_closed.lock().unwrap() = true;
+                Value::Void
+            }
+            _ => panic!("Runtime Error: Unknown Channel method '{}'", method),
         }
     }
 
