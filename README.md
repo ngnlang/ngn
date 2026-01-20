@@ -2067,7 +2067,13 @@ export default {
 
 Language-level LLM APIs.
 
-ngn vendors llama.cpp at `vendor/llama.cpp` and builds it into the runtime (no external installs needed for end users).
+ngn vendors llama.cpp at `vendor/llama.cpp` and builds it into the runtime.
+
+Build variants:
+- CPU (default): `cargo build --release`
+- CUDA (Linux): `NGN_LLAMA_BACKEND=cuda cargo build --release`
+
+The CUDA build requires CUDA tooling at build time (e.g. `nvcc`) and NVIDIA drivers + CUDA runtime libraries on the target machine.
 
 `tbx::llm` uses llama.cpp directly. Provide a local `.gguf` model file.
 
