@@ -488,6 +488,9 @@ impl Fiber {
                             14 => crate::toolbox::process::process_run(args), // NATIVE_PROCESS_RUN
                             15 => crate::toolbox::process::process_stream(args), // NATIVE_PROCESS_STREAM
                             16 => crate::toolbox::process::process_stream_raw(args), // NATIVE_PROCESS_STREAM_RAW
+                            17 => crate::toolbox::llm::llm_load(args), // NATIVE_LLM_LOAD
+                            18 => crate::toolbox::llm::llm_generate(args), // NATIVE_LLM_GENERATE
+                            19 => crate::toolbox::llm::llm_stream(args), // NATIVE_LLM_STREAM
                             _ => panic!("Runtime Error: Unknown native function ID: {}", id),
                         };
 

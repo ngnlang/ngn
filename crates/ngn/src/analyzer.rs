@@ -202,6 +202,12 @@ impl Analyzer {
             Type::Union(vec![Type::String, Type::Bytes]),
         );
 
+        // LlmChunk is the typed payload for LlmModel.stream() output.
+        // v1 fake backend yields strings.
+        analyzer
+            .type_aliases
+            .insert("LlmChunk".to_string(), Type::String);
+
         analyzer.models.insert(
             "SseResponse".to_string(),
             ModelDef {
@@ -278,6 +284,15 @@ impl Analyzer {
                         ))),
                     ),
                 ],
+            },
+        );
+
+        analyzer.models.insert(
+            "LlmModel".to_string(),
+            ModelDef {
+                name: "LlmModel".to_string(),
+                type_params: vec![],
+                fields: vec![],
             },
         );
 
@@ -948,6 +963,34 @@ impl Analyzer {
                                     "Result".to_string(),
                                     vec![Type::Model("ProcessStream".to_string()), Type::String],
                                 )),
+                            },
+                            ("llm", "load") => Type::Function {
+                                params: vec![Type::String, Type::Any],
+                                optional_count: 1,
+                                return_type: Box::new(Type::Model("LlmModel".to_string())),
+                            },
+                            ("llm", "generate") => Type::Function {
+                                params: vec![
+                                    Type::Model("LlmModel".to_string()),
+                                    Type::String,
+                                    Type::Any,
+                                ],
+                                optional_count: 1,
+                                return_type: Box::new(Type::Generic(
+                                    "Result".to_string(),
+                                    vec![Type::String, Type::String],
+                                )),
+                            },
+                            ("llm", "stream") => Type::Function {
+                                params: vec![
+                                    Type::Model("LlmModel".to_string()),
+                                    Type::String,
+                                    Type::Any,
+                                ],
+                                optional_count: 1,
+                                return_type: Box::new(Type::Channel(Box::new(Type::Model(
+                                    "LlmChunk".to_string(),
+                                )))),
                             },
                             _ => Type::Function {
                                 params: vec![Type::Any],

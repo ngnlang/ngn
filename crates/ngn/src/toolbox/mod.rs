@@ -2,6 +2,7 @@ pub mod core;
 pub mod encoding;
 pub mod http;
 pub mod io;
+pub mod llm;
 pub mod math;
 pub mod process;
 pub mod test;
@@ -22,6 +23,9 @@ pub const NATIVE_FILE_DELETE: u16 = 10;
 pub const NATIVE_PROCESS_RUN: u16 = 14;
 pub const NATIVE_PROCESS_STREAM: u16 = 15;
 pub const NATIVE_PROCESS_STREAM_RAW: u16 = 16;
+pub const NATIVE_LLM_LOAD: u16 = 17;
+pub const NATIVE_LLM_GENERATE: u16 = 18;
+pub const NATIVE_LLM_STREAM: u16 = 19;
 
 use std::{collections::HashMap, path::Path};
 
@@ -45,6 +49,7 @@ impl Toolbox {
         modules.insert("http".to_string(), http::create_module());
         modules.insert("io".to_string(), io::create_module());
         modules.insert("process".to_string(), process::create_module());
+        modules.insert("llm".to_string(), llm::create_module());
         modules.insert("encoding".to_string(), encoding::create_module());
 
         Self { modules }
@@ -100,6 +105,9 @@ pub fn get_native_id(module: &str, name: &str) -> Option<u16> {
         ("process", "run") => Some(NATIVE_PROCESS_RUN),
         ("process", "stream") => Some(NATIVE_PROCESS_STREAM),
         ("process", "streamRaw") => Some(NATIVE_PROCESS_STREAM_RAW),
+        ("llm", "load") => Some(NATIVE_LLM_LOAD),
+        ("llm", "generate") => Some(NATIVE_LLM_GENERATE),
+        ("llm", "stream") => Some(NATIVE_LLM_STREAM),
         _ => None,
     }
 }
