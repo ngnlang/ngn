@@ -967,7 +967,10 @@ impl Analyzer {
                             ("llm", "load") => Type::Function {
                                 params: vec![Type::String, Type::Any],
                                 optional_count: 1,
-                                return_type: Box::new(Type::Model("LlmModel".to_string())),
+                                return_type: Box::new(Type::Generic(
+                                    "Result".to_string(),
+                                    vec![Type::Model("LlmModel".to_string()), Type::String],
+                                )),
                             },
                             ("llm", "generate") => Type::Function {
                                 params: vec![
