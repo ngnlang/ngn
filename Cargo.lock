@@ -856,6 +856,7 @@ dependencies = [
  "base64",
  "bincode",
  "cc",
+ "cmake",
  "crossbeam-channel",
  "ctrlc",
  "hex",
