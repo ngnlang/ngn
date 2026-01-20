@@ -16,6 +16,33 @@ pub struct ModuleRegistry {
     modules: HashMap<usize, ModuleContext>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct GlobalSlotMeta {
+    pub is_defined: bool,
+    pub is_mutable: bool,
+    pub is_initialized: bool,
+}
+
+impl Default for GlobalSlotMeta {
+    fn default() -> Self {
+        Self {
+            is_defined: false,
+            is_mutable: false,
+            is_initialized: false,
+        }
+    }
+}
+
+impl GlobalSlotMeta {
+    pub fn frozen_initialized() -> Self {
+        Self {
+            is_defined: true,
+            is_mutable: false,
+            is_initialized: true,
+        }
+    }
+}
+
 impl ModuleRegistry {
     pub fn new() -> Self {
         Self {
@@ -141,13 +168,14 @@ impl Fiber {
     pub fn run_steps(
         &mut self,
         globals: &mut Vec<Value>,
+        global_meta: &mut Vec<GlobalSlotMeta>,
         custom_methods: &Arc<
             Mutex<std::collections::HashMap<String, std::collections::HashMap<String, Value>>>,
         >,
         max_steps: usize,
     ) -> (FiberStatus, usize) {
         for step in 0..max_steps {
-            let status = self.run_step(globals, custom_methods);
+            let status = self.run_step(globals, global_meta, custom_methods);
             match status {
                 FiberStatus::Running => continue,
                 _ => return (status, step + 1),
@@ -160,6 +188,7 @@ impl Fiber {
     pub fn run_step(
         &mut self,
         globals: &mut Vec<Value>,
+        global_meta: &mut Vec<GlobalSlotMeta>,
         custom_methods: &Arc<
             Mutex<std::collections::HashMap<String, std::collections::HashMap<String, Value>>>,
         >,
@@ -324,11 +353,51 @@ impl Fiber {
                 self.set_reg_at(dest, val);
             }
             OpCode::DefGlobal(_idx, _is_mutable) => {
-                // Not used in register VM usually
+                // Mark global slot metadata for runtime enforcement
+                if global_meta.len() <= _idx {
+                    global_meta.resize(_idx + 1, GlobalSlotMeta::default());
+                }
+                global_meta[_idx] = GlobalSlotMeta {
+                    is_defined: true,
+                    is_mutable: _is_mutable,
+                    is_initialized: false,
+                };
             }
             OpCode::AssignGlobal(idx, src) => {
+                // Module globals are currently stored as Arc<Vec<Value>> (read-only snapshots).
+                // Writing into them would either be impossible or would accidentally write into
+                // the caller's globals. Since the language doesn't allow `var` at module scope
+                // (only `global`, which is immutable), treat any AssignGlobal under home_globals
+                // as a runtime error.
+                if self.home_globals.is_some() {
+                    panic!(
+                        "Runtime Error: Cannot assign to module globals (slot {})",
+                        idx
+                    );
+                }
+
                 let val = self.get_reg_at(src);
+
+                if global_meta.len() <= idx {
+                    global_meta.resize(idx + 1, GlobalSlotMeta::default());
+                }
+
+                if !global_meta[idx].is_defined {
+                    panic!(
+                        "Runtime Error: Cannot assign to undefined global (slot {})",
+                        idx
+                    );
+                }
+
+                if global_meta[idx].is_initialized && !global_meta[idx].is_mutable {
+                    panic!(
+                        "Runtime Error: Cannot assign to immutable global (slot {})",
+                        idx
+                    );
+                }
+
                 globals[idx] = val;
+                global_meta[idx].is_initialized = true;
             }
             OpCode::Call(dest, func_reg, arg_start, arg_count) => {
                 let val = self.get_reg_at(func_reg);
@@ -350,7 +419,12 @@ impl Fiber {
                 }
             }
             OpCode::CallGlobal(dest, idx, arg_start, arg_count) => {
-                let val = globals[idx].clone();
+                // Access globals from the function's home module (or main globals if None)
+                let val = if let Some(ref home_globals) = self.home_globals {
+                    home_globals[idx].clone()
+                } else {
+                    globals[idx].clone()
+                };
                 match val {
                     Value::NativeFunction(id) => {
                         // Collect arguments
@@ -2002,10 +2076,16 @@ impl Fiber {
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         let mut fiber = Fiber::new(closure_clone);
                         let mut thread_globals = globals_clone;
+                        let mut thread_meta =
+                            vec![GlobalSlotMeta::frozen_initialized(); thread_globals.len()];
 
                         // Run the fiber to completion
                         loop {
-                            let status = fiber.run_step(&mut thread_globals, &custom_methods_clone);
+                            let status = fiber.run_step(
+                                &mut thread_globals,
+                                &mut thread_meta,
+                                &custom_methods_clone,
+                            );
                             match status {
                                 FiberStatus::Finished => {
                                     return fiber.return_value.unwrap_or(Value::Void);
@@ -2054,9 +2134,15 @@ impl Fiber {
                         });
                         let mut fiber = Fiber::new(closure);
                         let mut thread_globals = globals_clone;
+                        let mut thread_meta =
+                            vec![GlobalSlotMeta::frozen_initialized(); thread_globals.len()];
 
                         loop {
-                            let status = fiber.run_step(&mut thread_globals, &custom_methods_clone);
+                            let status = fiber.run_step(
+                                &mut thread_globals,
+                                &mut thread_meta,
+                                &custom_methods_clone,
+                            );
                             match status {
                                 FiberStatus::Finished => {
                                     return fiber.return_value.unwrap_or(Value::Void);
@@ -2162,9 +2248,15 @@ impl Fiber {
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         let mut fiber = Fiber::new(closure_clone);
                         let mut thread_globals = globals_clone;
+                        let mut thread_meta =
+                            vec![GlobalSlotMeta::frozen_initialized(); thread_globals.len()];
 
                         loop {
-                            let status = fiber.run_step(&mut thread_globals, &custom_methods_clone);
+                            let status = fiber.run_step(
+                                &mut thread_globals,
+                                &mut thread_meta,
+                                &custom_methods_clone,
+                            );
                             match status {
                                 FiberStatus::Finished => {
                                     return fiber.return_value.unwrap_or(Value::Void);
@@ -2211,9 +2303,15 @@ impl Fiber {
                         });
                         let mut fiber = Fiber::new(closure);
                         let mut thread_globals = globals_clone;
+                        let mut thread_meta =
+                            vec![GlobalSlotMeta::frozen_initialized(); thread_globals.len()];
 
                         loop {
-                            let status = fiber.run_step(&mut thread_globals, &custom_methods_clone);
+                            let status = fiber.run_step(
+                                &mut thread_globals,
+                                &mut thread_meta,
+                                &custom_methods_clone,
+                            );
                             match status {
                                 FiberStatus::Finished => {
                                     return fiber.return_value.unwrap_or(Value::Void);
@@ -3051,6 +3149,7 @@ impl Fiber {
 
 pub struct VM {
     pub globals: Vec<Value>, // Main module globals
+    pub global_meta: Vec<GlobalSlotMeta>,
     pub fibers: VecDeque<Fiber>,
     pub current_fiber: Option<Fiber>,
     pub custom_methods:
@@ -3076,9 +3175,11 @@ impl VM {
         };
         let main_fiber = Fiber::new_main(main_func);
         let globals = vec![Value::Void; 1024];
+        let global_meta = vec![GlobalSlotMeta::default(); 1024];
 
         Self {
             globals,
+            global_meta,
             fibers: VecDeque::new(),
             current_fiber: Some(main_fiber),
             custom_methods: Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -3089,6 +3190,7 @@ impl VM {
     pub fn new_from_fiber(fiber: Fiber) -> Self {
         Self {
             globals: vec![Value::Void; 1024],
+            global_meta: vec![GlobalSlotMeta::default(); 1024],
             fibers: VecDeque::new(),
             current_fiber: Some(fiber),
             custom_methods: Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -3100,7 +3202,7 @@ impl VM {
         while let Some(mut fiber) = self.current_fiber.take() {
             // Wrap fiber execution in catch_unwind to handle unexpected Rust panics
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                fiber.run_step(&mut self.globals, &self.custom_methods)
+                fiber.run_step(&mut self.globals, &mut self.global_meta, &self.custom_methods)
             }));
 
             match result {

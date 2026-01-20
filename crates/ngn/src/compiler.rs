@@ -1270,6 +1270,7 @@ impl Compiler {
                     // For global/static, compile expression and move result to global slot
                     let res_reg = self.compile_expr(&value);
                     self.global_table.insert(name, var_idx);
+                    self.instructions.push(OpCode::DefGlobal(var_idx, is_mutable));
                     self.instructions
                         .push(OpCode::AssignGlobal(var_idx, res_reg));
                 } else {

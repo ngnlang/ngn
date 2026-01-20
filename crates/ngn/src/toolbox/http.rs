@@ -14,7 +14,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::value::{Closure, ObjectData, Value};
-use crate::vm::{Fiber, FiberStatus};
+use crate::vm::{Fiber, FiberStatus, GlobalSlotMeta};
 
 /// Async handler execution with cooperative yielding.
 /// Runs fiber in batches, yielding to tokio between batches for fair scheduling.
@@ -34,11 +34,13 @@ async fn call_handler_async(
 
     // Clone globals for this handler (each handler gets its own copy)
     let mut handler_globals = (*globals).clone();
+    let mut handler_meta = vec![GlobalSlotMeta::frozen_initialized(); handler_globals.len()];
     // Reuse the shared methods Arc directly (no clone needed!)
 
     // Run fiber with cooperative yielding
     loop {
-        let (status, _steps) = fiber.run_steps(&mut handler_globals, &shared_methods, BATCH_SIZE);
+        let (status, _steps) =
+            fiber.run_steps(&mut handler_globals, &mut handler_meta, &shared_methods, BATCH_SIZE);
         match status {
             FiberStatus::Finished => break,
             FiberStatus::Running => {
@@ -61,14 +63,17 @@ async fn call_handler_async(
                 let new_fiber = *new_fiber;
                 let bg_globals = handler_globals.clone();
                 let bg_methods = shared_methods.clone();
+                let bg_meta = handler_meta.clone();
 
                 tokio::spawn(async move {
                     let mut bg_fiber = new_fiber;
                     let mut bg_globals_mut = bg_globals;
+                    let mut bg_meta_mut = bg_meta;
 
                     loop {
                         // Run in smaller batches for better interleaving
-                        let (status, _) = bg_fiber.run_steps(&mut bg_globals_mut, &bg_methods, 50);
+                        let (status, _) =
+                            bg_fiber.run_steps(&mut bg_globals_mut, &mut bg_meta_mut, &bg_methods, 50);
                         match status {
                             FiberStatus::Finished => break,
                             FiberStatus::Running | FiberStatus::Suspended => {

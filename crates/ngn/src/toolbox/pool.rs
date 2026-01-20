@@ -7,6 +7,7 @@
 use crate::blocking_pool::{BlockingJob, global_blocking_pool};
 use crate::error::RuntimeError;
 use crate::value::{Channel, Value};
+use crate::vm::GlobalSlotMeta;
 
 use super::ToolboxModule;
 use std::collections::{HashMap, VecDeque};
@@ -67,11 +68,12 @@ pub fn pool_submit(args: Vec<Value>) -> Result<Value, RuntimeError> {
             // Run the closure in a new fiber (same pattern used elsewhere).
             let mut fiber = crate::vm::Fiber::new(closure);
             let mut globals: Vec<Value> = Vec::new();
+            let mut global_meta: Vec<GlobalSlotMeta> = Vec::new();
             // TODO: this runs with empty globals/custom_methods. This module is currently intended
             // as a proof that the bounded pool works end-to-end.
             let custom_methods = Arc::new(Mutex::new(std::collections::HashMap::new()));
             loop {
-                let status = fiber.run_step(&mut globals, &custom_methods);
+                let status = fiber.run_step(&mut globals, &mut global_meta, &custom_methods);
                 match status {
                     crate::vm::FiberStatus::Finished => {
                         return fiber.return_value.unwrap_or(Value::Void);
