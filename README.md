@@ -1655,10 +1655,60 @@ If needed, you also have access to these variable methods when using `state()`:
 - `.read()`, gets the current value
 - `.write()`, sets the current value - which replaces the existing one. Be careful, as it can be tricky to ensure proper mutation order when coupled with `.update()`.
 
-### `spawn` - Parallel Task Execution
-The `spawn` global provides a way of running multiple tasks in parallel - each in its own thread. Tasks should be functions that return `Result<T, E>`.
+### `spawn` - Parallel Execution
+The `spawn` global provides two related tools:
 
-All `spawn.*` methods are blocking - they wait for completion before returning. Thread panics are automatically converted to `Error("Thread panicked: <error message>")`.
+- single-task offloading (`spawn.cpu`, `spawn.block`) which returns a `channel` immediately
+- multi-task parallel helpers (`spawn.all`, `spawn.try`, `spawn.race`) which return results directly
+
+Tasks should return `Result<T, E>`. If a task returns a non-`Result` value, it will be wrapped as `Ok(value)`. Thread panics are automatically converted to `Error("Thread panicked: <error message>")`.
+
+#### `spawn.cpu(task)`
+Run a single task on the CPU worker pool.
+
+This call does not block immediately; it returns a channel right away, and you await it with `<-`.
+
+- accepts either a function or a closure
+- returns `channel<Result<any, string>>`
+- if the CPU pool queue is full, the returned channel will contain `Error("spawn.cpu() queue is full")`
+
+```ngn
+fn expensive(): i64 {
+  // some CPU-heavy work
+  return 123 // automatically wrapped with `Ok()`
+}
+
+fn main() {
+  const ch = spawn.cpu(expensive)
+  // do other work?
+
+  const result = <- ch
+  print(result)
+}
+```
+
+#### `spawn.block(task)`
+Run a single task on the blocking worker pool (for work that may stall the current thread, e.g. filesystem operations, subprocess waits, etc.).
+
+The name `block` refers to the *kind of work* (it may block internally). The call itself returns a channel immediately, and you use `<-` when you want to await it.
+
+Note: `fetch()` already runs on the blocking pool internally, so there's no need to wrap `fetch()` in `spawn.block()`.
+
+- accepts either a function or a closure
+- returns `channel<Result<any, string>>`
+- if the blocking pool queue is full, the returned channel will contain `Error("spawn.block() queue is full")`
+
+```ngn
+import { file } from "tbx::io"
+
+fn main() {
+  // File I/O is blocking. Offload it so it doesn't stall other work.
+  const ch = spawn.block(|| file.read("./big.txt"))
+
+  const result = <- ch
+  print(result)
+}
+```
 
 #### `spawn.all(tasks, options?)`
 Returns an array of results (including any errors).
@@ -1702,7 +1752,7 @@ const result = spawn.race([task1, task2, task3])
 ```
 
 ## `fetch()`
-Use `fetch` to make HTTP requests, such as to external APIs. It returns a channel, so you await it with the `<-` operator.
+Use `fetch` to make HTTP requests, such as to external APIs. It returns a channel, so you await it with the `<-` channel operator.
 
 ```ngn
 const response = <- fetch("https://example.com")
