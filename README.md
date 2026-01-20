@@ -2063,6 +2063,93 @@ export default {
 }
 ```
 
+### tbx::process
+
+OS process execution utilities.
+
+Import from `tbx::process`:
+
+```ngn
+import { run, stream, streamRaw } from "tbx::process"
+```
+
+### `run(cmd, opts?)`
+Run a shell command (`/bin/sh -c`) and return a channel that produces a single `Result<ProcessOutput, string>`.
+
+```ngn
+const result = <- run("printf 'hi'")
+match (result) {
+  Ok(out) => {
+    print(out.code)   // exit code
+    print(out.stdout) // captured stdout
+    print(out.stderr) // captured stderr
+  },
+  Error(e) => print(e)
+}
+```
+
+Options (all optional):
+- `cwd: string`
+- `timeoutMs: i64`
+
+### `stream(cmd, opts?)`
+Stream a command's stdout/stderr while it runs.
+
+Returns `Result<ProcessStream, string>`.
+
+`ProcessStream` fields:
+- `stdout: channel<string>` (line-based)
+- `stderr: channel<string>` (line-based)
+- `done: channel<Result<ProcessOutput, string>>`
+
+```ngn
+const r = stream("printf 'a\\nb\\n'")
+match (r) {
+  Ok(p) => {
+    const a = <- p.stdout
+    const b = <- p.stdout
+
+    // Stop reading once you're done.
+    p.stdout.close()
+    p.stderr.close()
+
+    const done = <- p.done
+    match (done) {
+      Ok(out) => print(out.code),
+      Error(e) => print(e)
+    }
+  },
+  Error(e) => print(e)
+}
+```
+
+Options (all optional):
+- `cwd: string`
+- `timeoutMs: i64`
+
+### `streamRaw(cmd, opts?)`
+Like `stream()`, but `stdout`/`stderr` are `channel<bytes>` chunks instead of lines.
+
+```ngn
+const r = streamRaw("printf 'xyz'")
+match (r) {
+  Ok(p) => {
+    const chunk = <- p.stdout
+    print(chunk.toStringStrict())
+
+    p.stdout.close()
+    p.stderr.close()
+
+    <- p.done
+  },
+  Error(e) => print(e)
+}
+```
+
+Options (all optional):
+- `cwd: string`
+- `timeoutMs: i64`
+
 ### tbx::io
 
 File I/O operations. Import from `tbx::io`:
