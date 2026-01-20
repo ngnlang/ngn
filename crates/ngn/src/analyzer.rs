@@ -2819,6 +2819,25 @@ impl Analyzer {
                     // Allow method calls on Type::Spawn (for spawn.all, spawn.try, spawn.race)
                     Type::Spawn => {
                         match method.as_str() {
+                            "cpu" | "block" => {
+                                if args.len() != 1 {
+                                    self.add_error(
+                                        format!(
+                                            "Type Error: spawn.{}() requires exactly 1 argument",
+                                            method
+                                        ),
+                                        expr.span,
+                                    );
+                                } else {
+                                    self.check_expression(&args[0]);
+                                }
+
+                                // Returns channel<Result<Any, String>>
+                                Type::Channel(Box::new(Type::Generic(
+                                    "Result".to_string(),
+                                    vec![Type::Any, Type::String],
+                                )))
+                            }
                             "all" | "try" => {
                                 // Expects array of functions, returns array<Result<Any, String>>
                                 if args.is_empty() {

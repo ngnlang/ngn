@@ -1,5 +1,6 @@
 use crate::bytecode::OpCode;
 use crate::value::{Channel, Closure, EnumData, Function, ObjectData, Value};
+use crate::blocking_pool::{global_blocking_pool, global_cpu_pool};
 use regex::Regex as RegexLib;
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -893,6 +894,212 @@ impl Fiber {
                     panic!("Runtime Error: Spawn expects a closure");
                 }
             }
+            OpCode::SpawnCpu(dest, task_reg) => {
+                let task_val = self.get_reg_at(task_reg);
+                let chan = Channel {
+                    name: "spawn_cpu_result".to_string(),
+                    buffer: Arc::new(Mutex::new(VecDeque::new())),
+                    capacity: 1,
+                    is_closed: Arc::new(Mutex::new(false)),
+                };
+
+                let closure = match task_val {
+                    Value::Closure(c) => c,
+                    Value::Function(f) => Box::new(Closure {
+                        function: f,
+                        upvalues: Vec::new(),
+                    }),
+                    _ => {
+                    let err = EnumData::into_value(
+                        "Result".to_string(),
+                        "Error".to_string(),
+                        Some(Box::new(Value::String(
+                            "spawn.cpu() expects a function or closure".to_string(),
+                        ))),
+                    );
+                    chan.buffer.lock().unwrap().push_back(err);
+                    *chan.is_closed.lock().unwrap() = true;
+                    self.set_reg_at(dest, Value::Channel(chan));
+                    return FiberStatus::Running;
+                    }
+                };
+                let chan_clone = chan.clone();
+                let globals_clone = globals.clone();
+                let custom_methods_clone = custom_methods.clone();
+
+                let submit = global_cpu_pool().try_submit(Box::new(move || {
+                    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let mut fiber = Fiber::new(closure);
+                        let mut thread_globals = globals_clone;
+                        let mut thread_meta =
+                            vec![GlobalSlotMeta::frozen_initialized(); thread_globals.len()];
+
+                        loop {
+                            let status = fiber.run_step(
+                                &mut thread_globals,
+                                &mut thread_meta,
+                                &custom_methods_clone,
+                            );
+                            match status {
+                                FiberStatus::Finished => {
+                                    return fiber.return_value.unwrap_or(Value::Void);
+                                }
+                                FiberStatus::Running => continue,
+                                _ => break,
+                            }
+                        }
+                        Value::Void
+                    }));
+
+                    let val = match out {
+                        Ok(v) => match &v {
+                            Value::Enum(e) if e.enum_name == "Result" => v,
+                            _ => EnumData::into_value(
+                                "Result".to_string(),
+                                "Ok".to_string(),
+                                Some(Box::new(v)),
+                            ),
+                        },
+                        Err(panic_info) => {
+                            let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                                s.to_string()
+                            } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                                s.clone()
+                            } else {
+                                "Unknown panic".to_string()
+                            };
+                            EnumData::into_value(
+                                "Result".to_string(),
+                                "Error".to_string(),
+                                Some(Box::new(Value::String(format!(
+                                    "Thread panicked: {}",
+                                    msg
+                                )))),
+                            )
+                        }
+                    };
+
+                    chan_clone.buffer.lock().unwrap().push_back(val);
+                    *chan_clone.is_closed.lock().unwrap() = true;
+                }));
+
+                if submit.is_err() {
+                    let err = EnumData::into_value(
+                        "Result".to_string(),
+                        "Error".to_string(),
+                        Some(Box::new(Value::String(
+                            "spawn.cpu() queue is full".to_string(),
+                        ))),
+                    );
+                    chan.buffer.lock().unwrap().push_back(err);
+                    *chan.is_closed.lock().unwrap() = true;
+                }
+
+                self.set_reg_at(dest, Value::Channel(chan));
+            }
+            OpCode::SpawnBlock(dest, task_reg) => {
+                let task_val = self.get_reg_at(task_reg);
+                let chan = Channel {
+                    name: "spawn_block_result".to_string(),
+                    buffer: Arc::new(Mutex::new(VecDeque::new())),
+                    capacity: 1,
+                    is_closed: Arc::new(Mutex::new(false)),
+                };
+
+                let closure = match task_val {
+                    Value::Closure(c) => c,
+                    Value::Function(f) => Box::new(Closure {
+                        function: f,
+                        upvalues: Vec::new(),
+                    }),
+                    _ => {
+                    let err = EnumData::into_value(
+                        "Result".to_string(),
+                        "Error".to_string(),
+                        Some(Box::new(Value::String(
+                            "spawn.block() expects a function or closure".to_string(),
+                        ))),
+                    );
+                    chan.buffer.lock().unwrap().push_back(err);
+                    *chan.is_closed.lock().unwrap() = true;
+                    self.set_reg_at(dest, Value::Channel(chan));
+                    return FiberStatus::Running;
+                    }
+                };
+                let chan_clone = chan.clone();
+                let globals_clone = globals.clone();
+                let custom_methods_clone = custom_methods.clone();
+
+                let submit = global_blocking_pool().try_submit(Box::new(move || {
+                    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let mut fiber = Fiber::new(closure);
+                        let mut thread_globals = globals_clone;
+                        let mut thread_meta =
+                            vec![GlobalSlotMeta::frozen_initialized(); thread_globals.len()];
+
+                        loop {
+                            let status = fiber.run_step(
+                                &mut thread_globals,
+                                &mut thread_meta,
+                                &custom_methods_clone,
+                            );
+                            match status {
+                                FiberStatus::Finished => {
+                                    return fiber.return_value.unwrap_or(Value::Void);
+                                }
+                                FiberStatus::Running => continue,
+                                _ => break,
+                            }
+                        }
+                        Value::Void
+                    }));
+
+                    let val = match out {
+                        Ok(v) => match &v {
+                            Value::Enum(e) if e.enum_name == "Result" => v,
+                            _ => EnumData::into_value(
+                                "Result".to_string(),
+                                "Ok".to_string(),
+                                Some(Box::new(v)),
+                            ),
+                        },
+                        Err(panic_info) => {
+                            let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                                s.to_string()
+                            } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                                s.clone()
+                            } else {
+                                "Unknown panic".to_string()
+                            };
+                            EnumData::into_value(
+                                "Result".to_string(),
+                                "Error".to_string(),
+                                Some(Box::new(Value::String(format!(
+                                    "Thread panicked: {}",
+                                    msg
+                                )))),
+                            )
+                        }
+                    };
+
+                    chan_clone.buffer.lock().unwrap().push_back(val);
+                    *chan_clone.is_closed.lock().unwrap() = true;
+                }));
+
+                if submit.is_err() {
+                    let err = EnumData::into_value(
+                        "Result".to_string(),
+                        "Error".to_string(),
+                        Some(Box::new(Value::String(
+                            "spawn.block() queue is full".to_string(),
+                        ))),
+                    );
+                    chan.buffer.lock().unwrap().push_back(err);
+                    *chan.is_closed.lock().unwrap() = true;
+                }
+
+                self.set_reg_at(dest, Value::Channel(chan));
+            }
             OpCode::Fetch(dest, url_reg, options_reg) => {
                 let url_val = self.get_reg_at(url_reg);
                 if let Value::String(url) = url_val {
@@ -953,8 +1160,8 @@ impl Fiber {
 
                     let chan_clone = chan.clone();
 
-                    // Spawn native thread to perform fetch
-                    std::thread::spawn(move || {
+                    // Run fetch on bounded blocking pool.
+                    let submit = global_blocking_pool().try_submit(Box::new(move || {
                         let client = reqwest::blocking::Client::builder()
                             .timeout(std::time::Duration::from_millis(timeout_ms))
                             .build()
@@ -1025,7 +1232,21 @@ impl Fiber {
                             }
                         };
                         chan_clone.buffer.lock().unwrap().push_back(result);
-                    });
+
+                        *chan_clone.is_closed.lock().unwrap() = true;
+                    }));
+
+                    if submit.is_err() {
+                        let result = crate::value::ResponseData::new(
+                            0,
+                            "Error: fetch() queue is full".to_string(),
+                            std::collections::HashMap::new(),
+                            String::new(),
+                        )
+                        .into_value();
+                        chan.buffer.lock().unwrap().push_back(result);
+                        *chan.is_closed.lock().unwrap() = true;
+                    }
 
                     self.set_reg_at(dest, Value::Channel(chan));
                 } else {

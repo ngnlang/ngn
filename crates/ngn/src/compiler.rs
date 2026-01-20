@@ -844,6 +844,18 @@ impl Compiler {
                     if var_name == "spawn" {
                         let dest = self.alloc_reg();
                         match method.as_str() {
+                            "cpu" => {
+                                let task_reg = self.compile_expr(&args[0]);
+                                self.instructions.push(OpCode::SpawnCpu(dest, task_reg));
+                                self.reg_top = dest + 1;
+                                return dest;
+                            }
+                            "block" => {
+                                let task_reg = self.compile_expr(&args[0]);
+                                self.instructions.push(OpCode::SpawnBlock(dest, task_reg));
+                                self.reg_top = dest + 1;
+                                return dest;
+                            }
                             "all" => {
                                 let tasks_reg = self.compile_expr(&args[0]);
                                 let options_reg = if args.len() > 1 {

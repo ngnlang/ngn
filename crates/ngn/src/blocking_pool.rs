@@ -37,10 +37,24 @@ fn worker_loop(rx: Arc<Receiver<BlockingJob>>) {
 }
 
 static GLOBAL_POOL: OnceLock<BlockingPool> = OnceLock::new();
+static GLOBAL_CPU_POOL: OnceLock<BlockingPool> = OnceLock::new();
 
 #[allow(dead_code)]
 pub fn global_blocking_pool() -> &'static BlockingPool {
     GLOBAL_POOL.get_or_init(|| {
+        // For blocking/IO-ish work we allow more threads than cores because these
+        // jobs often spend time waiting (network, disk, process waits, etc.).
+        let threads = (num_cpus::get().max(1) * 4).min(64);
+        let queue_capacity = 1024;
+        BlockingPool::new(threads, queue_capacity)
+    })
+}
+
+#[allow(dead_code)]
+pub fn global_cpu_pool() -> &'static BlockingPool {
+    GLOBAL_CPU_POOL.get_or_init(|| {
+        // CPU-bound work should be kept near the core count to avoid excessive
+        // contention and context switching.
         let threads = num_cpus::get().max(1);
         let queue_capacity = 1024;
         BlockingPool::new(threads, queue_capacity)

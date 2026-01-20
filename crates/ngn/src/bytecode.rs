@@ -67,6 +67,8 @@ pub enum OpCode {
 
     // Concurrency
     Spawn(u16, u16),      // (DestChannelReg, ClosureReg)
+    SpawnCpu(u16, u16),   // (DestChannelReg, TaskReg)
+    SpawnBlock(u16, u16), // (DestChannelReg, TaskReg)
     Fetch(u16, u16, u16), // (DestChannelReg, UrlReg, OptionsReg) - OptionsReg=u16::MAX means no options
     Yield,
     Send(u16, u16),              // (ChannelReg, ValueReg)
