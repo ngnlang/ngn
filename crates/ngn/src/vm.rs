@@ -874,6 +874,12 @@ impl Fiber {
                         let byte = b[idx as usize];
                         self.set_reg_at(dest, Value::Numeric(crate::value::Number::U8(byte)));
                     }
+                    (Value::Tuple(items), Value::Numeric(crate::value::Number::I64(idx))) => {
+                        if idx < 0 || idx >= items.len() as i64 {
+                            panic!("Runtime Error: Tuple index out of bounds: {}", idx);
+                        }
+                        self.set_reg_at(dest, items[idx as usize].clone());
+                    }
                     _ => panic!("Runtime Error: Invalid indexing operation"),
                 }
             }

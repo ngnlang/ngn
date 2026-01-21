@@ -114,6 +114,13 @@ pub enum StatementKind {
         is_mutable: bool,
         value: Expr,
     },
+    // const (a, b, ...rest) = tuple
+    DestructureTuple {
+        bindings: Vec<String>, // Names to bind each element to
+        rest: Option<String>,  // Optional ...rest binding
+        is_mutable: bool,
+        value: Expr,
+    },
     Expression(Expr),
     Function {
         name: String,
@@ -742,6 +749,9 @@ impl Parser {
         if self.current_token == Token::LBracket {
             return self.parse_array_destructure(start, is_mutable, is_global);
         }
+        if self.current_token == Token::LParen {
+            return self.parse_tuple_destructure(start, is_mutable, is_global);
+        }
 
         let name = self.expect_identifier();
 
@@ -881,6 +891,63 @@ impl Parser {
 
         Statement {
             kind: StatementKind::DestructureArray {
+                bindings,
+                rest,
+                is_mutable,
+                value,
+            },
+            span: Span::new(start, end),
+        }
+    }
+
+    /// Parse tuple destructuring: const (a, b, ...rest) = expr
+    fn parse_tuple_destructure(
+        &mut self,
+        start: usize,
+        is_mutable: bool,
+        _is_global: bool,
+    ) -> Statement {
+        self.advance(); // consume '('
+        self.consume_newlines();
+
+        let mut bindings: Vec<String> = Vec::new();
+        let mut rest: Option<String> = None;
+
+        while self.current_token != Token::RParen && self.current_token != Token::EOF {
+            self.consume_newlines();
+
+            // Check for rest syntax ...rest
+            if self.current_token == Token::DotDotDot {
+                self.advance(); // consume '...'
+                let rest_name = self.expect_identifier();
+                rest = Some(rest_name);
+                self.consume_newlines();
+                // Rest must be last, so break out
+                if self.current_token == Token::Comma {
+                    self.advance();
+                    self.consume_newlines();
+                }
+                break;
+            }
+
+            // Parse binding name
+            let name = self.expect_identifier();
+            bindings.push(name);
+
+            self.consume_newlines();
+            if self.current_token == Token::Comma {
+                self.advance();
+                self.consume_newlines();
+            }
+        }
+
+        self.expect(Token::RParen);
+        self.expect(Token::Equal);
+        let value = self.parse_expression();
+        let end = value.span.end;
+
+        Statement {
+            kind: StatementKind::DestructureTuple {
                 bindings,
                 rest,
                 is_mutable,

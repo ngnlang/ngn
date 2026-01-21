@@ -1410,6 +1410,64 @@ impl Compiler {
                 self.temp_start = self.next_index as u16;
                 self.reg_top = self.temp_start;
             }
+            StatementKind::DestructureTuple {
+                bindings,
+                rest,
+                is_mutable,
+                value,
+            } => {
+                // Compile the source expression
+                let src_reg = self.compile_expr(&value);
+
+                // For each binding, emit GetIndex and store in a new local variable
+                for (i, binding_name) in bindings.iter().enumerate() {
+                    let var_idx = self.next_index;
+                    self.symbol_table.insert(binding_name.clone(), var_idx);
+
+                    // Create index constant
+                    let index_const_idx = self.add_constant(Value::Numeric(Number::I64(i as i64)));
+                    let index_reg = self.alloc_reg();
+                    self.instructions
+                        .push(OpCode::LoadConst(index_reg, index_const_idx));
+
+                    let dest_reg = self.alloc_reg();
+                    self.instructions
+                        .push(OpCode::GetIndex(dest_reg, src_reg, index_reg));
+                    self.instructions
+                        .push(OpCode::Move(var_idx as u16, dest_reg));
+                    self.instructions.push(OpCode::DefVar(var_idx, is_mutable));
+
+                    self.next_index += 1;
+                }
+
+                // Handle rest binding - collect remaining elements into a new tuple
+                if let Some(rest_name) = rest {
+                    let var_idx = self.next_index;
+                    self.symbol_table.insert(rest_name.clone(), var_idx);
+
+                    // Use copy method to get remaining elements
+                    let skip_count = bindings.len();
+                    let skip_const_idx =
+                        self.add_constant(Value::Numeric(Number::I64(skip_count as i64)));
+                    let skip_reg = self.alloc_reg();
+                    self.instructions
+                        .push(OpCode::LoadConst(skip_reg, skip_const_idx));
+
+                    let method_idx = self.add_constant(Value::String("copy".to_string()));
+                    let dest_reg = self.alloc_reg();
+                    self.instructions.push(OpCode::CallMethod(
+                        dest_reg, src_reg, method_idx, skip_reg, 1,
+                    ));
+                    self.instructions
+                        .push(OpCode::Move(var_idx as u16, dest_reg));
+                    self.instructions.push(OpCode::DefVar(var_idx, is_mutable));
+
+                    self.next_index += 1;
+                }
+
+                self.temp_start = self.next_index as u16;
+                self.reg_top = self.temp_start;
+            }
             StatementKind::Model(_) | StatementKind::Role(_) => {}
             StatementKind::Extend {
                 target, methods, ..

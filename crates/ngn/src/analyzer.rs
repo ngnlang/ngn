@@ -688,6 +688,35 @@ impl Analyzer {
 
                 Type::Void
             }
+            StatementKind::DestructureTuple {
+                bindings,
+                rest,
+                is_mutable,
+                value,
+            } => {
+                let source_type = self.check_expression(value);
+
+                // Get element types from tuple
+                let elements = match &source_type {
+                    Type::Tuple(elems) => elems.clone(),
+                    _ => vec![],
+                };
+
+                // Each binding gets its respective element type
+                for (i, binding) in bindings.iter().enumerate() {
+                    let ty = elements.get(i).cloned().unwrap_or(Type::Any);
+                    self.define(binding, ty, *is_mutable, stmt.span);
+                }
+
+                // Handle rest - gets a tuple of remaining elements
+                if let Some(rest_name) = rest {
+                    let remaining: Vec<Type> =
+                        elements.iter().skip(bindings.len()).cloned().collect();
+                    self.define(rest_name, Type::Tuple(remaining), *is_mutable, stmt.span);
+                }
+
+                Type::Void
+            }
             StatementKind::Expression(expr) => self.check_expression(expr),
             StatementKind::Function {
                 name,
