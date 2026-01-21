@@ -574,6 +574,120 @@ impl Analyzer {
                 self.define(name, ty, *is_mutable, stmt.span);
                 Type::Void
             }
+            StatementKind::DestructureObject {
+                fields,
+                rest,
+                is_mutable,
+                value,
+            } => {
+                let source_type = self.check_expression(value);
+
+                // For each field, try to infer its type from the source
+                for (field_name, alias) in fields {
+                    let binding_name = alias.as_ref().unwrap_or(field_name);
+
+                    // Try to get the field type from the source
+                    let field_type = match &source_type {
+                        Type::Model(model_name) => {
+                            if let Some(model_def) = self.models.get(model_name) {
+                                model_def
+                                    .fields
+                                    .iter()
+                                    .find(|(name, _)| name == field_name)
+                                    .map(|(_, ty)| ty.clone())
+                                    .unwrap_or(Type::Any)
+                            } else {
+                                Type::Any
+                            }
+                        }
+                        Type::Generic(name, args) if self.models.contains_key(name) => {
+                            if let Some(model_def) = self.models.get(name) {
+                                model_def
+                                    .fields
+                                    .iter()
+                                    .find(|(n, _)| n == field_name)
+                                    .map(|(_, ty)| {
+                                        // Substitute type params
+                                        self.substitute_type_params(
+                                            ty,
+                                            &model_def.type_params,
+                                            args,
+                                        )
+                                    })
+                                    .unwrap_or(Type::Any)
+                            } else {
+                                Type::Any
+                            }
+                        }
+                        _ => Type::Any, // For anonymous objects, use Any
+                    };
+
+                    self.define(binding_name, field_type, *is_mutable, stmt.span);
+                }
+
+                // Handle rest binding - it gets an anonymous object with remaining fields
+                if let Some(rest_name) = rest {
+                    // For now, rest gets type Any (we don't track what fields are "left")
+                    self.define(rest_name, Type::Any, *is_mutable, stmt.span);
+                }
+
+                Type::Void
+            }
+            StatementKind::DestructureArray {
+                bindings,
+                rest,
+                is_mutable,
+                value,
+            } => {
+                let source_type = self.check_expression(value);
+
+                // Get element type from array
+                let element_type = match &source_type {
+                    Type::Array(inner) => (**inner).clone(),
+                    Type::Tuple(elements) => {
+                        // For tuples, each binding gets its respective element type
+                        for (i, binding) in bindings.iter().enumerate() {
+                            let ty = elements.get(i).cloned().unwrap_or(Type::Any);
+                            self.define(binding, ty, *is_mutable, stmt.span);
+                        }
+                        // Handle rest
+                        if let Some(rest_name) = rest {
+                            // Rest of tuple becomes a tuple of remaining elements
+                            let remaining: Vec<Type> =
+                                elements.iter().skip(bindings.len()).cloned().collect();
+                            if remaining.is_empty() {
+                                self.define(rest_name, Type::Tuple(vec![]), *is_mutable, stmt.span);
+                            } else {
+                                self.define(
+                                    rest_name,
+                                    Type::Tuple(remaining),
+                                    *is_mutable,
+                                    stmt.span,
+                                );
+                            }
+                        }
+                        return Type::Void;
+                    }
+                    _ => Type::Any,
+                };
+
+                // For arrays, all bindings get the element type
+                for binding in bindings {
+                    self.define(binding, element_type.clone(), *is_mutable, stmt.span);
+                }
+
+                // Handle rest binding - gets an array of remaining elements
+                if let Some(rest_name) = rest {
+                    self.define(
+                        rest_name,
+                        Type::Array(Box::new(element_type)),
+                        *is_mutable,
+                        stmt.span,
+                    );
+                }
+
+                Type::Void
+            }
             StatementKind::Expression(expr) => self.check_expression(expr),
             StatementKind::Function {
                 name,

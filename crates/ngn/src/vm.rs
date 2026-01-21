@@ -2138,6 +2138,49 @@ impl Fiber {
                     panic!("Runtime Error: env.has() expects a string key");
                 }
             }
+            OpCode::ObjectRest(dest_reg, obj_reg, excluded_fields_idx) => {
+                // Create a new object with all fields except the excluded ones
+                let obj = self.get_reg_at(obj_reg);
+                let excluded = &self.constants[excluded_fields_idx];
+
+                // Build a set of excluded field names
+                let excluded_names: std::collections::HashSet<String> =
+                    if let Value::Array(arr) = excluded {
+                        arr.iter()
+                            .filter_map(|v| {
+                                if let Value::String(s) = v {
+                                    Some(s.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
+                    } else {
+                        std::collections::HashSet::new()
+                    };
+
+                // Create a new object with remaining fields
+                let rest_fields = match obj {
+                    Value::Object(obj_data) => {
+                        let mut fields = std::collections::HashMap::new();
+                        for (key, value) in obj_data.fields.iter() {
+                            if !excluded_names.contains(key) {
+                                fields.insert(key.clone(), value.clone());
+                            }
+                        }
+                        fields
+                    }
+                    _ => std::collections::HashMap::new(),
+                };
+
+                self.set_reg_at(
+                    dest_reg,
+                    Value::Object(Box::new(ObjectData {
+                        model_name: "__anon__".to_string(),
+                        fields: rest_fields,
+                    })),
+                );
+            }
             OpCode::Halt => {
                 self.status = FiberStatus::Finished;
                 return FiberStatus::Finished;

@@ -136,4 +136,7 @@ pub enum OpCode {
     // Environment Variables
     EnvGet(u16, u16), // (DestReg, KeyReg) - returns Maybe<string>
     EnvHas(u16, u16), // (DestReg, KeyReg) - returns bool
+
+    // Destructuring
+    ObjectRest(u16, u16, usize), // (DestReg, ObjReg, ExcludedFieldsConstIdx) - creates object with remaining fields
 }

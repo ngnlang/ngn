@@ -91,6 +91,7 @@ pub enum Token {
     QuestionQuestion,
     QuestionDot,
     Period,
+    DotDotDot, // ... (rest/spread operator)
 
     // Formatting
     Newline,
@@ -459,7 +460,14 @@ impl Lexer {
                     Token::Question
                 }
             }
-            '.' => Token::Period,
+            '.' => {
+                if self.peek_current() == '.' && self.peek() == '.' {
+                    self.cursor += 2; // consume the other two dots
+                    Token::DotDotDot
+                } else {
+                    Token::Period
+                }
+            }
             '_' => Token::Underscore,
             _ => panic!("Unknown character: {}", ch),
         };

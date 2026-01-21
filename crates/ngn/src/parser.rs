@@ -100,6 +100,20 @@ pub enum StatementKind {
         value: Expr,
         declared_type: Option<Type>,
     },
+    // const { a, b: renamed, ...rest } = obj
+    DestructureObject {
+        fields: Vec<(String, Option<String>)>, // (field_name, optional_alias) - if alias is None, binds to field_name
+        rest: Option<String>,                  // Optional ...rest binding
+        is_mutable: bool,
+        value: Expr,
+    },
+    // const [a, b, ...rest] = arr
+    DestructureArray {
+        bindings: Vec<String>, // Names to bind each element to
+        rest: Option<String>,  // Optional ...rest binding
+        is_mutable: bool,
+        value: Expr,
+    },
     Expression(Expr),
     Function {
         name: String,
@@ -721,6 +735,14 @@ impl Parser {
             _ => panic!("Expected declarator"),
         };
 
+        // Check for destructuring patterns
+        if self.current_token == Token::LBrace {
+            return self.parse_object_destructure(start, is_mutable, is_global);
+        }
+        if self.current_token == Token::LBracket {
+            return self.parse_array_destructure(start, is_mutable, is_global);
+        }
+
         let name = self.expect_identifier();
 
         let mut declared_type = None;
@@ -740,6 +762,129 @@ impl Parser {
                 is_global,
                 value,
                 declared_type,
+            },
+            span: Span::new(start, end),
+        }
+    }
+
+    /// Parse object destructuring: const { a, b: aliasB, ...rest } = expr
+    fn parse_object_destructure(
+        &mut self,
+        start: usize,
+        is_mutable: bool,
+        _is_global: bool,
+    ) -> Statement {
+        self.advance(); // consume '{'
+        self.consume_newlines();
+
+        let mut fields: Vec<(String, Option<String>)> = Vec::new();
+        let mut rest: Option<String> = None;
+
+        while self.current_token != Token::RBrace && self.current_token != Token::EOF {
+            self.consume_newlines();
+
+            // Check for rest syntax ...rest
+            if self.current_token == Token::DotDotDot {
+                self.advance(); // consume '...'
+                let rest_name = self.expect_identifier();
+                rest = Some(rest_name);
+                self.consume_newlines();
+                // Rest must be last, so break out
+                if self.current_token == Token::Comma {
+                    self.advance();
+                    self.consume_newlines();
+                }
+                break;
+            }
+
+            // Parse field name
+            let field_name = self.expect_identifier();
+
+            // Check for alias: a: b
+            let alias = if self.current_token == Token::Colon {
+                self.advance();
+                Some(self.expect_identifier())
+            } else {
+                None
+            };
+
+            fields.push((field_name, alias));
+
+            self.consume_newlines();
+            if self.current_token == Token::Comma {
+                self.advance();
+                self.consume_newlines();
+            }
+        }
+
+        self.expect(Token::RBrace);
+        self.expect(Token::Equal);
+        let value = self.parse_expression();
+        let end = value.span.end;
+
+        Statement {
+            kind: StatementKind::DestructureObject {
+                fields,
+                rest,
+                is_mutable,
+                value,
+            },
+            span: Span::new(start, end),
+        }
+    }
+
+    /// Parse array destructuring: const [a, b, ...rest] = expr
+    fn parse_array_destructure(
+        &mut self,
+        start: usize,
+        is_mutable: bool,
+        _is_global: bool,
+    ) -> Statement {
+        self.advance(); // consume '['
+        self.consume_newlines();
+
+        let mut bindings: Vec<String> = Vec::new();
+        let mut rest: Option<String> = None;
+
+        while self.current_token != Token::RBracket && self.current_token != Token::EOF {
+            self.consume_newlines();
+
+            // Check for rest syntax ...rest
+            if self.current_token == Token::DotDotDot {
+                self.advance(); // consume '...'
+                let rest_name = self.expect_identifier();
+                rest = Some(rest_name);
+                self.consume_newlines();
+                // Rest must be last, so break out
+                if self.current_token == Token::Comma {
+                    self.advance();
+                    self.consume_newlines();
+                }
+                break;
+            }
+
+            // Parse binding name
+            let name = self.expect_identifier();
+            bindings.push(name);
+
+            self.consume_newlines();
+            if self.current_token == Token::Comma {
+                self.advance();
+                self.consume_newlines();
+            }
+        }
+
+        self.expect(Token::RBracket);
+        self.expect(Token::Equal);
+        let value = self.parse_expression();
+        let end = value.span.end;
+
+        Statement {
+            kind: StatementKind::DestructureArray {
+                bindings,
+                rest,
+                is_mutable,
+                value,
             },
             span: Span::new(start, end),
         }
