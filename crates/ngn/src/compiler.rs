@@ -1282,7 +1282,8 @@ impl Compiler {
                     // For global/static, compile expression and move result to global slot
                     let res_reg = self.compile_expr(&value);
                     self.global_table.insert(name, var_idx);
-                    self.instructions.push(OpCode::DefGlobal(var_idx, is_mutable));
+                    self.instructions
+                        .push(OpCode::DefGlobal(var_idx, is_mutable));
                     self.instructions
                         .push(OpCode::AssignGlobal(var_idx, res_reg));
                 } else {
@@ -1537,9 +1538,11 @@ impl Compiler {
             } => self.compile_if(condition, binding, then_branch, else_branch),
             StatementKind::Check {
                 binding,
+                error_binding,
+                is_mutable,
                 source,
                 failure_block,
-            } => self.compile_check(binding, source, failure_block),
+            } => self.compile_check(binding, error_binding, is_mutable, source, failure_block),
             StatementKind::While {
                 condition,
                 body,
@@ -1649,14 +1652,22 @@ impl Compiler {
         }
     }
 
-    fn compile_check(&mut self, binding: String, source: Expr, failure_block: Box<Statement>) {
+    fn compile_check(
+        &mut self,
+        binding: String,
+        error_binding: Option<String>,
+        _is_mutable: bool,
+        source: Expr,
+        failure_block: Box<Statement>,
+    ) {
         // check var b = x { failure }
-        // If x is Null, run failure block (which must return/break)
+        // check var b, err = x { failure } (with error binding for Result)
+        // If x is Null/Error, run failure block (which must return/break)
         // Otherwise, bind unwrapped value to b for rest of scope
 
         let src_reg = self.compile_expr(&source);
 
-        // Check if it's Maybe::Value
+        // Check if it's Maybe::Value or Result::Ok
         let check_reg = self.alloc_reg();
         self.instructions
             .push(OpCode::CheckMaybeValue(check_reg, src_reg));
@@ -1666,18 +1677,40 @@ impl Compiler {
         self.symbol_table.insert(binding, bind_idx);
         self.next_index += 1;
 
-        // If not Value (i.e., Null), run failure block
+        // If not Value (i.e., Null/Error), run failure block
         let jump_if_value_idx = self.emit(OpCode::JumpIfTrue(check_reg, 0));
 
         // Reset temp area AFTER binding allocation
         self.temp_start = self.next_index as u16;
         self.reg_top = self.temp_start;
 
-        // Failure block runs here if Null
+        // If error binding is provided, extract error value and add to scope
+        let err_bind_idx = if let Some(err_name) = error_binding {
+            let err_idx = self.next_index;
+            self.symbol_table.insert(err_name, err_idx);
+            self.next_index += 1;
+            self.temp_start = self.next_index as u16;
+            self.reg_top = self.temp_start;
+
+            // Extract error value from Result::Error
+            self.instructions
+                .push(OpCode::UnwrapResultError(err_idx as u16, src_reg));
+            self.instructions.push(OpCode::DefVar(err_idx, false));
+            Some(err_idx)
+        } else {
+            None
+        };
+
+        // Failure block runs here if Null/Error
         self.compile_statement(*failure_block);
         // Failure block must contain return/break/continue, so execution won't reach here
 
-        // Patch jump to skip failure block if Value
+        // Clean up error binding from symbol table after failure block
+        if let Some(_err_idx) = err_bind_idx {
+            // Error binding scope ends here (failure block must exit anyway)
+        }
+
+        // Patch jump to skip failure block if Value/Ok
         self.patch_jump(jump_if_value_idx);
 
         // Extract value into binding slot

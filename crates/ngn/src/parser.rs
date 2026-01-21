@@ -136,6 +136,8 @@ pub enum StatementKind {
     },
     Check {
         binding: String,
+        error_binding: Option<String>,
+        is_mutable: bool,
         source: Expr,
         failure_block: Box<Statement>,
     },
@@ -2166,13 +2168,32 @@ impl Parser {
     }
 
     // Parse: check var binding = source { failure_block }
+    // or:    check var binding, error_binding = source { failure_block }
     fn parse_check_stmt(&mut self) -> Statement {
         let start = self.current_span.start;
         self.advance(); // consume 'check'
 
-        // Expect: var binding = source_ident
-        self.expect(Token::Var);
+        // Expect: var or const
+        let is_mutable = if self.current_token == Token::Var {
+            self.advance();
+            true
+        } else if self.current_token == Token::Const {
+            self.advance();
+            false
+        } else {
+            panic!("Syntax Error: Expected 'var' or 'const' after 'check'");
+        };
+
         let binding = self.expect_identifier();
+
+        // Check for optional error binding: check var val, err = ...
+        let error_binding = if self.current_token == Token::Comma {
+            self.advance(); // consume ','
+            Some(self.expect_identifier())
+        } else {
+            None
+        };
+
         self.expect(Token::Equal);
 
         // Parse source as simple identifier (to avoid { being consumed as object literal)
@@ -2190,6 +2211,8 @@ impl Parser {
         Statement {
             kind: StatementKind::Check {
                 binding,
+                error_binding,
+                is_mutable,
                 source,
                 failure_block: Box::new(Statement {
                     kind: StatementKind::Block(failure_block),

@@ -1,6 +1,6 @@
+use crate::blocking_pool::{global_blocking_pool, global_cpu_pool};
 use crate::bytecode::OpCode;
 use crate::value::{Channel, Closure, EnumData, Function, ObjectData, Value};
-use crate::blocking_pool::{global_blocking_pool, global_cpu_pool};
 use regex::Regex as RegexLib;
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -910,17 +910,17 @@ impl Fiber {
                         upvalues: Vec::new(),
                     }),
                     _ => {
-                    let err = EnumData::into_value(
-                        "Result".to_string(),
-                        "Error".to_string(),
-                        Some(Box::new(Value::String(
-                            "spawn.cpu() expects a function or closure".to_string(),
-                        ))),
-                    );
-                    chan.buffer.lock().unwrap().push_back(err);
-                    *chan.is_closed.lock().unwrap() = true;
-                    self.set_reg_at(dest, Value::Channel(chan));
-                    return FiberStatus::Running;
+                        let err = EnumData::into_value(
+                            "Result".to_string(),
+                            "Error".to_string(),
+                            Some(Box::new(Value::String(
+                                "spawn.cpu() expects a function or closure".to_string(),
+                            ))),
+                        );
+                        chan.buffer.lock().unwrap().push_back(err);
+                        *chan.is_closed.lock().unwrap() = true;
+                        self.set_reg_at(dest, Value::Channel(chan));
+                        return FiberStatus::Running;
                     }
                 };
                 let chan_clone = chan.clone();
@@ -971,10 +971,7 @@ impl Fiber {
                             EnumData::into_value(
                                 "Result".to_string(),
                                 "Error".to_string(),
-                                Some(Box::new(Value::String(format!(
-                                    "Thread panicked: {}",
-                                    msg
-                                )))),
+                                Some(Box::new(Value::String(format!("Thread panicked: {}", msg)))),
                             )
                         }
                     };
@@ -1013,17 +1010,17 @@ impl Fiber {
                         upvalues: Vec::new(),
                     }),
                     _ => {
-                    let err = EnumData::into_value(
-                        "Result".to_string(),
-                        "Error".to_string(),
-                        Some(Box::new(Value::String(
-                            "spawn.block() expects a function or closure".to_string(),
-                        ))),
-                    );
-                    chan.buffer.lock().unwrap().push_back(err);
-                    *chan.is_closed.lock().unwrap() = true;
-                    self.set_reg_at(dest, Value::Channel(chan));
-                    return FiberStatus::Running;
+                        let err = EnumData::into_value(
+                            "Result".to_string(),
+                            "Error".to_string(),
+                            Some(Box::new(Value::String(
+                                "spawn.block() expects a function or closure".to_string(),
+                            ))),
+                        );
+                        chan.buffer.lock().unwrap().push_back(err);
+                        *chan.is_closed.lock().unwrap() = true;
+                        self.set_reg_at(dest, Value::Channel(chan));
+                        return FiberStatus::Running;
                     }
                 };
                 let chan_clone = chan.clone();
@@ -1074,10 +1071,7 @@ impl Fiber {
                             EnumData::into_value(
                                 "Result".to_string(),
                                 "Error".to_string(),
-                                Some(Box::new(Value::String(format!(
-                                    "Thread panicked: {}",
-                                    msg
-                                )))),
+                                Some(Box::new(Value::String(format!("Thread panicked: {}", msg)))),
                             )
                         }
                     };
@@ -2023,6 +2017,17 @@ impl Fiber {
                         if (e.enum_name == "Maybe" && e.variant_name == "Value")
                             || (e.enum_name == "Result" && e.variant_name == "Ok") =>
                     {
+                        e.data.clone().map(|b| *b).unwrap_or(Value::Void)
+                    }
+                    _ => Value::Void,
+                };
+                self.set_reg_at(dest_reg, inner);
+            }
+            OpCode::UnwrapResultError(dest_reg, result_reg) => {
+                // Extract the error value from Result::Error
+                let val = self.get_reg_at(result_reg);
+                let inner = match val {
+                    Value::Enum(ref e) if e.enum_name == "Result" && e.variant_name == "Error" => {
                         e.data.clone().map(|b| *b).unwrap_or(Value::Void)
                     }
                     _ => Value::Void,
@@ -3423,7 +3428,11 @@ impl VM {
         while let Some(mut fiber) = self.current_fiber.take() {
             // Wrap fiber execution in catch_unwind to handle unexpected Rust panics
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                fiber.run_step(&mut self.globals, &mut self.global_meta, &self.custom_methods)
+                fiber.run_step(
+                    &mut self.globals,
+                    &mut self.global_meta,
+                    &self.custom_methods,
+                )
             }));
 
             match result {

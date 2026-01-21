@@ -683,29 +683,50 @@ impl Analyzer {
             }
             StatementKind::Check {
                 binding,
+                error_binding,
+                is_mutable,
                 source,
                 failure_block,
             } => {
                 // Get the source expression's type
                 let source_type = self.check_expression(source);
 
-                // Check failure block
-                // TODO: validate failure_block contains return/break/continue
-                self.check_statement(failure_block);
-
                 // Unwrap the inner type for Maybe<T> or Result<T, E>
-                let unwrapped_type = match &source_type {
+                let (unwrapped_type, error_type) = match &source_type {
                     Type::Generic(name, args) if name == "Maybe" && !args.is_empty() => {
-                        args[0].clone()
+                        (args[0].clone(), None)
                     }
-                    Type::Generic(name, args) if name == "Result" && !args.is_empty() => {
-                        args[0].clone() // Result<T, E> -> T
+                    Type::Generic(name, args) if name == "Result" && args.len() >= 2 => {
+                        (args[0].clone(), Some(args[1].clone())) // Result<T, E> -> T, E
                     }
-                    _ => source_type,
+                    Type::Generic(name, args) if name == "Result" && args.len() == 1 => {
+                        (args[0].clone(), Some(Type::Any)) // Result<T> -> T, Any
+                    }
+                    _ => (source_type.clone(), None),
                 };
 
+                // Validate error binding is only used with Result<T, E>
+                if error_binding.is_some() && error_type.is_none() {
+                    self.add_error(
+                        "Type Error: Cannot use error binding with Maybe<T>. Error bindings are only valid for Result<T, E>.".to_string(),
+                        source.span,
+                    );
+                }
+
+                // Check failure block with error binding in scope if provided
+                if let Some(err_name) = error_binding {
+                    self.enter_scope();
+                    if let Some(ref e_ty) = error_type {
+                        self.define(err_name, e_ty.clone(), *is_mutable, source.span);
+                    }
+                    self.check_statement(failure_block);
+                    self.exit_scope();
+                } else {
+                    self.check_statement(failure_block);
+                }
+
                 // Define binding in current scope with the unwrapped type
-                self.define(&binding, unwrapped_type, false, source.span);
+                self.define(binding, unwrapped_type, *is_mutable, source.span);
 
                 Type::Void
             }

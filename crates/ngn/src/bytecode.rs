@@ -124,9 +124,10 @@ pub enum OpCode {
     JsonParse(u16, u16),     // (DestReg, StringReg) - parses JSON string to value
     JsonStringify(u16, u16), // (DestReg, ValueReg) - converts value to JSON string
 
-    // Maybe operations (for conditional binding)
-    CheckMaybeValue(u16, u16), // (DestReg, MaybeReg) - sets DestReg to true if Maybe::Value
-    UnwrapMaybe(u16, u16),     // (DestReg, MaybeReg) - extracts inner value from Maybe::Value
+    // Maybe/Result operations (for conditional binding)
+    CheckMaybeValue(u16, u16), // (DestReg, MaybeReg) - sets DestReg to true if Maybe::Value or Result::Ok
+    UnwrapMaybe(u16, u16), // (DestReg, MaybeReg) - extracts inner value from Maybe::Value or Result::Ok
+    UnwrapResultError(u16, u16), // (DestReg, ResultReg) - extracts error value from Result::Error
 
     // Null Coalescing (??)
     // If MaybeReg is Maybe::Value, unwrap to DestReg; else set DestReg = FallbackReg
