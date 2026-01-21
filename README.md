@@ -825,8 +825,9 @@ var city = p?.address?.city  // null (multiple short-circuits)
 #### `check`
 `check` is a way of guarding logic that requires a value. It can only be used for variables of type `Maybe<T>` or `Result<T, E>`.
 
-- If it evaluates to `Null`, the statement block is run and it must either `return` or `break`.
+- If it evaluates to `Null` or `Error`, the statement block is run and it must either `return` or `break`.
 - If it evaluates to a value, the declared variable (`u` in the example) is assigned the value and the statement block is skipped.
+
 ```ngn
 fn getUser(user?: string): Result<User, string> {
   check var u = user {
@@ -843,6 +844,24 @@ match (user) {
   Error(msg) => print("Error: ${msg}"),
 }
 ```
+
+##### Error Binding for Result Types
+
+When checking a `Result<T, E>`, you can capture the error value in the failure block:
+
+```ngn
+fn fetchData(): Result<string, string> {
+  const result: Result<string, string> = Error("network timeout")
+  check var data, err = result {
+    print("Failed: ${err}")  // "Failed: network timeout"
+    return Error(err)
+  }
+  return Ok(data)
+}
+```
+
+The error binding is only scoped to the failure block. Using error binding with `Maybe<T>` is a compile-time error.
+
 
 ### Custom Enums
 
