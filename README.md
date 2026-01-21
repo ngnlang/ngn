@@ -640,6 +640,140 @@ print(person.age) // 30
 print(person.isStudent) // false
 ```
 
+## Destructuring
+
+Destructuring allows you to extract values from objects and arrays into individual variables in a single statement.
+
+### Object Destructuring
+
+Extract fields from an object into variables:
+
+```ngn
+const person = { name: "Alice", age: 30, city: "NYC" }
+const { name, age } = person
+
+print(name) // Alice
+print(age) // 30
+```
+
+#### Aliasing
+
+Use a different variable name than the field name:
+
+```ngn
+const user = { id: 42, email: "test@example.com" }
+const { id, email: userEmail } = user
+
+print(id) // 42
+print(userEmail) // test@example.com
+```
+
+#### Rest Syntax (`...rest`)
+
+Collect remaining fields into a new object:
+
+```ngn
+const data = { a: 1, b: 2, c: 3, d: 4 }
+const { a, b, ...rest } = data
+
+print(a) // 1
+print(b) // 2
+print(rest.c) // 3
+print(rest.d) // 4
+```
+
+### Array Destructuring
+
+Extract elements from an array into variables:
+
+```ngn
+const arr = [10, 20, 30, 40]
+const [first, second] = arr
+
+print(first) // 10
+print(second) // 20
+```
+
+#### Rest Syntax
+
+Collect remaining elements into a new array:
+
+```ngn
+const nums = [1, 2, 3, 4, 5]
+const [head, ...tail] = nums
+
+print(head) // 1
+print(tail) // [2, 3, 4, 5]
+print(tail.size()) // 4
+```
+
+### Tuple Destructuring
+
+Extract elements from a tuple into variables:
+
+```ngn
+const point = (10, 20)
+const (x, y) = point
+
+print(x) // 10
+print(y) // 20
+```
+
+Tuples preserve the type of each element:
+
+```ngn
+const mixed = (42, "hello", true)
+const (num, str, flag) = mixed
+
+print(num)  // 42 (i64)
+print(str)  // hello (string)
+print(flag) // true (bool)
+```
+
+#### Rest Syntax
+
+Collect remaining elements into a new tuple:
+
+```ngn
+const values = (1, 2, 3, 4, 5)
+const (first, second, ...rest) = values
+
+print(first)  // 1
+print(second) // 2
+print(rest)   // (3, 4, 5)
+```
+
+### Destructuring with Models
+
+Works with model instances too:
+
+```ngn
+model Point {
+  x: i64,
+  y: i64
+}
+
+fn main() {
+  const p = Point { x: 5, y: 10 }
+  const { x: px, y: py } = p
+  
+  print(px) // 5
+  print(py) // 10
+}
+```
+
+### Mutable Destructuring
+
+Use `var` for mutable bindings:
+
+```ngn
+var items = ["a", "b", "c"]
+var [first, second, third] = items
+
+first = "x"  // allowed because var
+print(first) // x
+```
+
 ## Custom TypeMethods
 
 If you want to add methods to built-in types, you can use the `extend` keyword. This feature applies to following types:
