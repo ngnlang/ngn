@@ -2273,10 +2273,31 @@ You can import in different ways:
 
 ### tbx::math
 - `abs`: return the absolute value of a number. `abs(-5) // 5`
-- `ceil`: return the smallest integer greater than or equal to `ceil(3.2) // 4`
-- `floor`: return the smallest integer less than or equal to `floor(3.9) // 3`
 - `round`: return the number rounded to the nearest integer `round(4.5) // 5`
-- `sin`: (Trigonometry? If you know, you know.) `sin(0) // 0`
+- `floor`: return the largest integer less than or equal to a number `floor(3.9) // 3`
+- `ceil`: return the smallest integer greater than or equal to a number `ceil(3.2) // 4`
+- `trunc`: return the integer part of a number (towards zero) `trunc(-3.9) // -3`
+- `sign`: return `-1`, `0`, or `1` depending on the sign of the number `sign(-5) // -1`
+- `min`: return the smallest of 2+ numbers `min(5, 3) // 3`
+- `max`: return the largest of 2+ numbers `max(5, 3) // 5`
+- `clamp`: clamp a value to `[min, max]` `clamp(15, 0, 10) // 10`
+
+- `sqrt`: return the square root of a number `sqrt(9) // 3`
+- `pow`: raise `base` to `exponent` `pow(2, 3) // 8`
+- `exp`: return `e^x` `exp(1) // ~2.718`
+- `log`: natural logarithm (base `e`) `log(2.718281828) // ~1`
+- `log10`: base-10 logarithm `log10(1000) // 3`
+- `log2`: base-2 logarithm `log2(8) // 3`
+
+- `PI`: return the value of pi `PI() // ~3.141592653589793`
+
+- `sin`: sine `sin(0) // 0`
+- `cos`: cosine `cos(0) // 1`
+- `tan`: tangent `tan(0) // 0`
+- `asin`: arcsine `asin(1) // ~1.5707963267948966`
+- `acos`: arccosine `acos(0) // ~1.5707963267948966`
+- `atan`: arctangent `atan(1) // ~0.7853981633974483`
+- `atan2`: arctangent of `y/x` using signs to determine quadrant `atan2(1, 1) // ~0.7853981633974483`
 
 ### tbx::test
 - `assert`: assert that a condition is true
