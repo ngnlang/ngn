@@ -35,7 +35,7 @@ Here are some highlights:
     - `var count = state(0)`; then you can have multiple threads mutate `count` via the `.update()` state method.
 
 4. Powerful inline `if` syntax, inspired by ternaries:
-`if (x > 10) print("greater") : (x < 10) print("less") : print("equal")`
+    -`if (x > 10) print("greater") : (x < 10) print("less") : print("equal")`
 
 5. Built-in http(s) server.
     - via `serve(handler)` or `export default { fetch: handler }`
