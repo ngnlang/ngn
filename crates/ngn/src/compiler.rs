@@ -620,6 +620,12 @@ impl Compiler {
                     Token::GreaterThan => self
                         .instructions
                         .push(OpCode::GreaterThan(dest, left_reg, right_reg)),
+                    Token::LessThanEqual => self
+                        .instructions
+                        .push(OpCode::LessThanEqual(dest, left_reg, right_reg)),
+                    Token::GreaterThanEqual => self
+                        .instructions
+                        .push(OpCode::GreaterThanEqual(dest, left_reg, right_reg)),
                     Token::NotEqual => self
                         .instructions
                         .push(OpCode::NotEqual(dest, left_reg, right_reg)),

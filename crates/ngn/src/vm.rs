@@ -337,6 +337,32 @@ impl Fiber {
                     );
                 }
             }
+            OpCode::LessThanEqual(dest, left, right) => {
+                let l = self.get_reg_at(left);
+                let r = self.get_reg_at(right);
+                if let (Value::Numeric(n1), Value::Numeric(n2)) = (l.clone(), r.clone()) {
+                    // a <= b is equivalent to !(a > b)
+                    self.set_reg_at(dest, Value::Bool(!n1.greater_than(n2)));
+                } else {
+                    panic!(
+                        "Runtime Error: LessThanEqual expects numeric types, got {:?} and {:?}",
+                        l, r
+                    );
+                }
+            }
+            OpCode::GreaterThanEqual(dest, left, right) => {
+                let l = self.get_reg_at(left);
+                let r = self.get_reg_at(right);
+                if let (Value::Numeric(n1), Value::Numeric(n2)) = (l.clone(), r.clone()) {
+                    // a >= b is equivalent to !(a < b)
+                    self.set_reg_at(dest, Value::Bool(!n1.less_than(n2)));
+                } else {
+                    panic!(
+                        "Runtime Error: GreaterThanEqual expects numeric types, got {:?} and {:?}",
+                        l, r
+                    );
+                }
+            }
             OpCode::Negate(dest, src) => {
                 let val = self.get_reg_at(src);
                 if let Value::Numeric(n) = val {

@@ -14,6 +14,8 @@ pub enum OpCode {
     NotEqual(u16, u16, u16),
     LessThan(u16, u16, u16),
     GreaterThan(u16, u16, u16),
+    LessThanEqual(u16, u16, u16),
+    GreaterThanEqual(u16, u16, u16),
 
     // Unary: (DestReg, SrcReg)
     Negate(u16, u16),
