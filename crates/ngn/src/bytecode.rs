@@ -140,4 +140,11 @@ pub enum OpCode {
 
     // Destructuring
     ObjectRest(u16, u16, usize), // (DestReg, ObjReg, ExcludedFieldsConstIdx) - creates object with remaining fields
+
+    // Time operations
+    TimeNow(u16),    // (DestReg) - returns DateTime object for current local time
+    TimeUtc(u16),    // (DestReg) - returns DateTime object for current UTC time
+    TimeUnix(u16),   // (DestReg) - returns i64 Unix timestamp (seconds)
+    TimeUnixMs(u16), // (DestReg) - returns i64 Unix timestamp (milliseconds)
+    TimeParse(u16, u16, u16), // (DestReg, StringReg, FormatReg) - parses string to DateTime, returns Result
 }

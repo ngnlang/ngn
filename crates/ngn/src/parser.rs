@@ -37,6 +37,7 @@ pub enum Type {
     Json,              // Built-in json module type
     Spawn,             // Built-in spawn module type
     Env,               // Built-in env module type for environment variables
+    Time,              // Built-in time module type for date/time operations
     TypeParam(String), // Type parameter reference (e.g., T in model Container<T>)
     Union(Vec<Type>),
 }

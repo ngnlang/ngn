@@ -2245,6 +2245,206 @@ impl Fiber {
                     })),
                 );
             }
+            OpCode::TimeNow(dest_reg) => {
+                // Returns a DateTime object for current local time
+                use chrono::{Datelike, Local, Timelike};
+                let now = Local::now();
+                let mut fields = std::collections::HashMap::new();
+                fields.insert(
+                    "year".to_string(),
+                    Value::Numeric(crate::value::Number::I64(now.year() as i64)),
+                );
+                fields.insert(
+                    "month".to_string(),
+                    Value::Numeric(crate::value::Number::I64(now.month() as i64)),
+                );
+                fields.insert(
+                    "day".to_string(),
+                    Value::Numeric(crate::value::Number::I64(now.day() as i64)),
+                );
+                fields.insert(
+                    "hour".to_string(),
+                    Value::Numeric(crate::value::Number::I64(now.hour() as i64)),
+                );
+                fields.insert(
+                    "minute".to_string(),
+                    Value::Numeric(crate::value::Number::I64(now.minute() as i64)),
+                );
+                fields.insert(
+                    "second".to_string(),
+                    Value::Numeric(crate::value::Number::I64(now.second() as i64)),
+                );
+                fields.insert(
+                    "weekday".to_string(),
+                    Value::Numeric(crate::value::Number::I64(
+                        now.weekday().num_days_from_sunday() as i64,
+                    )),
+                );
+                fields.insert(
+                    "timestamp".to_string(),
+                    Value::Numeric(crate::value::Number::I64(now.timestamp())),
+                );
+                fields.insert(
+                    "timestampMs".to_string(),
+                    Value::Numeric(crate::value::Number::I64(now.timestamp_millis())),
+                );
+                self.set_reg_at(
+                    dest_reg,
+                    ObjectData::into_value("DateTime".to_string(), fields),
+                );
+            }
+            OpCode::TimeUtc(dest_reg) => {
+                // Returns a DateTime object for current UTC time
+                use chrono::{Datelike, Timelike, Utc};
+                let now = Utc::now();
+                let mut fields = std::collections::HashMap::new();
+                fields.insert(
+                    "year".to_string(),
+                    Value::Numeric(crate::value::Number::I64(now.year() as i64)),
+                );
+                fields.insert(
+                    "month".to_string(),
+                    Value::Numeric(crate::value::Number::I64(now.month() as i64)),
+                );
+                fields.insert(
+                    "day".to_string(),
+                    Value::Numeric(crate::value::Number::I64(now.day() as i64)),
+                );
+                fields.insert(
+                    "hour".to_string(),
+                    Value::Numeric(crate::value::Number::I64(now.hour() as i64)),
+                );
+                fields.insert(
+                    "minute".to_string(),
+                    Value::Numeric(crate::value::Number::I64(now.minute() as i64)),
+                );
+                fields.insert(
+                    "second".to_string(),
+                    Value::Numeric(crate::value::Number::I64(now.second() as i64)),
+                );
+                fields.insert(
+                    "weekday".to_string(),
+                    Value::Numeric(crate::value::Number::I64(
+                        now.weekday().num_days_from_sunday() as i64,
+                    )),
+                );
+                fields.insert(
+                    "timestamp".to_string(),
+                    Value::Numeric(crate::value::Number::I64(now.timestamp())),
+                );
+                fields.insert(
+                    "timestampMs".to_string(),
+                    Value::Numeric(crate::value::Number::I64(now.timestamp_millis())),
+                );
+                self.set_reg_at(
+                    dest_reg,
+                    ObjectData::into_value("DateTime".to_string(), fields),
+                );
+            }
+            OpCode::TimeUnix(dest_reg) => {
+                // Returns i64 Unix timestamp in seconds
+                use chrono::Utc;
+                let timestamp = Utc::now().timestamp();
+                self.set_reg_at(
+                    dest_reg,
+                    Value::Numeric(crate::value::Number::I64(timestamp)),
+                );
+            }
+            OpCode::TimeUnixMs(dest_reg) => {
+                // Returns i64 Unix timestamp in milliseconds
+                use chrono::Utc;
+                let timestamp_ms = Utc::now().timestamp_millis();
+                self.set_reg_at(
+                    dest_reg,
+                    Value::Numeric(crate::value::Number::I64(timestamp_ms)),
+                );
+            }
+            OpCode::TimeParse(dest_reg, str_reg, fmt_reg) => {
+                // Parses a string to DateTime using the given format
+                // Returns Result<DateTime, string>
+                use chrono::{Datelike, NaiveDateTime, Timelike};
+                let str_val = self.get_reg_at(str_reg);
+                let fmt_val = self.get_reg_at(fmt_reg);
+
+                if let (Value::String(date_str), Value::String(format_str)) = (str_val, fmt_val) {
+                    match NaiveDateTime::parse_from_str(&date_str, &format_str) {
+                        Ok(dt) => {
+                            let mut fields = std::collections::HashMap::new();
+                            fields.insert(
+                                "year".to_string(),
+                                Value::Numeric(crate::value::Number::I64(dt.year() as i64)),
+                            );
+                            fields.insert(
+                                "month".to_string(),
+                                Value::Numeric(crate::value::Number::I64(dt.month() as i64)),
+                            );
+                            fields.insert(
+                                "day".to_string(),
+                                Value::Numeric(crate::value::Number::I64(dt.day() as i64)),
+                            );
+                            fields.insert(
+                                "hour".to_string(),
+                                Value::Numeric(crate::value::Number::I64(dt.hour() as i64)),
+                            );
+                            fields.insert(
+                                "minute".to_string(),
+                                Value::Numeric(crate::value::Number::I64(dt.minute() as i64)),
+                            );
+                            fields.insert(
+                                "second".to_string(),
+                                Value::Numeric(crate::value::Number::I64(dt.second() as i64)),
+                            );
+                            fields.insert(
+                                "weekday".to_string(),
+                                Value::Numeric(crate::value::Number::I64(
+                                    dt.weekday().num_days_from_sunday() as i64,
+                                )),
+                            );
+                            fields.insert(
+                                "timestamp".to_string(),
+                                Value::Numeric(crate::value::Number::I64(dt.and_utc().timestamp())),
+                            );
+                            fields.insert(
+                                "timestampMs".to_string(),
+                                Value::Numeric(crate::value::Number::I64(
+                                    dt.and_utc().timestamp_millis(),
+                                )),
+                            );
+                            let datetime_obj =
+                                ObjectData::into_value("DateTime".to_string(), fields);
+                            self.set_reg_at(
+                                dest_reg,
+                                EnumData::into_value(
+                                    "Result".to_string(),
+                                    "Ok".to_string(),
+                                    Some(Box::new(datetime_obj)),
+                                ),
+                            );
+                        }
+                        Err(e) => {
+                            self.set_reg_at(
+                                dest_reg,
+                                EnumData::into_value(
+                                    "Result".to_string(),
+                                    "Error".to_string(),
+                                    Some(Box::new(Value::String(format!("Parse error: {}", e)))),
+                                ),
+                            );
+                        }
+                    }
+                } else {
+                    self.set_reg_at(
+                        dest_reg,
+                        EnumData::into_value(
+                            "Result".to_string(),
+                            "Error".to_string(),
+                            Some(Box::new(Value::String(
+                                "time.parse() expects string arguments".to_string(),
+                            ))),
+                        ),
+                    );
+                }
+            }
             OpCode::Halt => {
                 self.status = FiberStatus::Finished;
                 return FiberStatus::Finished;

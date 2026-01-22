@@ -922,6 +922,42 @@ impl Compiler {
                             _ => {}
                         }
                     }
+
+                    // Handle time.now(), time.utc(), time.unix(), time.unixMs(), time.parse()
+                    if var_name == "time" {
+                        let dest = self.alloc_reg();
+                        match method.as_str() {
+                            "now" => {
+                                self.instructions.push(OpCode::TimeNow(dest));
+                                self.reg_top = dest + 1;
+                                return dest;
+                            }
+                            "utc" => {
+                                self.instructions.push(OpCode::TimeUtc(dest));
+                                self.reg_top = dest + 1;
+                                return dest;
+                            }
+                            "unix" => {
+                                self.instructions.push(OpCode::TimeUnix(dest));
+                                self.reg_top = dest + 1;
+                                return dest;
+                            }
+                            "unixMs" => {
+                                self.instructions.push(OpCode::TimeUnixMs(dest));
+                                self.reg_top = dest + 1;
+                                return dest;
+                            }
+                            "parse" => {
+                                let str_reg = self.compile_expr(&args[0]);
+                                let fmt_reg = self.compile_expr(&args[1]);
+                                self.instructions
+                                    .push(OpCode::TimeParse(dest, str_reg, fmt_reg));
+                                self.reg_top = dest + 1;
+                                return dest;
+                            }
+                            _ => {}
+                        }
+                    }
                 }
 
                 let obj_reg = self.compile_expr(obj_expr);

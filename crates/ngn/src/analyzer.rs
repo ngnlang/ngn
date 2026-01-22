@@ -311,6 +311,26 @@ impl Analyzer {
             },
         );
 
+        // Built-in DateTime model for time API
+        analyzer.models.insert(
+            "DateTime".to_string(),
+            ModelDef {
+                name: "DateTime".to_string(),
+                type_params: vec![],
+                fields: vec![
+                    ("year".to_string(), Type::I64),
+                    ("month".to_string(), Type::I64),
+                    ("day".to_string(), Type::I64),
+                    ("hour".to_string(), Type::I64),
+                    ("minute".to_string(), Type::I64),
+                    ("second".to_string(), Type::I64),
+                    ("weekday".to_string(), Type::I64),
+                    ("timestamp".to_string(), Type::I64),
+                    ("timestampMs".to_string(), Type::I64),
+                ],
+            },
+        );
+
         analyzer
     }
 
@@ -3094,6 +3114,67 @@ impl Analyzer {
                                         "Type Error: Unknown env method '{}'. Available: get, has",
                                         method
                                     ),
+                                    expr.span,
+                                );
+                                Type::Any
+                            }
+                        }
+                    }
+
+                    // Allow method calls on Type::Time (for time.now, time.utc, time.unix, etc.)
+                    Type::Time => {
+                        match method.as_str() {
+                            "now" | "utc" => {
+                                // time.now() and time.utc() return DateTime model
+                                if !args.is_empty() {
+                                    self.add_error(
+                                        format!("Type Error: time.{}() takes no arguments", method),
+                                        expr.span,
+                                    );
+                                }
+                                Type::Model("DateTime".to_string())
+                            }
+                            "unix" | "unixMs" => {
+                                // time.unix() and time.unixMs() return i64
+                                if !args.is_empty() {
+                                    self.add_error(
+                                        format!("Type Error: time.{}() takes no arguments", method),
+                                        expr.span,
+                                    );
+                                }
+                                Type::I64
+                            }
+                            "parse" => {
+                                // time.parse(string, format) returns Result<DateTime, string>
+                                if args.len() != 2 {
+                                    self.add_error(
+                                        "Type Error: time.parse() requires exactly 2 arguments (value, format)".to_string(),
+                                        expr.span,
+                                    );
+                                } else {
+                                    let val_ty = self.check_expression(&args[0]);
+                                    let fmt_ty = self.check_expression(&args[1]);
+                                    if !self.types_compatible(&Type::String, &val_ty) {
+                                        self.add_error(
+                                            format!("Type Error: time.parse() first argument must be string, got {:?}", val_ty),
+                                            expr.span,
+                                        );
+                                    }
+                                    if !self.types_compatible(&Type::String, &fmt_ty) {
+                                        self.add_error(
+                                            format!("Type Error: time.parse() second argument must be string, got {:?}", fmt_ty),
+                                            expr.span,
+                                        );
+                                    }
+                                }
+                                Type::Generic(
+                                    "Result".to_string(),
+                                    vec![Type::Model("DateTime".to_string()), Type::String],
+                                )
+                            }
+                            _ => {
+                                self.add_error(
+                                    format!("Type Error: Unknown time method '{}'. Available: now, utc, unix, unixMs, parse", method),
                                     expr.span,
                                 );
                                 Type::Any
