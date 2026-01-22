@@ -672,6 +672,12 @@ pub enum Value {
     Regex(String),
 }
 
+impl Default for Value {
+    fn default() -> Self {
+        Value::Void
+    }
+}
+
 impl Value {
     pub fn add(&self, other: &Value) -> Result<Value, String> {
         match (self, other) {

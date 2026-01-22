@@ -138,6 +138,20 @@ impl Fiber {
         self.stack[self.fp + idx as usize].clone()
     }
 
+    /// Get a reference to a register value without cloning.
+    /// Useful for read-only operations like comparisons.
+    #[inline(always)]
+    pub fn get_reg_ref(&self, idx: u16) -> &Value {
+        &self.stack[self.fp + idx as usize]
+    }
+
+    /// Take the value from a register, leaving Value::Void behind.
+    /// Useful when the value won't be needed again in that register.
+    #[inline(always)]
+    pub fn take_reg_at(&mut self, idx: u16) -> Value {
+        std::mem::take(&mut self.stack[self.fp + idx as usize])
+    }
+
     pub fn set_reg_at(&mut self, idx: u16, val: Value) {
         let target_idx = self.fp + idx as usize;
         if target_idx >= self.stack.len() {
@@ -239,36 +253,36 @@ impl Fiber {
                 self.set_reg_at(dest, val);
             }
             OpCode::Add(dest, left, right) => {
-                let l = self.get_reg_at(left);
-                let r = self.get_reg_at(right);
-                if let Ok(res) = l.add(&r) {
+                let l = self.get_reg_ref(left);
+                let r = self.get_reg_ref(right);
+                if let Ok(res) = l.add(r) {
                     self.set_reg_at(dest, res);
                 } else {
                     panic!("Runtime Error: Addition failed between {:?} and {:?}", l, r);
                 }
             }
             OpCode::Subtract(dest, left, right) => {
-                let l = self.get_reg_at(left);
-                let r = self.get_reg_at(right);
-                if let Ok(res) = l.subtract(&r) {
+                let l = self.get_reg_ref(left);
+                let r = self.get_reg_ref(right);
+                if let Ok(res) = l.subtract(r) {
                     self.set_reg_at(dest, res);
                 } else {
                     panic!("Runtime Error: Subtraction failed");
                 }
             }
             OpCode::Multiply(dest, left, right) => {
-                let l = self.get_reg_at(left);
-                let r = self.get_reg_at(right);
-                if let Ok(res) = l.multiply(&r) {
+                let l = self.get_reg_ref(left);
+                let r = self.get_reg_ref(right);
+                if let Ok(res) = l.multiply(r) {
                     self.set_reg_at(dest, res);
                 } else {
                     panic!("Runtime Error: Multiplication failed");
                 }
             }
             OpCode::Divide(dest, left, right) => {
-                let l = self.get_reg_at(left);
-                let r = self.get_reg_at(right);
-                if let Ok(res) = l.divide(&r) {
+                let l = self.get_reg_ref(left);
+                let r = self.get_reg_ref(right);
+                if let Ok(res) = l.divide(r) {
                     self.set_reg_at(dest, res);
                 } else {
                     panic!("Runtime Error: Division failed");
@@ -293,14 +307,14 @@ impl Fiber {
                 }
             }
             OpCode::Equal(dest, left, right) => {
-                let l = self.get_reg_at(left);
-                let r = self.get_reg_at(right);
-                self.set_reg_at(dest, Value::Bool(l.is_equal(&r)));
+                let l = self.get_reg_ref(left);
+                let r = self.get_reg_ref(right);
+                self.set_reg_at(dest, Value::Bool(l.is_equal(r)));
             }
             OpCode::NotEqual(dest, left, right) => {
-                let l = self.get_reg_at(left);
-                let r = self.get_reg_at(right);
-                self.set_reg_at(dest, Value::Bool(!l.is_equal(&r)));
+                let l = self.get_reg_ref(left);
+                let r = self.get_reg_ref(right);
+                self.set_reg_at(dest, Value::Bool(!l.is_equal(r)));
             }
             OpCode::LessThan(dest, left, right) => {
                 let l = self.get_reg_at(left);
