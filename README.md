@@ -4,6 +4,8 @@ Pronounced "engine".
 
 An expressive and easy to use high-level programming language.
 
+Checkout the [Quickstart](QUICKSTART.md) for an overview of the language, otherwise, proceed.
+
 ## Status
 Make it work - early development.
 
@@ -912,7 +914,7 @@ var m2 = Null
 // Using null in return statements
 fn maybeValue(flag: bool): Maybe<i64> {
   if (flag) return Value(42)
-  return null  // Syntactic sugar for Null
+  return null  // Syntactic sugar for Maybe::Null
 }
 
 // null works with the ?? (null-coalescing) operator
