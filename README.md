@@ -23,21 +23,22 @@ I've long thought of creating a programming language, and now that AI is getting
 ## Why ngn?
 Here are some highlights:
 
-1. Multi-threaded/parallelism - whichever phrase you'd prefer
+1. Multi-threaded/parallelism
 
 2. Channels & Threads for async.
-  - no async/await contagion
-  - creating a thread returns a channel, then you can simply `return` data from the thread and it'll be sent to that channel
-  - beautiful "await" syntax for channel messages; `<- channel` (one message), `<-3 channel` (three messages), `<-tasks.size() channel`
-  - we even built this model into our `fetch` implementation: `const res = <- fetch("https://api.example.com")`
+    - no async/await contagion
+    - creating a thread returns a channel, then you can simply `return` data from the thread and it'll be sent to that channel
+    - beautiful "await" syntax for channel messages; `<- channel` (one message), `<-3 channel` (three messages), `<-tasks.size() channel`
+    - we even built this model into our `fetch` implementation: `const res = <- fetch("https://api.example.com")`
 
 3. Shared, mutable, atomic state for threads and closures. (oh, what are "closures"?)
-  - `var count = state(0)`; then you can have multiple threads mutate `count` via the `.update()` state method.
+    - `var count = state(0)`; then you can have multiple threads mutate `count` via the `.update()` state method.
 
-4. Powerful inline `if` syntax, inspired by ternaries: `if (x > 10) print("greater") : (x < 10) print("less") : print("equal")`
+4. Powerful inline `if` syntax, inspired by ternaries:
+`if (x > 10) print("greater") : (x < 10) print("less") : print("equal")`
 
 5. Built-in http(s) server.
-  - via `serve(handler)` or `export default { fetch: handler }`
+    - via `serve(handler)` or `export default { fetch: handler }`
 
 ## `main()`
 
@@ -155,6 +156,58 @@ const pi = 3.14 // inferred as `f64`
 const result = 3 + 2 // inferred as `i64`
 ```
 
+## Custom Type Methods
+
+If you want to add methods to built-in types, you can use the `extend` keyword. This feature applies to following types:
+
+- number (generic that applies to all numeric types)
+- f64, i32, u8, etc (for specific numeric types)
+- string
+- bool
+- array
+- tuple
+- map
+- set
+
+```ngn
+extend array {
+  fn isEmpty(): bool {
+    return this.size() == 0
+  }
+}
+
+extend number {
+  fn isEven(): bool {
+    return this % 2 == 0
+  }
+
+  fn double(): number {
+    return this * 2
+  }
+}
+
+extend string {
+  fn isBlank(): bool {
+    return this.trim().length() == 0
+  }
+}
+
+fn main() {
+  [1, 2, 3].isEmpty() // false
+
+  // if using a number directly, wrap in parenthesis
+  (2).isEven() // true
+
+  const x = 2
+  x.isEven() // true
+
+  // if a number method returns the generic `number` type, you should explicitly set the result type
+  const y: i32 = x.double()
+
+  "   ".isBlank() // true
+}
+```
+
 ## `echo`
 Log to the console, without formatting.
 ```ngn
@@ -175,72 +228,6 @@ print("World")
 // Hello
 // World
 ```
-
-## Bytes
-`bytes` is a built-in binary data type. It represents an arbitrary sequence of raw bytes (0..255).
-
-You will most commonly use `bytes` for binary WebSocket frames, encoding/decoding, and other I/O-style APIs.
-
-### Constructors
-
-### `bytes()`
-Create an empty bytes value.
-
-### `bytes(string)`
-Create bytes from a UTF-8 string.
-
-```ngn
-const b = bytes("hello")
-print(b.length()) // 5
-```
-
-### `bytes(array<u8>)`
-Create bytes from an array of numeric byte values.
-
-Each element must be in the range 0..255.
-
-```ngn
-const raw: array<u8> = [0, 255, 16]
-const b = bytes(raw)
-print(b.length()) // 3
-```
-
-### Methods
-
-### `length()`
-Return the number of bytes.
-
-### `copy(start?, stop?)`
-Copy an entire bytes value or a section of it, based on indices. This does not change the bytes you copied from.
-
-- If `start` is provided but `stop` is not, it copies everything upto and including the end.
-- If `stop` is provided (implies `start`), the copy excludes the item at that index.
-- If neither is provided, the entire bytes is copied.
-
-### `slice(start, stop?)`
-Remove a section of bytes by providing a start index and an optional stop index. This changes the original bytes value and returns the sliced bytes.
-
-- If `stop` is provided, the slice excludes the item at that index.
-- If `stop` is not provided, it removes everything upto and including the last byte.
-- Since you're mutating the original bytes, it must be declared with `var`.
-
-```ngn
-var b = bytes("abcd")
-const sliced = b.slice(1, 3)
-
-print(sliced.toStringStrict()) // bc
-print(b.toStringStrict()) // ad
-```
-
-### `toString()`
-Decode bytes as UTF-8 using a lossy conversion. Invalid sequences are replaced.
-
-This is useful for logging/debugging or when you are working with "mostly" UTF-8 data.
-
-### `toStringStrict()`
-Decode bytes as UTF-8 using a strict conversion.
-
-If the bytes are not valid UTF-8, this throws a runtime error.
 
 ## String Interpolation
 ```ngn
@@ -707,6 +694,68 @@ const joined = tup.join(",")
 print(joined) // "10,20,30"
 ```
 
+## Bytes
+`bytes` is a built-in binary data type. It represents an arbitrary sequence of raw bytes (0..255).
+
+You will most commonly use `bytes` for binary WebSocket frames, encoding/decoding, and other I/O-style APIs.
+
+### `bytes()`
+Create an empty bytes value.
+
+### `bytes(string)`
+Create bytes from a UTF-8 string.
+
+```ngn
+const b = bytes("hello")
+print(b.length()) // 5
+```
+
+### `bytes(array<u8>)`
+Create bytes from an array of numeric byte values.
+
+Each element must be in the range 0..255.
+
+```ngn
+const raw: array<u8> = [0, 255, 16]
+const b = bytes(raw)
+print(b.length()) // 3
+```
+
+### `length()`
+Return the number of bytes.
+
+### `copy(start?, stop?)`
+Copy an entire bytes value or a section of it, based on indices. This does not change the bytes you copied from.
+
+- If `start` is provided but `stop` is not, it copies everything upto and including the end.
+- If `stop` is provided (implies `start`), the copy excludes the item at that index.
+- If neither is provided, the entire bytes is copied.
+
+### `slice(start, stop?)`
+Remove a section of bytes by providing a start index and an optional stop index. This changes the original bytes value and returns the sliced bytes.
+
+- If `stop` is provided, the slice excludes the item at that index.
+- If `stop` is not provided, it removes everything upto and including the last byte.
+- Since you're mutating the original bytes, it must be declared with `var`.
+
+```ngn
+var b = bytes("abcd")
+const sliced = b.slice(1, 3)
+
+print(sliced.toStringStrict()) // bc
+print(b.toStringStrict()) // ad
+```
+
+### `toString()`
+Decode bytes as UTF-8 using a lossy conversion. Invalid sequences are replaced.
+
+This is useful for logging/debugging or when you are working with "mostly" UTF-8 data.
+
+### `toStringStrict()`
+Decode bytes as UTF-8 using a strict conversion.
+
+If the bytes are not valid UTF-8, this throws a runtime error.
+
 ## Objects
 You can create raw objects using the `{}` syntax and access their properties using the dot notation.
 ```ngn
@@ -866,58 +915,6 @@ var [first, second, third] = items
 
 first = "x"  // allowed because var
 print(first) // x
-```
-
-## Custom TypeMethods
-
-If you want to add methods to built-in types, you can use the `extend` keyword. This feature applies to following types:
-
-- number (generic that applies to all numeric types)
-- f64, i32, u8, etc (for specific numeric types)
-- string
-- bool
-- array
-- tuple
-- map
-- set
-
-```ngn
-extend array {
-  fn isEmpty(): bool {
-    return this.size() == 0
-  }
-}
-
-extend number {
-  fn isEven(): bool {
-    return this % 2 == 0
-  }
-
-  fn double(): number {
-    return this * 2
-  }
-}
-
-extend string {
-  fn isBlank(): bool {
-    return this.trim().length() == 0
-  }
-}
-
-fn main() {
-  [1, 2, 3].isEmpty() // false
-
-  // if using a number directly, wrap in parenthesis
-  (2).isEven() // true
-
-  const x = 2
-  x.isEven() // true
-
-  // if a number method returns the generic `number` type, you should explicitly set the result type
-  const y: i32 = x.double()
-
-  "   ".isBlank() // true
-}
 ```
 
 ## Enums
@@ -1137,6 +1134,15 @@ fn main() {
 ```
 
 When you use `Some(42)`, ngn infers that this is an `Option<i64>`. In match patterns, bindings like `v` in `Some(v)` are given the concrete type (i64), not the type parameter (T).
+
+## Null Coalescing Operator
+
+Returns the left-hand side if non-null, otherwise returns the right-hand side. If there's a `Maybe::Value<T>`, it's automatically unwrapped.
+
+```ngn
+const u = getUser() // Maybe<User>
+const user = u ?? "anonymous"
+```
 
 ## `loop`
 Run the statement block indefinitely. Use `break` to exit the loop.

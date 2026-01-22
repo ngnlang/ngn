@@ -13,7 +13,7 @@ A modern, expressive programming language designed for **building APIs** and **A
 | **Shared Atomic State** | Safe mutation across threads with `state()` — no mutexes required |
 | **Built-in HTTP Server** | Deploy APIs with `serve(handler)` or `export default { fetch }` |
 | **First-class LLM Support** | Stream inference with `tbx::llm` — perfect for AI applications |
-| **Type Extensions** | Add methods to any type with `extend` |
+| **Type Extensions** | Add methods to certain types with `extend` |
 | **Powerful Control Flow** | Inline if syntax, pattern matching, `check` guards |
 
 ---
@@ -186,13 +186,13 @@ fn handler(req: Request): Response {
 }
 
 fn main() {
-  serve(handler, { port: 8080 })
+  serve(handler, { port: 5173 })
 }
 ```
 
 ### Streaming Responses
 
-Perfect for LLM output, SSE, or large files:
+Perfect for LLM output or large files:
 
 ```ngn
 fn handler(req: Request): StreamingResponse {
@@ -337,8 +337,8 @@ Clean error handling without nesting:
 
 ```ngn
 fn getUser(id?: i64): Result<string, string> {
-  check var uid, err = id {
-    return Error("ID required: ${err}")
+  check var uid = id {
+    return Error("ID required")
   }
   // uid is now guaranteed to have a value
   return Ok("User ${uid}")
@@ -354,7 +354,7 @@ const name = user?.name ?? "Anonymous" // null coalescing operator unwraps Maybe
 
 ---
 
-## 🔧 Extend Any Type
+## 🔧 Extend Certain Types
 
 Add methods to built-in types:
 
@@ -498,13 +498,13 @@ ngn build main.ngn
 
 ## 📖 Learn More
 
-This guide covers the essentials. For the complete reference, see the [full documentation](README.md).
+This guide covers some basics. For the complete reference, see the [full documentation](README.md).
 
 ### Key Concepts to Explore Next
 
 - **Closures** — capture values and close over state
 - **Spawn utilities** — `spawn.all`, `spawn.race`, `spawn.try` for parallel task execution
-- **SSE & WebSocket responses** — real-time streaming APIs
+- **SSE responses** — real-time streaming APIs
 - **Environment variables** — automatic `.env` file loading
 
 ---
