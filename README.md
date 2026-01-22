@@ -317,6 +317,98 @@ if (env.has("DEBUG")) {
 }
 ```
 
+## time
+
+Work with dates and times using the `time` global.
+
+### DateTime Model
+
+All time functions return or work with the `DateTime` model, which has the following fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `year` | `i64` | Full year (e.g., 2026) |
+| `month` | `i64` | Month (1-12) |
+| `day` | `i64` | Day of month (1-31) |
+| `hour` | `i64` | Hour (0-23) |
+| `minute` | `i64` | Minute (0-59) |
+| `second` | `i64` | Second (0-59) |
+| `weekday` | `i64` | Day of week (0=Monday, 6=Sunday) |
+| `timestamp` | `i64` | Unix timestamp in seconds |
+| `timestampMs` | `i64` | Unix timestamp in milliseconds |
+
+### `now()`
+
+Get the current local time as a `DateTime` model.
+
+```ngn
+const now = time.now()
+print("Current year: ${now.year}")
+print("Current month: ${now.month}")
+print("Current day: ${now.day}")
+print("Hour: ${now.hour}:${now.minute}:${now.second}")
+print("Weekday: ${now.weekday}") // 0=Monday
+print("Unix timestamp: ${now.timestamp}")
+```
+
+### `utc()`
+
+Get the current UTC time as a `DateTime` model.
+
+```ngn
+const utc = time.utc()
+print("UTC hour: ${utc.hour}")
+```
+
+### `unix()`
+
+Get the current Unix timestamp in seconds as an `i64`.
+
+```ngn
+const timestamp = time.unix()
+print("Seconds since epoch: ${timestamp}")
+```
+
+### `unixMs()`
+
+Get the current Unix timestamp in milliseconds as an `i64`.
+
+```ngn
+const timestampMs = time.unixMs()
+print("Milliseconds since epoch: ${timestampMs}")
+```
+
+### `parse(dateString, formatString)`
+
+Parse a date string into a `DateTime` model using a format string. Returns `Result<DateTime, string>`.
+
+```ngn
+const result = time.parse("2026-01-21 15:30:45", "%Y-%m-%d %H:%M:%S")
+match (result) {
+  Ok(dt) => {
+    print("Year: ${dt.year}")
+    print("Month: ${dt.month}")
+    print("Day: ${dt.day}")
+  },
+  Error(e) => print("Parse error: ${e}")
+}
+```
+
+#### Format Specifiers
+
+| Specifier | Description | Example |
+|-----------|-------------|---------|
+| `%Y` | Full year | 2026 |
+| `%m` | Month (01-12) | 01 |
+| `%d` | Day of month (01-31) | 21 |
+| `%H` | Hour (00-23) | 15 |
+| `%M` | Minute (00-59) | 30 |
+| `%S` | Second (00-59) | 45 |
+| `%B` | Full month name | January |
+| `%b` | Abbreviated month | Jan |
+| `%A` | Full weekday name | Wednesday |
+| `%a` | Abbreviated weekday | Wed |
+
 ## Strings
 
 ### `length()`
