@@ -39,6 +39,7 @@ pub enum OpCode {
     // Calls
     Call(u16, u16, u16, u8), // (DestReg, FuncReg, ArgStartReg, ArgCount)
     CallGlobal(u16, usize, u16, u8), // (DestReg, GlobalFuncIndex, ArgStartReg, ArgCount)
+    CallSelf(u16, u16, u8),  // (DestReg, ArgStartReg, ArgCount) - optimized self-recursion
     NativeCall(u16, u16, u16, u8), // (DestReg, NativeIDReg, ArgStartReg, ArgCount)
 
     // Control Flow

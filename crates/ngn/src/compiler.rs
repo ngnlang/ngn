@@ -32,6 +32,7 @@ pub struct Compiler {
     pub signatures: HashMap<String, Vec<bool>>,
     pub moved_locals: HashSet<String>,
     pub upvalues: Vec<Upvalue>,
+    pub current_function_name: Option<String>, // For detecting self-recursion
 }
 
 impl Compiler {
@@ -68,6 +69,7 @@ impl Compiler {
             signatures: HashMap::new(),
             moved_locals: HashSet::new(),
             upvalues: Vec::new(),
+            current_function_name: None,
         }
     }
 
@@ -331,6 +333,11 @@ impl Compiler {
                         args.len() as u8,
                     ));
                     self.reg_top = dest + 1; // Free the temp func_reg
+                } else if self.current_function_name.as_ref() == Some(name) {
+                    // Self-recursion: use optimized CallSelf opcode
+                    self.instructions
+                        .push(OpCode::CallSelf(dest, start_reg, args.len() as u8));
+                    self.reg_top = dest + 1;
                 } else if let Some(&idx) = self.global_table.get(name) {
                     // Global function: use CallGlobal which fetches from env_stack[0]
                     self.instructions.push(OpCode::CallGlobal(
@@ -2327,6 +2334,7 @@ impl Compiler {
         sub_compiler.enums = self.enums.clone();
         sub_compiler.static_values = self.static_values.clone();
         sub_compiler.signatures = self.signatures.clone();
+        sub_compiler.current_function_name = Some(name.clone()); // For CallSelf optimization
 
         sub_compiler.next_index = 0;
 

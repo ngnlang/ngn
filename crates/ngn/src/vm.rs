@@ -97,9 +97,12 @@ pub struct Fiber {
 impl Fiber {
     pub fn new(closure: Box<Closure>) -> Self {
         let func = closure.function.clone();
+        // Pre-allocate stack and frames to avoid reallocations during recursion
+        let initial_stack_size = func.reg_count.max(256);
+        let frames = Vec::with_capacity(64);
         Self {
-            stack: vec![Value::Void; func.reg_count],
-            frames: Vec::new(),
+            stack: vec![Value::Void; initial_stack_size],
+            frames,
             ip: 0,
             fp: 0,
             instructions: func.instructions.clone(),
@@ -113,9 +116,12 @@ impl Fiber {
     }
 
     pub fn new_main(func: Function) -> Self {
+        // Pre-allocate stack and frames to avoid reallocations during recursion
+        let initial_stack_size = func.reg_count.max(256);
+        let frames = Vec::with_capacity(64);
         Self {
-            stack: vec![Value::Void; func.reg_count],
-            frames: Vec::new(),
+            stack: vec![Value::Void; initial_stack_size],
+            frames,
             ip: 0,
             fp: 0,
             instructions: func.instructions.clone(),
@@ -592,6 +598,35 @@ impl Fiber {
                     }
                 }
             }
+            // Optimized self-recursion: reuses current function's Arc references
+            // Since we're calling ourselves, instructions/constants don't change
+            OpCode::CallSelf(dest, arg_start, _arg_count) => {
+                // Save minimal frame - instructions/constants stay the same so we can
+                // store dummy values and avoid Arc::clone overhead
+                let frame = CallFrame {
+                    instructions: self.instructions.clone(), // Same Arc, just reference count bump
+                    constants: self.constants.clone(),       // Same Arc, just reference count bump
+                    ip: self.ip,
+                    fp: self.fp,
+                    closure: None, // Self-calls don't need to save/restore closure
+                    dest_reg: Some(dest),
+                    update_state: None,
+                    home_globals: None, // Same module, no need to restore
+                };
+                self.frames.push(frame);
+
+                // Move frame pointer to args - instructions/constants stay the same
+                self.fp = self.fp + arg_start as usize;
+
+                // Ensure stack has enough space
+                let min_needed = self.fp + 16;
+                if self.stack.len() < min_needed {
+                    self.stack.resize(min_needed, Value::Void);
+                }
+
+                // Reset IP to start of current function
+                self.ip = 0;
+            }
             OpCode::Print(src) => {
                 let val = self.get_reg_at(src);
                 println!("{}", val);
@@ -701,7 +736,12 @@ impl Fiber {
             OpCode::Return(src) => {
                 let result = self.get_reg_at(src);
                 if let Some(frame) = self.frames.pop() {
-                    self.stack.truncate(self.fp);
+                    // Lazy truncation: only truncate if stack grew significantly
+                    // This avoids drop overhead on every return
+                    let stack_threshold = self.fp + 512;
+                    if self.stack.len() > stack_threshold {
+                        self.stack.truncate(self.fp.max(256));
+                    }
                     self.instructions = frame.instructions;
                     self.constants = frame.constants;
                     self.ip = frame.ip;
@@ -726,7 +766,11 @@ impl Fiber {
             }
             OpCode::ReturnVoid => {
                 if let Some(frame) = self.frames.pop() {
-                    self.stack.truncate(self.fp);
+                    // Lazy truncation: only truncate if stack grew significantly
+                    let stack_threshold = self.fp + 512;
+                    if self.stack.len() > stack_threshold {
+                        self.stack.truncate(self.fp.max(256));
+                    }
                     self.instructions = frame.instructions;
                     self.constants = frame.constants;
                     self.ip = frame.ip;
@@ -2224,23 +2268,29 @@ impl Fiber {
         }
 
         // Wrap provided args in Maybe::Value for params declared with ?
-        for i in 0..(arg_count as usize) {
-            if i < func.param_is_maybe_wrapped.len() && func.param_is_maybe_wrapped[i] {
-                let val = self.get_reg_at(i as u16);
-                let wrapped = crate::value::EnumData::into_value(
-                    "Maybe".to_string(),
-                    "Value".to_string(),
-                    Some(Box::new(val)),
-                );
-                self.set_reg_at(i as u16, wrapped);
+        // Fast-path: skip if no params need Maybe wrapping
+        if !func.param_is_maybe_wrapped.is_empty() {
+            for i in 0..(arg_count as usize) {
+                if i < func.param_is_maybe_wrapped.len() && func.param_is_maybe_wrapped[i] {
+                    let val = self.get_reg_at(i as u16);
+                    let wrapped = crate::value::EnumData::into_value(
+                        "Maybe".to_string(),
+                        "Value".to_string(),
+                        Some(Box::new(val)),
+                    );
+                    self.set_reg_at(i as u16, wrapped);
+                }
             }
         }
 
         // Fill missing arguments with default values
-        for i in (arg_count as usize)..func.param_count {
-            if i < func.default_values.len() {
-                if let Some(default_val) = &func.default_values[i] {
-                    self.set_reg_at(i as u16, default_val.clone());
+        // Fast-path: skip if all args provided or no defaults exist
+        if (arg_count as usize) < func.param_count && !func.default_values.is_empty() {
+            for i in (arg_count as usize)..func.param_count {
+                if i < func.default_values.len() {
+                    if let Some(default_val) = &func.default_values[i] {
+                        self.set_reg_at(i as u16, default_val.clone());
+                    }
                 }
             }
         }
