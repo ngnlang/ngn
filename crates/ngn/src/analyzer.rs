@@ -1059,13 +1059,54 @@ impl Analyzer {
                             ("math", "abs")
                             | ("math", "round")
                             | ("math", "floor")
-                            | ("math", "ceil") => Type::Function {
+                            | ("math", "ceil")
+                            | ("math", "trunc") => Type::Function {
                                 params: vec![Type::Any],
                                 optional_count: 0,
                                 return_type: Box::new(Type::Any),
                             },
-                            ("math", "sin") => Type::Function {
-                                params: vec![Type::F64],
+                            ("math", "sign") => Type::Function {
+                                params: vec![Type::Any],
+                                optional_count: 0,
+                                return_type: Box::new(Type::F64),
+                            },
+                            // Single-argument trig and exponential functions
+                            ("math", "sin")
+                            | ("math", "cos")
+                            | ("math", "tan")
+                            | ("math", "asin")
+                            | ("math", "acos")
+                            | ("math", "atan")
+                            | ("math", "sqrt")
+                            | ("math", "exp")
+                            | ("math", "log")
+                            | ("math", "log10")
+                            | ("math", "log2") => Type::Function {
+                                params: vec![Type::Any],
+                                optional_count: 0,
+                                return_type: Box::new(Type::F64),
+                            },
+                            // Two-argument math functions
+                            ("math", "pow") | ("math", "atan2") => Type::Function {
+                                params: vec![Type::Any, Type::Any],
+                                optional_count: 0,
+                                return_type: Box::new(Type::F64),
+                            },
+                            // Variable-argument functions (min/max take 2+ args)
+                            ("math", "min") | ("math", "max") => Type::Function {
+                                params: vec![Type::Any, Type::Any, Type::Any, Type::Any, Type::Any],
+                                optional_count: 3, // 2 required, 3 optional
+                                return_type: Box::new(Type::F64),
+                            },
+                            // Three-argument functions
+                            ("math", "clamp") => Type::Function {
+                                params: vec![Type::Any, Type::Any, Type::Any],
+                                optional_count: 0,
+                                return_type: Box::new(Type::F64),
+                            },
+                            // PI constant (zero-argument function)
+                            ("math", "PI") => Type::Function {
+                                params: vec![],
                                 optional_count: 0,
                                 return_type: Box::new(Type::F64),
                             },

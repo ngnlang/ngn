@@ -594,15 +594,15 @@ impl Fiber {
 
                         // Dispatch to the appropriate toolbox function
                         let result = match id {
-                            1 => crate::toolbox::math::abs(args),             // NATIVE_ABS
-                            2 => crate::toolbox::test::assert(args),          // NATIVE_ASSERT
-                            3 => crate::toolbox::math::round(args),           // NATIVE_ROUND
-                            6 => crate::toolbox::io::file_read(args),         // NATIVE_FILE_READ
-                            7 => crate::toolbox::io::file_write(args),        // NATIVE_FILE_WRITE
-                            8 => crate::toolbox::io::file_append(args),       // NATIVE_FILE_APPEND
-                            9 => crate::toolbox::io::file_exists(args),       // NATIVE_FILE_EXISTS
-                            5 => crate::toolbox::encoding::hex_encode(args),  // NATIVE_HEX_ENCODE
-                            10 => crate::toolbox::io::file_delete(args),      // NATIVE_FILE_DELETE
+                            1 => crate::toolbox::math::abs(args), // NATIVE_ABS
+                            2 => crate::toolbox::test::assert(args), // NATIVE_ASSERT
+                            3 => crate::toolbox::math::round(args), // NATIVE_ROUND
+                            5 => crate::toolbox::encoding::hex_encode(args), // NATIVE_HEX_ENCODE
+                            6 => crate::toolbox::io::file_read(args), // NATIVE_FILE_READ
+                            7 => crate::toolbox::io::file_write(args), // NATIVE_FILE_WRITE
+                            8 => crate::toolbox::io::file_append(args), // NATIVE_FILE_APPEND
+                            9 => crate::toolbox::io::file_exists(args), // NATIVE_FILE_EXISTS
+                            10 => crate::toolbox::io::file_delete(args), // NATIVE_FILE_DELETE
                             11 => crate::toolbox::encoding::hex_decode(args), // NATIVE_HEX_DECODE
                             12 => crate::toolbox::encoding::base64_encode(args), // NATIVE_BASE64_ENCODE
                             13 => crate::toolbox::encoding::base64_decode(args), // NATIVE_BASE64_DECODE
@@ -612,6 +612,29 @@ impl Fiber {
                             17 => crate::toolbox::llm::llm_load(args), // NATIVE_LLM_LOAD
                             18 => crate::toolbox::llm::llm_generate(args), // NATIVE_LLM_GENERATE
                             19 => crate::toolbox::llm::llm_stream(args), // NATIVE_LLM_STREAM
+
+                            // Math
+                            20 => crate::toolbox::math::floor(args), // NATIVE_FLOOR
+                            21 => crate::toolbox::math::ceil(args),  // NATIVE_CEIL
+                            22 => crate::toolbox::math::trunc(args), // NATIVE_TRUNC
+                            23 => crate::toolbox::math::sign(args),  // NATIVE_SIGN
+                            24 => crate::toolbox::math::sin(args),   // NATIVE_SIN
+                            25 => crate::toolbox::math::cos(args),   // NATIVE_COS
+                            26 => crate::toolbox::math::tan(args),   // NATIVE_TAN
+                            27 => crate::toolbox::math::asin(args),  // NATIVE_ASIN
+                            28 => crate::toolbox::math::acos(args),  // NATIVE_ACOS
+                            29 => crate::toolbox::math::atan(args),  // NATIVE_ATAN
+                            30 => crate::toolbox::math::atan2(args), // NATIVE_ATAN2
+                            31 => crate::toolbox::math::sqrt(args),  // NATIVE_SQRT
+                            32 => crate::toolbox::math::pow(args),   // NATIVE_POW
+                            33 => crate::toolbox::math::exp(args),   // NATIVE_EXP
+                            34 => crate::toolbox::math::log(args),   // NATIVE_LOG
+                            35 => crate::toolbox::math::log10(args), // NATIVE_LOG10
+                            36 => crate::toolbox::math::log2(args),  // NATIVE_LOG2
+                            37 => crate::toolbox::math::min(args),   // NATIVE_MIN
+                            38 => crate::toolbox::math::max(args),   // NATIVE_MAX
+                            39 => crate::toolbox::math::clamp(args), // NATIVE_CLAMP
+                            40 => crate::toolbox::math::pi(args),    // NATIVE_PI
                             _ => panic!("Runtime Error: Unknown native function ID: {}", id),
                         };
 

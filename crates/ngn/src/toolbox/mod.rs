@@ -27,6 +27,29 @@ pub const NATIVE_LLM_LOAD: u16 = 17;
 pub const NATIVE_LLM_GENERATE: u16 = 18;
 pub const NATIVE_LLM_STREAM: u16 = 19;
 
+// Math native functions (keep IDs stable; append new ones at the end)
+pub const NATIVE_FLOOR: u16 = 20;
+pub const NATIVE_CEIL: u16 = 21;
+pub const NATIVE_TRUNC: u16 = 22;
+pub const NATIVE_SIGN: u16 = 23;
+pub const NATIVE_SIN: u16 = 24;
+pub const NATIVE_COS: u16 = 25;
+pub const NATIVE_TAN: u16 = 26;
+pub const NATIVE_ASIN: u16 = 27;
+pub const NATIVE_ACOS: u16 = 28;
+pub const NATIVE_ATAN: u16 = 29;
+pub const NATIVE_ATAN2: u16 = 30;
+pub const NATIVE_SQRT: u16 = 31;
+pub const NATIVE_POW: u16 = 32;
+pub const NATIVE_EXP: u16 = 33;
+pub const NATIVE_LOG: u16 = 34;
+pub const NATIVE_LOG10: u16 = 35;
+pub const NATIVE_LOG2: u16 = 36;
+pub const NATIVE_MIN: u16 = 37;
+pub const NATIVE_MAX: u16 = 38;
+pub const NATIVE_CLAMP: u16 = 39;
+pub const NATIVE_PI: u16 = 40;
+
 use std::{collections::HashMap, path::Path};
 
 use crate::{error::RuntimeError, value::Value};
@@ -90,8 +113,29 @@ pub fn parse_import_source(path: &Path) -> ImportSource {
 pub fn get_native_id(module: &str, name: &str) -> Option<u16> {
     match (module, name) {
         ("math", "abs") => Some(NATIVE_ABS),
+        ("math", "floor") => Some(NATIVE_FLOOR),
+        ("math", "ceil") => Some(NATIVE_CEIL),
         ("test", "assert") => Some(NATIVE_ASSERT),
         ("math", "round") => Some(NATIVE_ROUND),
+        ("math", "trunc") => Some(NATIVE_TRUNC),
+        ("math", "sign") => Some(NATIVE_SIGN),
+        ("math", "sin") => Some(NATIVE_SIN),
+        ("math", "cos") => Some(NATIVE_COS),
+        ("math", "tan") => Some(NATIVE_TAN),
+        ("math", "asin") => Some(NATIVE_ASIN),
+        ("math", "acos") => Some(NATIVE_ACOS),
+        ("math", "atan") => Some(NATIVE_ATAN),
+        ("math", "atan2") => Some(NATIVE_ATAN2),
+        ("math", "sqrt") => Some(NATIVE_SQRT),
+        ("math", "pow") => Some(NATIVE_POW),
+        ("math", "exp") => Some(NATIVE_EXP),
+        ("math", "log") => Some(NATIVE_LOG),
+        ("math", "log10") => Some(NATIVE_LOG10),
+        ("math", "log2") => Some(NATIVE_LOG2),
+        ("math", "min") => Some(NATIVE_MIN),
+        ("math", "max") => Some(NATIVE_MAX),
+        ("math", "clamp") => Some(NATIVE_CLAMP),
+        ("math", "PI") => Some(NATIVE_PI),
         ("http", "serve") => Some(NATIVE_SERVE),
         ("encoding", "hexEncode") => Some(NATIVE_HEX_ENCODE),
         ("encoding", "hexDecode") => Some(NATIVE_HEX_DECODE),
