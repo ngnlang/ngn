@@ -1331,6 +1331,27 @@ impl Analyzer {
                         }
                         return Type::Bool;
                     }
+                    Token::AndAnd | Token::OrOr => {
+                        if l_ty != Type::Bool && l_ty != Type::Any {
+                            self.add_error(
+                                format!(
+                                    "Type Error: Logical operators require bool, got {:?}",
+                                    l_ty
+                                ),
+                                left.span,
+                            );
+                        }
+                        if r_ty != Type::Bool && r_ty != Type::Any {
+                            self.add_error(
+                                format!(
+                                    "Type Error: Logical operators require bool, got {:?}",
+                                    r_ty
+                                ),
+                                right.span,
+                            );
+                        }
+                        return Type::Bool;
+                    }
                     Token::LessThan
                     | Token::GreaterThan
                     | Token::LessThanEqual

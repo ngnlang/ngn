@@ -87,6 +87,8 @@ pub enum Token {
     FatArrow,
     LArrow,
     Pipe,
+    AndAnd,
+    OrOr,
     Question,
     QuestionQuestion,
     QuestionDot,
@@ -418,7 +420,22 @@ impl Lexer {
                     Token::Equal
                 }
             }
-            '|' => Token::Pipe,
+            '|' => {
+                if self.peek_current() == '|' {
+                    self.cursor += 1;
+                    Token::OrOr
+                } else {
+                    Token::Pipe
+                }
+            }
+            '&' => {
+                if self.peek_current() == '&' {
+                    self.cursor += 1;
+                    Token::AndAnd
+                } else {
+                    panic!("Unknown character: {}", ch);
+                }
+            }
             '!' => {
                 if self.peek_current() == '=' {
                     self.cursor += 1;

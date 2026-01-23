@@ -589,6 +589,25 @@ impl Compiler {
                 dest
             }
             ExprKind::Binary { left, op, right } => {
+                // Short-circuit logical operators must not eagerly compile RHS.
+                if matches!(op, Token::AndAnd | Token::OrOr) {
+                    let left_reg = self.compile_expr(left);
+                    let dest = self.alloc_reg();
+                    self.instructions.push(OpCode::Move(dest, left_reg));
+
+                    let jump_idx = match op {
+                        Token::AndAnd => self.emit(OpCode::JumpIfFalse(dest, 0)),
+                        Token::OrOr => self.emit(OpCode::JumpIfTrue(dest, 0)),
+                        _ => unreachable!(),
+                    };
+
+                    let right_reg = self.compile_expr(right);
+                    self.instructions.push(OpCode::Move(dest, right_reg));
+                    self.patch_jump(jump_idx);
+                    self.reg_top = dest + 1;
+                    return dest;
+                }
+
                 let left_reg = self.compile_expr(left);
                 let right_reg = self.compile_expr(right);
                 let dest = self.alloc_reg();

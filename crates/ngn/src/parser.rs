@@ -1330,13 +1330,13 @@ impl Parser {
 
     /// Parse null-coalescing operator (??) with right-to-left associativity
     fn parse_null_coalesce(&mut self) -> Expr {
-        let mut left = self.parse_equality();
+        let mut left = self.parse_logical_or();
 
         while self.current_token == Token::QuestionQuestion {
             let start = left.span.start;
             let op = self.current_token.clone();
             self.advance();
-            let right = self.parse_equality(); // Right-to-left: parse at same level
+            let right = self.parse_logical_or(); // Right-to-left: parse at same level
             let end = right.span.end;
             left = Expr {
                 kind: ExprKind::Binary {
@@ -1347,6 +1347,64 @@ impl Parser {
                 span: Span::new(start, end),
             };
         }
+        left
+    }
+
+    fn parse_logical_or(&mut self) -> Expr {
+        let mut left = self.parse_logical_and();
+
+        loop {
+            if self.paren_depth > 0 {
+                self.consume_newlines();
+            }
+            if self.current_token == Token::OrOr {
+                let start = left.span.start;
+                let op = self.current_token.clone();
+                self.advance();
+                let right = self.parse_logical_and();
+                let end = right.span.end;
+                left = Expr {
+                    kind: ExprKind::Binary {
+                        left: Box::new(left),
+                        op,
+                        right: Box::new(right),
+                    },
+                    span: Span::new(start, end),
+                };
+            } else {
+                break;
+            }
+        }
+
+        left
+    }
+
+    fn parse_logical_and(&mut self) -> Expr {
+        let mut left = self.parse_equality();
+
+        loop {
+            if self.paren_depth > 0 {
+                self.consume_newlines();
+            }
+            if self.current_token == Token::AndAnd {
+                let start = left.span.start;
+                let op = self.current_token.clone();
+                self.advance();
+                let right = self.parse_equality();
+                let end = right.span.end;
+                left = Expr {
+                    kind: ExprKind::Binary {
+                        left: Box::new(left),
+                        op,
+                        right: Box::new(right),
+                    },
+                    span: Span::new(start, end),
+                };
+            } else {
+                break;
+            }
+        }
+
         left
     }
 
@@ -1669,6 +1727,7 @@ impl Parser {
                 }
             }
             Token::Pipe => self.parse_closure(),
+            Token::OrOr => self.parse_empty_closure(),
             Token::Thread => {
                 let start = self.current_span.start;
                 self.advance();
@@ -2000,6 +2059,56 @@ impl Parser {
 
         expr
     }
+
+    fn parse_empty_closure(&mut self) -> Expr {
+        let start = self.current_span.start;
+        self.advance(); // consume '||'
+
+        let params = Vec::new();
+
+        let return_type = if self.current_token == Token::Colon {
+            self.advance();
+            Some(self.parse_type())
+        } else {
+            None
+        };
+
+        // Closures are function-like contexts, so allow const/var declarations
+        let old_in_function = self.in_function;
+        self.in_function = true;
+
+        // Parse body - expect block or expression
+        let body_stmt = if self.current_token == Token::LBrace {
+            let b_start = self.current_span.start;
+            let stmts = self.parse_block();
+            let b_end = self.previous_span.end;
+            Box::new(Statement {
+                kind: StatementKind::Block(stmts),
+                span: Span::new(b_start, b_end),
+            })
+        } else {
+            // Single expression implicit return
+            let expr = self.parse_expression();
+            let e_start = expr.span.start;
+            let e_end = expr.span.end;
+            Box::new(Statement {
+                kind: StatementKind::Return(Some(expr)),
+                span: Span::new(e_start, e_end),
+            })
+        };
+
+        self.in_function = old_in_function;
+        let end = body_stmt.span.end;
+
+        Expr {
+            kind: ExprKind::Closure {
+                params,
+                body: body_stmt,
+                return_type,
+            },
+            span: Span::new(start, end),
+        }
+    }
     fn can_start_expression(&mut self) -> bool {
         matches!(
             self.current_token,
@@ -2018,6 +2127,8 @@ impl Parser {
                 | Token::Bool(_)
                 | Token::Enum
                 | Token::Underscore
+                | Token::Pipe
+                | Token::OrOr
         )
     }
 
