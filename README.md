@@ -1144,6 +1144,33 @@ const u = getUser() // Maybe<User>
 const user = u ?? "anonymous"
 ```
 
+## Logical Operators
+
+ngn supports industry-standard short-circuit boolean operators:
+
+- `&&`: logical AND
+- `||`: logical OR
+
+```ngn
+fn main() {
+  const a = 15
+  if (a > 10 && a < 20) print("in range")
+
+  const ok = true || false
+  assert(ok == true)
+}
+```
+
+Precedence:
+
+- `&&` binds tighter than `||`
+- both bind tighter than `??` (null coalescing)
+
+Notes on `|`:
+
+- `|` is still used for union types: `type IntOrString = i64 | string`
+- `|` is still used in `match` arms to match multiple patterns: `2 | 3 => ...`
+
 ## `loop`
 Run the statement block indefinitely. Use `break` to exit the loop.
 ```ngn
