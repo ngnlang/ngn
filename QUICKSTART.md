@@ -337,11 +337,13 @@ Clean error handling without nesting:
 
 ```ngn
 fn getUser(id?: i64): Result<string, string> {
-  check var uid = id {
+  // `err?` only available for Result<T, E> not Maybe<T>
+  check id?, err? {
+    print("Error! ${err}")
     return Error("ID required")
   }
-  // uid is now guaranteed to have a value
-  return Ok("User ${uid}")
+  // id is now guaranteed to have a value
+  return Ok("User ${id}")
 }
 ```
 

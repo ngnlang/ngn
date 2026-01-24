@@ -114,7 +114,9 @@ ch <- "a"
 ch <- 2
 ```
 
-Note: without narrowing, operations on a union-typed value are conservative. In practice, unions are most useful at boundaries (channels, response bodies, etc.) until narrowing lands.
+Note: operations on a union-typed value are conservative unless you narrow it.
+- basic narrowing works in `if`/`else` based on comparisons (for example `if (x == "hi") { ... }`)
+- `Maybe<T>` / `Result<T, E>` can be narrowed ergonomically using the postfix guard: `if (value?) { ... }`
 
 ### Type aliases
 Type aliases name a type expression.
@@ -1023,6 +1025,19 @@ print(describe())    // "is null"
 print(describe(42))  // "has value"
 ```
 
+#### Unwrap guard (`value?`)
+Use the postfix `?` guard to unwrap a `Maybe<T>` or `Result<T, E>` inside an `if` branch.
+
+```ngn
+fn greet(name: string, suffix?: string): string {
+  if (suffix?) {
+    // inside this branch, `suffix` is a `string`
+    return "Hello ${name}${suffix}"
+  }
+  return "Hello ${name}"
+}
+```
+
 #### Optional chaining (`?.`)
 Use `?.` to safely access fields or call methods on `Maybe` values. If the value is null, the entire expression short-circuits to `null`.
 
@@ -1048,44 +1063,46 @@ var city = p?.address?.city  // null (multiple short-circuits)
 ```
 
 #### `check`
-`check` is a way of guarding logic that requires a value. It can only be used for variables of type `Maybe<T>` or `Result<T, E>`.
+`check` is a guard for `Maybe<T>` / `Result<T, E>` that reduces ceremony.
 
-- If it evaluates to `Null` or `Error`, the statement block is run and it must either `return` or `break`.
-- If it evaluates to a value, the declared variable (`u` in the example) is assigned the value and the statement block is skipped.
+Syntax:
+
+```ngn
+check value? { /* failure */ }
+check value?, err? { /* failure */ }
+```
+
+Semantics:
+
+- If `value` is `Null` or `Error`, the failure block runs and must exit (`return`/`break`).
+- If `value` is `Value(T)` or `Ok(T)`, the failure block is skipped and `value` is upgraded to the unwrapped `T` for the rest of the scope.
+- `err` (if provided) is only available inside the failure block.
 
 ```ngn
 fn getUser(user?: string): Result<User, string> {
-  check var u = user {
-    // failure case
+  check user? {
     return Error("User not found")
   }
-  // success case
-  return Ok(u)
-}
-
-const user = getUser("jason")
-match (user) {
-  Ok(user) => print("User: ${user}"),
-  Error(msg) => print("Error: ${msg}"),
+  // after check, `user` is a `string`
+  return Ok(User { name: user, age: 0 })
 }
 ```
 
-##### Error Binding for Result Types
-
-When checking a `Result<T, E>`, you can capture the error value in the failure block:
+##### Error binding (Result)
 
 ```ngn
 fn fetchData(): Result<string, string> {
   const result: Result<string, string> = Error("network timeout")
-  check var data, err = result {
-    print("Failed: ${err}")  // "Failed: network timeout"
+
+  check result?, err? {
+    print("Failed: ${err}")
     return Error(err)
   }
-  return Ok(data)
+
+  // after check, `result` is a `string`
+  return Ok(result)
 }
 ```
-
-The error binding is only scoped to the failure block. Using error binding with `Maybe<T>` is a compile-time error.
 
 
 ### Custom Enums
@@ -1355,9 +1372,10 @@ print(greet("Bob", "!")) // "Hello Bob!"
 ```
 ```ngn
 fn greet(name: string, suffix?: string): string {
-  // Check if a value can be unwrapped from the enum variant. If so, assign to local variable and run the statement block; otherwise, it's `Maybe::Null`.
-  if (let s = suffix) {
-    return "Hello ${name}${s}"
+  // If the optional has a value, unwrap it for this block.
+  if (suffix?) {
+    // inside this branch, `suffix` is a `string` (unwrapped)
+    return "Hello ${name}${suffix}"
   }
   return "Hello ${name}"
 }
