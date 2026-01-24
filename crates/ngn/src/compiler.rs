@@ -451,6 +451,19 @@ impl Compiler {
                     panic!("Compiler Error: Undefined variable '{}'", name);
                 }
             }
+            ExprKind::UnwrapGuard(name) => {
+                // `name?` as an expression evaluates to bool (is Value/Ok).
+                // In `if (name?)` conditions, the parser desugars it into an if-binding.
+                let src_reg = self.compile_expr(&Expr {
+                    kind: ExprKind::Variable(name.clone()),
+                    span: expr.span,
+                });
+
+                let dest = self.alloc_reg();
+                self.instructions
+                    .push(OpCode::CheckMaybeValue(dest, src_reg));
+                dest
+            }
             ExprKind::Closure {
                 params,
                 body,
@@ -1777,10 +1790,9 @@ impl Compiler {
             StatementKind::Check {
                 binding,
                 error_binding,
-                is_mutable,
                 source,
                 failure_block,
-            } => self.compile_check(binding, error_binding, is_mutable, source, failure_block),
+            } => self.compile_check(binding, error_binding, source, failure_block),
             StatementKind::While {
                 condition,
                 body,
@@ -1814,7 +1826,8 @@ impl Compiler {
         let cond_reg = self.compile_expr(&condition);
 
         if let Some(bind_name) = binding {
-            // Maybe binding: if (var b = x) { ... }
+            // Unwrap guard binding for Maybe/Result.
+            // User-facing form: `if (value?) { ... }`
 
             // Emit check for Maybe::Value variant
             let check_reg = self.alloc_reg();
@@ -1823,7 +1836,10 @@ impl Compiler {
             self.instructions
                 .push(OpCode::CheckMaybeValue(check_reg, cond_reg));
 
-            // Allocate binding as a proper local variable slot
+            // Allocate binding as a proper local variable slot.
+            // IMPORTANT: allow shadowing an existing variable name inside the if-branch.
+            let prev_mapping = self.symbol_table.get(&bind_name).copied();
+
             let bind_idx = self.next_index;
             self.symbol_table.insert(bind_name.clone(), bind_idx);
             self.next_index += 1;
@@ -1841,8 +1857,11 @@ impl Compiler {
             // Compile then branch with binding available
             self.compile_statement(*then_branch);
 
-            // Clean up binding from symbol table and restore next_index
+            // Clean up binding from symbol table and restore previous mapping (if any)
             self.symbol_table.remove(&bind_name);
+            if let Some(prev_idx) = prev_mapping {
+                self.symbol_table.insert(bind_name.clone(), prev_idx);
+            }
             self.next_index -= 1;
 
             if let Some(else_branch) = else_branch {
@@ -1894,14 +1913,15 @@ impl Compiler {
         &mut self,
         binding: String,
         error_binding: Option<String>,
-        _is_mutable: bool,
         source: Expr,
         failure_block: Box<Statement>,
     ) {
-        // check var b = x { failure }
-        // check var b, err = x { failure } (with error binding for Result)
-        // If x is Null/Error, run failure block (which must return/break)
-        // Otherwise, bind unwrapped value to b for rest of scope
+        // `check` guard for Maybe/Result.
+        // User-facing preferred forms:
+        // - `check value? { failure }`
+        // - `check value?, err? { failure }`
+        // If value is Null/Error, run failure block (which must return/break)
+        // Otherwise, upgrade the binding to the unwrapped value for the rest of the scope
 
         let src_reg = self.compile_expr(&source);
 
@@ -1910,22 +1930,29 @@ impl Compiler {
         self.instructions
             .push(OpCode::CheckMaybeValue(check_reg, src_reg));
 
-        // Allocate binding as a proper local variable slot
+        // Allocate binding slot up-front so temporaries don't reuse it.
+        // IMPORTANT: do not put `binding` into `symbol_table` until after the failure
+        // block is compiled. The failure block should not see the unwrapped binding.
         let bind_idx = self.next_index;
-        self.symbol_table.insert(binding, bind_idx);
         self.next_index += 1;
 
         // If not Value (i.e., Null/Error), run failure block
         let jump_if_value_idx = self.emit(OpCode::JumpIfTrue(check_reg, 0));
 
-        // Reset temp area AFTER binding allocation
+        // Reset temp area AFTER binding slot allocation
         self.temp_start = self.next_index as u16;
         self.reg_top = self.temp_start;
 
         // If error binding is provided, extract error value and add to scope
+        let prev_err_mapping = if let Some(err_name) = &error_binding {
+            self.symbol_table.get(err_name).copied()
+        } else {
+            None
+        };
+
         let err_bind_idx = if let Some(err_name) = error_binding {
             let err_idx = self.next_index;
-            self.symbol_table.insert(err_name, err_idx);
+            self.symbol_table.insert(err_name.clone(), err_idx);
             self.next_index += 1;
             self.temp_start = self.next_index as u16;
             self.reg_top = self.temp_start;
@@ -1934,7 +1961,7 @@ impl Compiler {
             self.instructions
                 .push(OpCode::UnwrapResultError(err_idx as u16, src_reg));
             self.instructions.push(OpCode::DefVar(err_idx, false));
-            Some(err_idx)
+            Some((err_name, err_idx))
         } else {
             None
         };
@@ -1944,16 +1971,27 @@ impl Compiler {
         // Failure block must contain return/break/continue, so execution won't reach here
 
         // Clean up error binding from symbol table after failure block
-        if let Some(_err_idx) = err_bind_idx {
-            // Error binding scope ends here (failure block must exit anyway)
+        if let Some((err_name, _err_idx)) = err_bind_idx {
+            self.symbol_table.remove(&err_name);
+            if let Some(prev_idx) = prev_err_mapping {
+                self.symbol_table.insert(err_name, prev_idx);
+            }
         }
 
         // Patch jump to skip failure block if Value/Ok
         self.patch_jump(jump_if_value_idx);
 
+        // Now that we're in the success path, expose the unwrapped binding.
+        // IMPORTANT: allow rebinding/shadowing an existing name by overwriting the
+        // mapping permanently (this is how `check msg? {}` upgrades `msg` for the
+        // remainder of the scope).
+        self.symbol_table.insert(binding, bind_idx);
+
         // Extract value into binding slot
         self.instructions
             .push(OpCode::UnwrapMaybe(bind_idx as u16, src_reg));
+
+        self.instructions.push(OpCode::DefVar(bind_idx, false));
     }
 
     fn compile_while(&mut self, condition: Expr, body: Box<Statement>, is_once: bool) {

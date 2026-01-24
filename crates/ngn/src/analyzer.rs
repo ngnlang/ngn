@@ -25,6 +25,10 @@ impl std::fmt::Display for Diagnostic {
 
 pub struct Analyzer {
     scopes: Vec<HashMap<String, Symbol>>,
+    // Flow-sensitive type refinements for the current control-flow path.
+    // This is intentionally separate from `scopes` so that we can narrow variable *reads*
+    // without changing the declared type used for assignment checks.
+    refinements: Vec<HashMap<String, Type>>,
     pub diagnostics: Vec<Diagnostic>,
     pub warnings: Vec<Diagnostic>,
     errors: Vec<String>, // Deprecated, removing incrementally
@@ -92,6 +96,7 @@ impl Analyzer {
 
         let mut analyzer = Self {
             scopes: vec![global_scope],
+            refinements: vec![HashMap::new()],
             diagnostics: Vec::new(),
             warnings: Vec::new(),
             errors: Vec::new(),
@@ -340,6 +345,36 @@ impl Analyzer {
         }
     }
 
+    fn lookup_refined_type(&self, name: &str) -> Option<Type> {
+        for scope in self.refinements.iter().rev() {
+            if let Some(ty) = scope.get(name) {
+                return Some(ty.clone());
+            }
+        }
+        None
+    }
+
+    fn lookup_current_type(&self, name: &str) -> Option<Type> {
+        self.lookup_refined_type(name)
+            .or_else(|| self.lookup(name).map(|s| s.ty.clone()))
+    }
+
+    fn set_refinement(&mut self, name: &str, ty: Type) {
+        // Refinements must always be a subtype of the declared type.
+        let declared = match self.lookup(name) {
+            Some(sym) => sym.ty.clone(),
+            None => return,
+        };
+
+        if !self.types_compatible(&declared, &ty) {
+            return;
+        }
+
+        if let Some(scope) = self.refinements.last_mut() {
+            scope.insert(name.to_string(), ty);
+        }
+    }
+
     /// Check if a type has a method with the given name
     pub fn has_method(&self, ty: &Type, method_name: &str) -> bool {
         // Check custom_methods for both exact type and generic type
@@ -509,10 +544,141 @@ impl Analyzer {
 
     fn enter_scope(&mut self) {
         self.scopes.push(HashMap::new());
+        self.refinements.push(HashMap::new());
     }
 
     fn exit_scope(&mut self) {
         self.scopes.pop();
+        self.refinements.pop();
+    }
+
+    fn apply_narrowings(&mut self, narrowings: &HashMap<String, Type>) {
+        for (name, ty) in narrowings {
+            let ty = self.normalize_type(ty.clone());
+            self.set_refinement(name, ty);
+        }
+    }
+
+    fn union_keep_compatible(&self, union_ty: &Type, target: &Type) -> Option<Type> {
+        let Type::Union(members) = self.normalize_type(union_ty.clone()) else {
+            return None;
+        };
+
+        let mut kept: Vec<Type> = Vec::new();
+        for m in members {
+            if self.types_compatible(&m, target) && self.types_compatible(target, &m) {
+                kept.push(m);
+            }
+        }
+
+        if kept.is_empty() {
+            None
+        } else {
+            Some(self.normalize_type(Type::Union(kept)))
+        }
+    }
+
+    fn union_exclude_compatible(&self, union_ty: &Type, target: &Type) -> Option<Type> {
+        let Type::Union(members) = self.normalize_type(union_ty.clone()) else {
+            return None;
+        };
+
+        let mut kept: Vec<Type> = Vec::new();
+        for m in members {
+            let matches = self.types_compatible(&m, target) && self.types_compatible(target, &m);
+            if !matches {
+                kept.push(m);
+            }
+        }
+
+        if kept.is_empty() {
+            None
+        } else {
+            Some(self.normalize_type(Type::Union(kept)))
+        }
+    }
+
+    fn expr_literal_type(&self, expr: &Expr) -> Option<Type> {
+        match &expr.kind {
+            ExprKind::Number(_) => Some(Type::I64),
+            ExprKind::Float(_) => Some(Type::F64),
+            ExprKind::String(_) | ExprKind::InterpolatedString(_) => Some(Type::String),
+            ExprKind::Bool(_) => Some(Type::Bool),
+            ExprKind::Bytes(_) => Some(Type::Bytes),
+            ExprKind::Regex(_) => Some(Type::Regex),
+            _ => None,
+        }
+    }
+
+    fn derive_narrowings(&self, expr: &Expr) -> (HashMap<String, Type>, HashMap<String, Type>) {
+        // Returns (then_narrowings, else_narrowings).
+        // Narrowings are refinements applied within that branch only.
+        match &expr.kind {
+            ExprKind::Unary {
+                op: Token::Bang,
+                right,
+            } => {
+                let (then_n, else_n) = self.derive_narrowings(right);
+                (else_n, then_n)
+            }
+            ExprKind::Binary { left, op, right } => match op {
+                Token::AndAnd => {
+                    let (then_l, else_l) = self.derive_narrowings(left);
+                    let (then_r, _else_r) = self.derive_narrowings(right);
+
+                    let mut then_out = then_l;
+                    then_out.extend(then_r);
+                    (then_out, else_l)
+                }
+                Token::OrOr => {
+                    let (_then_l, else_l) = self.derive_narrowings(left);
+                    let (_then_r, else_r) = self.derive_narrowings(right);
+
+                    let mut else_out = else_l;
+                    else_out.extend(else_r);
+                    (HashMap::new(), else_out)
+                }
+                Token::EqualEqual | Token::NotEqual => {
+                    let mut then_n = HashMap::new();
+                    let mut else_n = HashMap::new();
+
+                    let (var_expr, lit_expr) = match (&left.kind, &right.kind) {
+                        (ExprKind::Variable(_), _) => (left.as_ref(), right.as_ref()),
+                        (_, ExprKind::Variable(_)) => (right.as_ref(), left.as_ref()),
+                        _ => return (then_n, else_n),
+                    };
+
+                    let ExprKind::Variable(var_name) = &var_expr.kind else {
+                        return (then_n, else_n);
+                    };
+
+                    let Some(lit_ty) = self.expr_literal_type(lit_expr) else {
+                        return (then_n, else_n);
+                    };
+
+                    let Some(var_ty) = self.lookup_current_type(var_name) else {
+                        return (then_n, else_n);
+                    };
+
+                    if let Type::Union(_) = self.normalize_type(var_ty.clone()) {
+                        if let Some(t) = self.union_keep_compatible(&var_ty, &lit_ty) {
+                            then_n.insert(var_name.clone(), t);
+                        }
+                        if let Some(t) = self.union_exclude_compatible(&var_ty, &lit_ty) {
+                            else_n.insert(var_name.clone(), t);
+                        }
+                    }
+
+                    if matches!(op, Token::NotEqual) {
+                        return (else_n, then_n);
+                    }
+
+                    (then_n, else_n)
+                }
+                _ => (HashMap::new(), HashMap::new()),
+            },
+            _ => (HashMap::new(), HashMap::new()),
+        }
     }
 
     fn define(&mut self, name: &str, ty: Type, is_mutable: bool, span: Span) {
@@ -826,9 +992,35 @@ impl Analyzer {
                 let condition_type = self.check_expression(condition);
 
                 if let Some(bind_name) = &binding {
-                    // For binding pattern: if (var n = x), use the expression's type
-                    // Since optional params are stored with their base type, this is already unwrapped
-                    let unwrapped_type = condition_type;
+                    // Maybe/Result unwrap binding via `if (x?) { ... }`.
+                    // This is an unwrap guard (Maybe::Value / Result::Ok) and `n` is the inner type.
+                    // NOTE: do not call `normalize_type()` here; it currently collapses
+                    // Generic("Maybe", [T]) into Enum("Maybe"), which would discard T.
+                    let condition_type = self.resolve_type_aliases(condition_type);
+
+                    let unwrapped_type = match condition_type {
+                        Type::Generic(name, args) if name == "Maybe" && args.len() == 1 => {
+                            args[0].clone()
+                        }
+                        Type::Generic(name, args) if name == "Result" && !args.is_empty() => {
+                            args[0].clone()
+                        }
+                        Type::Enum(name) if name == "Maybe" || name == "Result" => {
+                            // We lost generic args (or never had them); fall back to Any.
+                            // This still preserves the runtime guard semantics.
+                            Type::Any
+                        }
+                        other => {
+                            self.add_error(
+                                format!(
+                                    "Type Error: if-binding requires Maybe<T> or Result<T, E>, got {:?}",
+                                    other
+                                ),
+                                condition.span,
+                            );
+                            Type::Any
+                        }
+                    };
 
                     // Create scope for then-branch with binding defined
                     self.enter_scope();
@@ -836,7 +1028,31 @@ impl Analyzer {
                     self.check_statement(then_branch);
                     self.exit_scope();
                 } else {
+                    if condition_type != Type::Bool && condition_type != Type::Any {
+                        self.add_error(
+                            format!(
+                                "Type Error: if condition must be bool, got {:?}",
+                                condition_type
+                            ),
+                            condition.span,
+                        );
+                    }
+
+                    let (then_narrowings, else_narrowings) = self.derive_narrowings(condition);
+                    let saved = self.refinements.clone();
+
+                    self.refinements = saved.clone();
+                    self.apply_narrowings(&then_narrowings);
                     self.check_statement(then_branch);
+
+                    if let Some(eb) = else_branch {
+                        self.refinements = saved.clone();
+                        self.apply_narrowings(&else_narrowings);
+                        self.check_statement(eb);
+                    }
+
+                    self.refinements = saved;
+                    return Type::Void;
                 }
 
                 if let Some(eb) = else_branch {
@@ -847,7 +1063,6 @@ impl Analyzer {
             StatementKind::Check {
                 binding,
                 error_binding,
-                is_mutable,
                 source,
                 failure_block,
             } => {
@@ -880,7 +1095,7 @@ impl Analyzer {
                 if let Some(err_name) = error_binding {
                     self.enter_scope();
                     if let Some(ref e_ty) = error_type {
-                        self.define(err_name, e_ty.clone(), *is_mutable, source.span);
+                        self.define(err_name, e_ty.clone(), false, source.span);
                     }
                     self.check_statement(failure_block);
                     self.exit_scope();
@@ -888,16 +1103,46 @@ impl Analyzer {
                     self.check_statement(failure_block);
                 }
 
-                // Define binding in current scope with the unwrapped type
-                self.define(binding, unwrapped_type, *is_mutable, source.span);
+                // Guard/rebind mode: `check value?` / `check value?, err?`.
+                // Semantics: after the check, `binding` refers to the unwrapped type in
+                // the current scope (shadowing any outer binding).
+                let Some(existing_is_mutable) = self.lookup(binding).map(|s| s.is_mutable) else {
+                    self.add_error(
+                        format!("Error: Undefined variable '{}'", binding),
+                        source.span,
+                    );
+                    return Type::Void;
+                };
+
+                if let Some(scope) = self.scopes.last_mut() {
+                    scope.insert(
+                        binding.clone(),
+                        Symbol {
+                            ty: unwrapped_type.clone(),
+                            is_mutable: existing_is_mutable,
+                        },
+                    );
+                }
+                self.set_refinement(binding, unwrapped_type);
 
                 Type::Void
             }
             StatementKind::While {
                 condition, body, ..
             } => {
-                self.check_expression(condition);
+                let cond_ty = self.check_expression(condition);
+                if cond_ty != Type::Bool && cond_ty != Type::Any {
+                    self.add_error(
+                        format!("Type Error: while condition must be bool, got {:?}", cond_ty),
+                        condition.span,
+                    );
+                }
+
+                let (then_narrowings, _else_narrowings) = self.derive_narrowings(condition);
+                let saved = self.refinements.clone();
+                self.apply_narrowings(&then_narrowings);
                 self.check_statement(body);
+                self.refinements = saved;
                 Type::Void
             }
             StatementKind::For {
@@ -936,13 +1181,38 @@ impl Analyzer {
                 condition, arms, ..
             } => {
                 let cond_ty = self.check_expression(condition);
+                let scrutinee_var = match &condition.kind {
+                    ExprKind::Variable(name) => Some(name.clone()),
+                    _ => None,
+                };
+
                 for arm in arms {
+                    let saved = self.refinements.clone();
                     self.enter_scope();
+
+                    // Smart narrowing for simple literal patterns when matching on a variable.
+                    if let Some(var_name) = &scrutinee_var {
+                        if let Some(first_pat) = arm.patterns.first() {
+                            if let Pattern::Literal(lit_expr) = first_pat {
+                                if let Some(lit_ty) = self.expr_literal_type(lit_expr) {
+                                    if let Some(var_ty) = self.lookup_current_type(var_name) {
+                                        if let Some(narrowed) =
+                                            self.union_keep_compatible(&var_ty, &lit_ty)
+                                        {
+                                            self.set_refinement(var_name, narrowed);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     for pattern in &arm.patterns {
                         self.check_pattern(pattern, &cond_ty, stmt.span);
                     }
                     self.check_statement(&arm.body);
                     self.exit_scope();
+                    self.refinements = saved;
                 }
                 Type::Void
             }
@@ -1304,7 +1574,9 @@ impl Analyzer {
                 }
             }
             ExprKind::Variable(name) => {
-                if let Some(sym) = self.lookup(name) {
+                if let Some(ty) = self.lookup_refined_type(name) {
+                    ty
+                } else if let Some(sym) = self.lookup(name) {
                     sym.ty.clone()
                 } else {
                     self.add_error(format!("Error: Undefined variable '{}'", name), expr.span);
@@ -1453,6 +1725,11 @@ impl Analyzer {
                             expr.span,
                         );
                     }
+
+                    // Within the current lexical scope, treat the variable as having the
+                    // assigned type for subsequent reads. This intentionally does not affect
+                    // the declared type used for compatibility checks.
+                    self.set_refinement(name, val_type.clone());
                 } else {
                     self.add_error(format!("Error: Undefined variable '{}'", name), expr.span);
                 }
@@ -2132,6 +2409,34 @@ impl Analyzer {
                 // A full implementation would look up the method on inner_ty
                 let _ = (inner_ty, method);
                 Type::Generic("Maybe".to_string(), vec![Type::Any])
+            }
+            ExprKind::UnwrapGuard(name) => {
+                // `name?` is a postfix guard.
+                // - In `if (...)` conditions, the parser desugars it into an if-binding.
+                // - In other expression positions, it evaluates to bool (is Value/Ok).
+
+                let Some(var_ty) = self.lookup_current_type(name) else {
+                    self.add_error(format!("Error: Undefined variable '{}'", name), expr.span);
+                    return Type::Bool;
+                };
+
+                let var_ty = self.resolve_type_aliases(var_ty);
+                match var_ty {
+                    Type::Generic(ref n, ref args) if n == "Maybe" && args.len() == 1 => Type::Bool,
+                    Type::Generic(ref n, ref args) if n == "Result" && !args.is_empty() => Type::Bool,
+                    Type::Enum(ref n) if n == "Maybe" || n == "Result" => Type::Bool,
+                    Type::Any => Type::Bool,
+                    other => {
+                        self.add_error(
+                            format!(
+                                "Type Error: '?' guard requires Maybe<T> or Result<T, E>, got {:?}",
+                                other
+                            ),
+                            expr.span,
+                        );
+                        Type::Bool
+                    }
+                }
             }
             ExprKind::Error(msg) => {
                 self.add_error(msg.clone(), expr.span);

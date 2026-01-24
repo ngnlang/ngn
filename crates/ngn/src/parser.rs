@@ -159,7 +159,6 @@ pub enum StatementKind {
     Check {
         binding: String,
         error_binding: Option<String>,
-        is_mutable: bool,
         source: Expr,
         failure_block: Box<Statement>,
     },
@@ -278,6 +277,11 @@ pub enum ExprKind {
         field: String,
     },
     OptionalMethodCall(Box<Expr>, String, Vec<Expr>),
+    /// Postfix guard: `name?`
+    /// - In `if (...)` conditions this enables `if (name?) { ... }`-style unwrapping.
+    ///   (Internally it desugars to a binding in the then-branch.)
+    /// - In other expression contexts it evaluates to a bool (is Value/Ok).
+    UnwrapGuard(String),
     Map(Type, Type),
     Set(Type),
     This,
@@ -313,6 +317,7 @@ pub struct Parser {
 }
 
 impl Parser {
+    // NOTE: no special "identifier prefix" parsing helpers.
     pub fn new(mut lexer: Lexer) -> Self {
         let (first_token, first_span) = lexer.next_token_with_span();
         Self {
@@ -2011,6 +2016,29 @@ impl Parser {
                         };
                     }
                 }
+                Token::Question => {
+                    // Postfix unwrap guard: name?
+                    // This is mainly used as sugar in `if (...)` conditions.
+                    self.advance(); // consume '?'
+                    let end = self.previous_span.end;
+                    let start = expr.span.start;
+                    match expr.kind {
+                        ExprKind::Variable(name) => {
+                            expr = Expr {
+                                kind: ExprKind::UnwrapGuard(name),
+                                span: Span::new(start, end),
+                            };
+                        }
+                        _ => {
+                            let msg = "Syntax Error: '?' can only be applied to an identifier".to_string();
+                            eprintln!("{}", msg);
+                            expr = Expr {
+                                kind: ExprKind::Error(msg),
+                                span: Span::new(start, end),
+                            };
+                        }
+                    }
+                }
                 Token::LBrace => {
                     if let ExprKind::Variable(name) = &expr.kind {
                         let name = name.clone();
@@ -2252,15 +2280,18 @@ impl Parser {
 
             self.expect(Token::LParen);
 
-            // Check for binding pattern: (var n = expr)
-            let (condition, binding) = if self.current_token == Token::Var {
-                self.advance(); // consume 'var'
-                let bind_name = self.expect_identifier();
-                self.expect(Token::Equal);
-                let expr = self.parse_expression();
-                (expr, Some(bind_name))
-            } else {
-                (self.parse_expression(), None)
+            // Unwrap guard: `(name?)`.
+            // This desugars to an if-binding where `name` is unwrapped in the then-branch.
+            let expr = self.parse_expression();
+            let (condition, binding) = match &expr.kind {
+                ExprKind::UnwrapGuard(name) => (
+                    Expr {
+                        kind: ExprKind::Variable(name.clone()),
+                        span: expr.span,
+                    },
+                    Some(name.clone()),
+                ),
+                _ => (expr, None),
             };
 
             self.expect(Token::RParen);
@@ -2346,18 +2377,20 @@ impl Parser {
                 span: Span::new(start, end),
             }
         } else {
-            // Inline If: if (cond) stmt : ... OR if (var b = x) stmt : ...
+            // Inline If: if (cond) stmt : ...
             self.expect(Token::LParen);
 
-            // Check for binding pattern: (var n = expr)
-            let (condition, binding) = if self.current_token == Token::Var {
-                self.advance(); // consume 'var'
-                let bind_name = self.expect_identifier();
-                self.expect(Token::Equal);
-                let expr = self.parse_expression();
-                (expr, Some(bind_name))
-            } else {
-                (self.parse_expression(), None)
+            // Unwrap guard: `(name?)`.
+            let expr = self.parse_expression();
+            let (condition, binding) = match &expr.kind {
+                ExprKind::UnwrapGuard(name) => (
+                    Expr {
+                        kind: ExprKind::Variable(name.clone()),
+                        span: expr.span,
+                    },
+                    Some(name.clone()),
+                ),
+                _ => (expr, None),
             };
 
             self.expect(Token::RParen);
@@ -2402,15 +2435,17 @@ impl Parser {
         // Expect condition
         self.expect(Token::LParen);
 
-        // Check for binding pattern: (var n = expr)
-        let (condition, binding) = if self.current_token == Token::Var {
-            self.advance(); // consume 'var'
-            let bind_name = self.expect_identifier();
-            self.expect(Token::Equal);
-            let expr = self.parse_expression();
-            (expr, Some(bind_name))
-        } else {
-            (self.parse_expression(), None)
+        // Unwrap guard: `(name?)`.
+        let expr = self.parse_expression();
+        let (condition, binding) = match &expr.kind {
+            ExprKind::UnwrapGuard(name) => (
+                Expr {
+                    kind: ExprKind::Variable(name.clone()),
+                    span: expr.span,
+                },
+                Some(name.clone()),
+            ),
+            _ => (expr, None),
         };
 
         self.expect(Token::RParen);
@@ -2491,41 +2526,45 @@ impl Parser {
         }
     }
 
-    // Parse: check var binding = source { failure_block }
-    // or:    check var binding, error_binding = source { failure_block }
+    // Parse check guards:
+    // - `check value? { failure_block }`
+    // - `check value?, err? { failure_block }`
     fn parse_check_stmt(&mut self) -> Statement {
         let start = self.current_span.start;
         self.advance(); // consume 'check'
 
-        // Expect: var or const
-        let is_mutable = if self.current_token == Token::Var {
-            self.advance();
-            true
-        } else if self.current_token == Token::Const {
-            self.advance();
-            false
-        } else {
-            panic!("Syntax Error: Expected 'var' or 'const' after 'check'");
-        };
+        // Only guard/rebind form is supported.
+        // Example:
+        // - `check value? { ... }`
+        // - `check value?, err? { ... }`
 
+        if self.current_token == Token::Var || self.current_token == Token::Const {
+            panic!("Syntax Error: check uses `check value?` (no var/const)");
+        }
+
+        let binding_start = self.current_span.start;
         let binding = self.expect_identifier();
+        if self.current_token != Token::Question {
+            panic!("Syntax Error: Expected '?' after binding name in check statement");
+        }
+        self.advance(); // consume '?'
+        let binding_end = self.previous_span.end;
 
-        // Check for optional error binding: check var val, err = ...
         let error_binding = if self.current_token == Token::Comma {
-            self.advance(); // consume ','
-            Some(self.expect_identifier())
+            self.advance();
+            let err_name = self.expect_identifier();
+            if self.current_token != Token::Question {
+                panic!("Syntax Error: Expected '?' after error binding name in check statement");
+            }
+            self.advance();
+            Some(err_name)
         } else {
             None
         };
 
-        self.expect(Token::Equal);
-
-        // Parse source as simple identifier (to avoid { being consumed as object literal)
-        let source_name = self.expect_identifier();
-        let source_span = self.previous_span;
         let source = Expr {
-            kind: ExprKind::Variable(source_name),
-            span: source_span,
+            kind: ExprKind::Variable(binding.clone()),
+            span: Span::new(binding_start, binding_end),
         };
 
         // Parse failure block
@@ -2536,7 +2575,6 @@ impl Parser {
             kind: StatementKind::Check {
                 binding,
                 error_binding,
-                is_mutable,
                 source,
                 failure_block: Box::new(Statement {
                     kind: StatementKind::Block(failure_block),
@@ -2552,15 +2590,17 @@ impl Parser {
         let start = self.current_span.start;
         self.expect(Token::LParen);
 
-        // Check for binding pattern: (var n = expr)
-        let (condition, binding) = if self.current_token == Token::Var {
-            self.advance(); // consume 'var'
-            let bind_name = self.expect_identifier();
-            self.expect(Token::Equal);
-            let expr = self.parse_expression();
-            (expr, Some(bind_name))
-        } else {
-            (self.parse_expression(), None)
+        // Unwrap guard: `(name?)`.
+        let expr = self.parse_expression();
+        let (condition, binding) = match &expr.kind {
+            ExprKind::UnwrapGuard(name) => (
+                Expr {
+                    kind: ExprKind::Variable(name.clone()),
+                    span: expr.span,
+                },
+                Some(name.clone()),
+            ),
+            _ => (expr, None),
         };
 
         self.expect(Token::RParen);
