@@ -70,7 +70,7 @@
 /models/*
 /models-mnt
 !/models/.editorconfig
-!/models/ggml-vocab-*.gguf*
+#!/models/ggml-vocab-*.gguf*
 !/models/templates
 
 # Zig
