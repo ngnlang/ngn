@@ -1574,9 +1574,28 @@ impl Analyzer {
                 self.check_statement(body);
 
                 let actual_ret = if return_type.is_none() {
-                    self.infer_stack.pop().unwrap().unwrap_or(Type::Void)
+                    match self.infer_stack.pop() {
+                        Some(Some(ty)) => ty,
+                        Some(None) => Type::Void,
+                        None => {
+                            self.add_error(
+                                "Internal Error: missing inferred return type".to_string(),
+                                expr.span,
+                            );
+                            Type::Void
+                        }
+                    }
                 } else {
-                    return_type.clone().unwrap()
+                    match return_type.clone() {
+                        Some(ty) => ty,
+                        None => {
+                            self.add_error(
+                                "Internal Error: missing return type".to_string(),
+                                expr.span,
+                            );
+                            Type::Void
+                        }
+                    }
                 };
 
                 self.current_return_type = previous_return_type;
@@ -3169,9 +3188,29 @@ impl Analyzer {
                                 self.check_statement(closure_body);
 
                                 let actual_ret = if closure_ret_type.is_none() {
-                                    self.infer_stack.pop().unwrap().unwrap_or(Type::Void)
+                                    match self.infer_stack.pop() {
+                                        Some(Some(ty)) => ty,
+                                        Some(None) => Type::Void,
+                                        None => {
+                                            self.add_error(
+                                                "Internal Error: missing inferred return type"
+                                                    .to_string(),
+                                                expr.span,
+                                            );
+                                            Type::Void
+                                        }
+                                    }
                                 } else {
-                                    closure_ret_type.clone().unwrap()
+                                    match closure_ret_type.clone() {
+                                        Some(ty) => ty,
+                                        None => {
+                                            self.add_error(
+                                                "Internal Error: missing return type".to_string(),
+                                                expr.span,
+                                            );
+                                            Type::Void
+                                        }
+                                    }
                                 };
 
                                 self.current_return_type = previous_return_type;

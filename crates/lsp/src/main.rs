@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
@@ -7,7 +8,7 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 use ngn::analyzer::Analyzer;
 use ngn::lexer::{Lexer, Span, Token};
-use ngn::parser::{Parser, StatementKind};
+use ngn::parser::{ParseDiagnostic, Parser, StatementKind};
 use ngn::toolbox::core::GLOBAL_NAMES;
 
 #[derive(Debug)]
@@ -39,41 +40,77 @@ fn offset_to_position(text: &str, offset: usize) -> Position {
 
 impl Backend {
     async fn validate_document(&self, uri: Url, text: &str) {
-        // Parse the document
-        let lexer = Lexer::new(text);
-        let mut parser = Parser::new(lexer);
-        let mut statements = Vec::new();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let lexer = Lexer::new(text);
+            let mut parser = Parser::new(lexer);
+            let mut statements = Vec::new();
 
-        while parser.current_token != Token::EOF {
-            if parser.current_token == Token::Newline {
-                parser.advance();
-                continue;
+            while parser.current_token != Token::EOF {
+                if parser.current_token == Token::Newline {
+                    parser.advance();
+                    continue;
+                }
+                statements.push(parser.parse_statement());
             }
-            statements.push(parser.parse_statement());
-        }
 
-        // Analyze
-        let mut analyzer = Analyzer::new();
-        let diagnostics = match analyzer.analyze(&statements) {
-            Ok(_) => Vec::new(),
-            Err(d) => d,
-        };
+            let parser_diagnostics = parser.diagnostics;
 
-        // publish diagnostics
-        let lsp_diagnostics: Vec<Diagnostic> = diagnostics
-            .into_iter()
-            .map(|d| {
-                let start = offset_to_position(text, d.span.start);
-                let end = offset_to_position(text, d.span.end);
-                Diagnostic {
-                    range: Range { start, end },
+            let mut analyzer = Analyzer::new();
+            let analyzer_diagnostics = match analyzer.analyze(&statements) {
+                Ok(_) => Vec::new(),
+                Err(d) => d,
+            };
+
+            (parser_diagnostics, analyzer_diagnostics)
+        }));
+
+        let (parser_diagnostics, analyzer_diagnostics) = match result {
+            Ok((parser_diagnostics, analyzer_diagnostics)) => {
+                (parser_diagnostics, analyzer_diagnostics)
+            }
+            Err(_) => {
+                let diagnostic = Diagnostic {
+                    range: Range {
+                        start: Position { line: 0, character: 0 },
+                        end: Position { line: 0, character: 1 },
+                    },
                     severity: Some(DiagnosticSeverity::ERROR),
-                    message: d.message,
+                    message: "Internal error: ngn parser crashed".to_string(),
                     source: Some("ngn".to_string()),
                     ..Default::default()
-                }
-            })
-            .collect();
+                };
+                self.client
+                    .publish_diagnostics(uri, vec![diagnostic], None)
+                    .await;
+                return;
+            }
+        };
+
+        let mut raw_diagnostics: Vec<(String, Span)> = Vec::new();
+        for ParseDiagnostic { message, span } in parser_diagnostics {
+            raw_diagnostics.push((message, span));
+        }
+        for diag in analyzer_diagnostics {
+            raw_diagnostics.push((diag.message, diag.span));
+        }
+
+        let mut seen = HashSet::new();
+        let mut lsp_diagnostics = Vec::new();
+        for (message, span) in raw_diagnostics {
+            let key = (span.start, span.end, message.clone());
+            if !seen.insert(key) {
+                continue;
+            }
+            let start = offset_to_position(text, span.start);
+            let end = offset_to_position(text, span.end);
+            lsp_diagnostics.push(Diagnostic {
+                range: Range { start, end },
+                severity: Some(DiagnosticSeverity::ERROR),
+                message,
+                source: Some("ngn".to_string()),
+                ..Default::default()
+            });
+        }
 
         self.client
             .publish_diagnostics(uri, lsp_diagnostics, None)
@@ -410,17 +447,25 @@ impl LanguageServer for Backend {
         };
         drop(documents);
 
-        // Collect all tokens with their spans
-        let mut lexer = Lexer::new(&text);
-        let mut tokens_with_spans: Vec<(Token, Span)> = Vec::new();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let mut lexer = Lexer::new(&text);
+            let mut tokens_with_spans: Vec<(Token, Span)> = Vec::new();
 
-        loop {
-            let (token, span) = lexer.next_token_with_span();
-            if token == Token::EOF {
-                break;
+            loop {
+                let (token, span) = lexer.next_token_with_span();
+                if token == Token::EOF {
+                    break;
+                }
+                tokens_with_spans.push((token, span));
             }
-            tokens_with_spans.push((token, span));
-        }
+
+            tokens_with_spans
+        }));
+
+        let tokens_with_spans = match result {
+            Ok(tokens) => tokens,
+            Err(_) => return Ok(None),
+        };
 
         let (toolbox_imports, toolbox_module_aliases) = collect_toolbox_imports(&text);
         let core_globals: HashSet<&'static str> = GLOBAL_NAMES.iter().copied().collect();
@@ -441,6 +486,7 @@ impl LanguageServer for Backend {
 
         // Helper to convert byte offset to (line, character_offset)
         let byte_to_line_col = |byte_offset: usize| -> (u32, u32) {
+            let byte_offset = byte_offset.min(text.len());
             let mut current_line_start_byte = 0;
             let mut line_count = 0;
 
@@ -480,7 +526,11 @@ impl LanguageServer for Backend {
             };
 
             // Skip newlines in semantic tokens
-            if matches!(token, Token::Newline) {
+            if matches!(token, Token::Newline | Token::Error(_)) {
+                continue;
+            }
+
+            if span.start > span.end || span.end > text.len() {
                 continue;
             }
 
@@ -562,8 +612,12 @@ impl LanguageServer for Backend {
             if let Token::Regex(content) = token {
                 if let Some(last_slash_idx) = content.rfind('/') {
                     if last_slash_idx < content.len() - 1 {
+                        let body_end = span.start + last_slash_idx + 1;
+                        if body_end > span.end {
+                            continue;
+                        }
                         // We have flags
-                        let body_len = (text[span.start..(span.start + last_slash_idx + 1)]
+                        let body_len = (text[span.start..body_end]
                             .chars()
                             .count()) as u32;
                         let flags_len = (text[(span.start + last_slash_idx + 1)..span.end]

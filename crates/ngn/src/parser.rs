@@ -211,6 +211,12 @@ pub struct Expr {
     pub span: Span,
 }
 
+#[derive(Debug, Clone)]
+pub struct ParseDiagnostic {
+    pub message: String,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprKind {
     Assign {
@@ -314,6 +320,7 @@ pub struct Parser {
     pub paren_depth: usize,
     /// Type parameters currently in scope (for parsing generic model/enum definitions)
     pub type_params_in_scope: Vec<String>,
+    pub diagnostics: Vec<ParseDiagnostic>,
 }
 
 impl Parser {
@@ -328,6 +335,7 @@ impl Parser {
             in_function: false,
             paren_depth: 0,
             type_params_in_scope: Vec::new(),
+            diagnostics: Vec::new(),
         }
     }
 
@@ -345,15 +353,24 @@ impl Parser {
         }
     }
 
+    fn record_error(&mut self, message: String, span: Span) {
+        self.diagnostics.push(ParseDiagnostic { message, span });
+    }
+
     fn expect(&mut self, expected: Token) {
         if self.current_token == expected {
             self.advance();
         } else {
-            eprintln!(
-                "Syntax Error: Expected {:?}, got {:?}",
-                expected, self.current_token
+            self.record_error(
+                format!(
+                    "Syntax Error: Expected {:?}, got {:?}",
+                    expected, self.current_token
+                ),
+                self.current_span,
             );
-            // We assume the token was missing and continue to prevent crashing
+            if self.current_token != Token::EOF {
+                self.advance();
+            }
         }
     }
 
@@ -374,10 +391,16 @@ impl Parser {
             self.advance();
             name
         } else {
-            eprintln!(
-                "Syntax Error: Expected an identifier, but found {:?}",
-                self.current_token
+            self.record_error(
+                format!(
+                    "Syntax Error: Expected an identifier, but found {:?}",
+                    self.current_token
+                ),
+                self.current_span,
             );
+            if self.current_token != Token::EOF {
+                self.advance();
+            }
             "__error_identifier__".to_string()
         }
     }
@@ -395,7 +418,7 @@ impl Parser {
 
         let mut params = Vec::new();
 
-        while self.current_token != Token::RParen {
+        while self.current_token != Token::RParen && self.current_token != Token::EOF {
             let param_name = self.expect_identifier();
             // Capture span start from the identifier we just parsed
             let start_param = self.previous_span.start;
@@ -442,6 +465,10 @@ impl Parser {
             });
 
             if self.current_token == Token::Comma {
+                self.advance();
+            } else if self.current_token != Token::RParen && self.current_token != Token::EOF {
+                let msg = "Syntax Error: Expected ',' or ')' after parameter".to_string();
+                self.record_error(msg, self.current_span);
                 self.advance();
             }
         }
@@ -609,6 +636,13 @@ impl Parser {
                 }
                 self.parse_declaration()
             }
+            Token::Error(msg) => {
+                self.advance();
+                Statement {
+                    kind: StatementKind::Error(msg),
+                    span: Span::new(start, self.previous_span.end),
+                }
+            }
             Token::Type => self.parse_type_alias_stmt(),
             Token::Fn => self.parse_function(),
             Token::Export => {
@@ -625,7 +659,15 @@ impl Parser {
                 } else if self.current_token == Token::Fn {
                     self.parse_function_with_export(true)
                 } else {
-                    panic!("Syntax Error: 'export' must be followed by 'fn' or 'default'");
+                    let msg =
+                        "Syntax Error: 'export' must be followed by 'fn' or 'default'".to_string();
+                    if self.current_token != Token::EOF {
+                        self.advance();
+                    }
+                    Statement {
+                        kind: StatementKind::Error(msg),
+                        span: Span::new(start, self.previous_span.end),
+                    }
                 }
             }
             Token::Identifier(_) => {
@@ -745,7 +787,13 @@ impl Parser {
             Token::Var => (true, false),
             Token::Const => (false, false),
             Token::Global => (false, true),
-            _ => panic!("Expected declarator"),
+            _ => {
+                let msg = "Syntax Error: Expected declarator".to_string();
+                return Statement {
+                    kind: StatementKind::Error(msg),
+                    span: Span::new(start, self.current_span.end),
+                };
+            }
         };
 
         // Check for destructuring patterns
@@ -1045,7 +1093,9 @@ impl Parser {
                         let mut last_type = None;
                         let mut size: Option<i64> = None;
 
-                        while self.current_token != Token::GreaterThan {
+                        while self.current_token != Token::GreaterThan
+                            && self.current_token != Token::EOF
+                        {
                             if let Token::Number(n) = self.current_token {
                                 size = Some(n);
                                 self.advance();
@@ -1085,7 +1135,9 @@ impl Parser {
                     if self.current_token == Token::LessThan {
                         self.advance();
                         let mut args = Vec::new();
-                        while self.current_token != Token::GreaterThan {
+                        while self.current_token != Token::GreaterThan
+                            && self.current_token != Token::EOF
+                        {
                             args.push(self.parse_type());
                             if self.current_token == Token::Comma {
                                 self.advance();
@@ -1110,9 +1162,11 @@ impl Parser {
                     self.expect(Token::GreaterThan);
                     Type::Channel(Box::new(inner))
                 } else {
-                    panic!(
+                    let msg =
                         "Syntax Error: channel type requires a type argument, e.g. channel<i64>"
-                    );
+                            .to_string();
+                    self.record_error(msg, self.current_span);
+                    Type::Channel(Box::new(Type::Any))
                 }
             }
             Token::Map => {
@@ -1134,7 +1188,7 @@ impl Parser {
             Token::LParen => {
                 self.advance();
                 let mut inner_types = Vec::new();
-                while self.current_token != Token::RParen {
+                while self.current_token != Token::RParen && self.current_token != Token::EOF {
                     inner_types.push(self.parse_type());
                     if self.current_token == Token::Comma {
                         self.advance();
@@ -1143,10 +1197,17 @@ impl Parser {
                 self.expect(Token::RParen);
                 Type::Tuple(inner_types)
             }
-            _ => panic!(
-                "Syntax Error: Expected a type, but found {:?}",
-                self.current_token
-            ),
+            _ => {
+                let msg = format!(
+                    "Syntax Error: Expected a type, but found {:?}",
+                    self.current_token
+                );
+                self.record_error(msg, self.current_span);
+                if self.current_token != Token::EOF {
+                    self.advance();
+                }
+                Type::Any
+            }
         };
 
         if self.current_token == Token::Question {
@@ -1293,7 +1354,11 @@ impl Parser {
                     span: Span::new(start, end),
                 };
             } else {
-                panic!("Syntax Error: Invalid assignment target");
+                let msg = "Syntax Error: Invalid assignment target".to_string();
+                return Expr {
+                    kind: ExprKind::Error(msg),
+                    span: Span::new(start, end),
+                };
             }
         }
 
@@ -1326,7 +1391,11 @@ impl Parser {
                     };
                 }
                 _ => {
-                    panic!("Syntax Error: Invalid assignment target");
+                    let msg = "Syntax Error: Invalid assignment target".to_string();
+                    return Expr {
+                        kind: ExprKind::Error(msg),
+                        span: Span::new(start, end),
+                    };
                 }
             }
         }
@@ -1618,7 +1687,9 @@ impl Parser {
                         self.consume_newlines();
                         let mut elements = vec![expression];
 
-                        while self.current_token != Token::RParen {
+                        while self.current_token != Token::RParen
+                            && self.current_token != Token::EOF
+                        {
                             elements.push(self.parse_expression());
                             self.consume_newlines();
                             if self.current_token == Token::Comma {
@@ -1660,6 +1731,14 @@ impl Parser {
                 self.advance();
                 Expr {
                     kind: ExprKind::Regex(pattern),
+                    span: Span::new(start, self.previous_span.end),
+                }
+            }
+            Token::Error(msg) => {
+                let start = self.current_span.start;
+                self.advance();
+                Expr {
+                    kind: ExprKind::Error(msg),
                     span: Span::new(start, self.previous_span.end),
                 }
             }
@@ -1821,7 +1900,14 @@ impl Parser {
 
                 if self.current_token == Token::Comma {
                     // bytes() takes 0 or 1 arguments
-                    panic!("Parse Error: bytes() takes at most 1 argument");
+                    let msg = "Parse Error: bytes() takes at most 1 argument".to_string();
+                    while self.current_token != Token::RParen && self.current_token != Token::EOF {
+                        self.advance();
+                    }
+                    return Expr {
+                        kind: ExprKind::Error(msg),
+                        span: Span::new(start, self.previous_span.end),
+                    };
                 }
 
                 self.expect(Token::RParen);
@@ -1868,7 +1954,6 @@ impl Parser {
             }
             _ => {
                 let msg = format!("Expected expression, found {:?}", self.current_token);
-                eprintln!("{}", msg); // Log to stderr for debugging
                 let start = self.current_span.start;
                 if self.current_token != Token::EOF {
                     self.advance(); // consume the bad token to make progress
@@ -1925,7 +2010,6 @@ impl Parser {
                         _ => {
                             let msg =
                                 "Syntax Error: Current expression cannot be called".to_string();
-                            eprintln!("{}", msg);
                             expr = Expr {
                                 kind: ExprKind::Error(msg),
                                 span: expr.span,
@@ -2030,8 +2114,8 @@ impl Parser {
                             };
                         }
                         _ => {
-                            let msg = "Syntax Error: '?' can only be applied to an identifier".to_string();
-                            eprintln!("{}", msg);
+                            let msg = "Syntax Error: '?' can only be applied to an identifier"
+                                .to_string();
                             expr = Expr {
                                 kind: ExprKind::Error(msg),
                                 span: Span::new(start, end),
@@ -2203,12 +2287,24 @@ impl Parser {
                     self.advance();
                 }
                 if let Token::InterpolationStart = self.current_token {
-                    panic!("Syntax Error: Interpolation not allowed in this context");
+                    let msg = "Syntax Error: Interpolation not allowed in this context".to_string();
+                    self.record_error(msg, self.current_span);
+                    while self.current_token != Token::StringEnd && self.current_token != Token::EOF
+                    {
+                        self.advance();
+                    }
                 }
                 self.expect(Token::StringEnd);
                 result
             }
-            _ => panic!("Expected string literal, found {:?}", self.current_token),
+            _ => {
+                let msg = format!("Expected string literal, found {:?}", self.current_token);
+                self.record_error(msg, self.current_span);
+                if self.current_token != Token::EOF {
+                    self.advance();
+                }
+                String::new()
+            }
         }
     }
 
@@ -2232,7 +2328,11 @@ impl Parser {
             if self.current_token == Token::Comma {
                 self.advance();
             } else if self.current_token != Token::RBracket {
-                panic!("Expected ',' or ']' in array literal");
+                let msg = "Expected ',' or ']' in array literal".to_string();
+                self.record_error(msg, self.current_span);
+                while self.current_token != Token::RBracket && self.current_token != Token::EOF {
+                    self.advance();
+                }
             }
         }
 
@@ -2432,7 +2532,7 @@ impl Parser {
     // Helper for Block If recursion
     fn parse_if_inner(&mut self) -> Statement {
         let start = self.current_span.start; // start at '('
-        // Expect condition
+
         self.expect(Token::LParen);
 
         // Unwrap guard: `(name?)`.
@@ -2500,8 +2600,8 @@ impl Parser {
         }
 
         let end = self.previous_span.end; // May not be accurate if RBrace handled by parent?
-        // Actually, parse_if_inner is called inside the braces loop of parent.
-        // It consumes segments inside the block.
+                                          // Actually, parse_if_inner is called inside the braces loop of parent.
+                                          // It consumes segments inside the block.
 
         let then_span = if !then_block.is_empty() {
             Span::new(
@@ -2539,24 +2639,32 @@ impl Parser {
         // - `check value?, err? { ... }`
 
         if self.current_token == Token::Var || self.current_token == Token::Const {
-            panic!("Syntax Error: check uses `check value?` (no var/const)");
+            let msg = "Syntax Error: check uses `check value?` (no var/const)".to_string();
+            self.record_error(msg, self.current_span);
+            self.advance();
         }
 
         let binding_start = self.current_span.start;
         let binding = self.expect_identifier();
         if self.current_token != Token::Question {
-            panic!("Syntax Error: Expected '?' after binding name in check statement");
+            let msg =
+                "Syntax Error: Expected '?' after binding name in check statement".to_string();
+            self.record_error(msg, self.current_span);
+        } else {
+            self.advance(); // consume '?'
         }
-        self.advance(); // consume '?'
         let binding_end = self.previous_span.end;
 
         let error_binding = if self.current_token == Token::Comma {
             self.advance();
             let err_name = self.expect_identifier();
             if self.current_token != Token::Question {
-                panic!("Syntax Error: Expected '?' after error binding name in check statement");
+                let msg = "Syntax Error: Expected '?' after error binding name in check statement"
+                    .to_string();
+                self.record_error(msg, self.current_span);
+            } else {
+                self.advance();
             }
-            self.advance();
             Some(err_name)
         } else {
             None
@@ -2949,7 +3057,8 @@ impl Parser {
         let start = self.current_span.start;
 
         if self.in_function {
-            panic!("Syntax Error: 'enum' can only be declared in global scope");
+            let msg = "Syntax Error: 'enum' can only be declared in global scope".to_string();
+            self.record_error(msg, self.current_span);
         }
         self.advance(); // consume 'enum'
         let name = self.expect_identifier();
@@ -2958,7 +3067,7 @@ impl Parser {
         let mut type_params = Vec::new();
         if self.current_token == Token::LessThan {
             self.advance(); // consume '<'
-            while self.current_token != Token::GreaterThan {
+            while self.current_token != Token::GreaterThan && self.current_token != Token::EOF {
                 let param_name = self.expect_identifier();
                 type_params.push(param_name.clone());
                 if self.current_token == Token::Comma {
@@ -3015,7 +3124,8 @@ impl Parser {
         let start = self.current_span.start;
 
         if self.in_function {
-            panic!("Syntax Error: 'model' can only be declared in global scope");
+            let msg = "Syntax Error: 'model' can only be declared in global scope".to_string();
+            self.record_error(msg, self.current_span);
         }
         self.advance(); // consume 'model'
         let name = self.expect_identifier();
@@ -3024,7 +3134,7 @@ impl Parser {
         let mut type_params = Vec::new();
         if self.current_token == Token::LessThan {
             self.advance(); // consume '<'
-            while self.current_token != Token::GreaterThan {
+            while self.current_token != Token::GreaterThan && self.current_token != Token::EOF {
                 let param_name = self.expect_identifier();
                 type_params.push(param_name.clone());
                 if self.current_token == Token::Comma {
@@ -3073,7 +3183,8 @@ impl Parser {
         let start = self.current_span.start;
 
         if self.in_function {
-            panic!("Syntax Error: 'role' can only be declared in global scope");
+            let msg = "Syntax Error: 'role' can only be declared in global scope".to_string();
+            self.record_error(msg, self.current_span);
         }
         self.advance(); // consume 'role'
         let name = self.expect_identifier();

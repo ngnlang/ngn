@@ -98,6 +98,7 @@ pub enum Token {
     // Formatting
     Newline,
     Underscore,
+    Error(String),
     EOF,
 }
 
@@ -247,7 +248,7 @@ impl Lexer {
         // If "return /a/" prev is Return.
         // If "match /a/" prev is Match.
         // EOF doesn't matter.
-        if token != Token::EOF {
+        if token != Token::EOF && !matches!(token, Token::Error(_)) {
             self.last_token = Some(token.clone());
         }
         token
@@ -433,7 +434,7 @@ impl Lexer {
                     self.cursor += 1;
                     Token::AndAnd
                 } else {
-                    panic!("Unknown character: {}", ch);
+                    Token::Error("Unexpected character: '&'".to_string())
                 }
             }
             '!' => {
@@ -486,7 +487,7 @@ impl Lexer {
                 }
             }
             '_' => Token::Underscore,
-            _ => panic!("Unknown character: {}", ch),
+            _ => Token::Error(format!("Unknown character: {}", ch)),
         };
 
         return token;
@@ -584,9 +585,15 @@ impl Lexer {
         }
 
         if is_float {
-            Token::Float(num_str.parse().unwrap())
+            match num_str.parse() {
+                Ok(val) => Token::Float(val),
+                Err(_) => Token::Error(format!("Invalid float literal: {}", num_str)),
+            }
         } else {
-            Token::Number(num_str.parse().unwrap())
+            match num_str.parse() {
+                Ok(val) => Token::Number(val),
+                Err(_) => Token::Error(format!("Invalid number literal: {}", num_str)),
+            }
         }
     }
 
@@ -712,6 +719,6 @@ impl Lexer {
                 self.cursor += 1;
             }
         }
-        panic!("Unterminated regex literal");
+        Token::Error("Unterminated regex literal".to_string())
     }
 }
