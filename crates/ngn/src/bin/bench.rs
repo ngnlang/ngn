@@ -85,7 +85,11 @@ fn run_benchmark(path: &Path) {
     }
 
     let start_execute = Instant::now();
-    let mut vm = VM::new(final_instructions, compiler.constants, compiler.next_index);
+    let mut vm = VM::new(
+        final_instructions,
+        compiler.constants.clone(),
+        compiler.next_index,
+    );
     vm.run();
     let execute_time = start_execute.elapsed();
 

@@ -3,6 +3,7 @@ use crate::lexer::Token;
 use crate::parser::{EnumDef, Expr, ExprKind, Pattern, Statement, StatementKind};
 use crate::value::{Function, Number, Value};
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -12,7 +13,7 @@ pub struct Upvalue {
 }
 
 pub struct Compiler {
-    pub enclosing: *mut Compiler,
+    pub enclosing: Option<Rc<EnclosingInfo>>,
     pub module_id: usize, // Which module this compiler is for
     pub symbol_table: HashMap<String, usize>,
     pub global_table: HashMap<String, usize>,
@@ -31,28 +32,26 @@ pub struct Compiler {
     pub enums: HashMap<String, EnumDef>,
     pub signatures: HashMap<String, Vec<bool>>,
     pub moved_locals: HashSet<String>,
-    pub upvalues: Vec<Upvalue>,
+    pub state_vars: HashSet<String>,
+    pub upvalues: Rc<std::cell::RefCell<Vec<Upvalue>>>,
     pub current_function_name: Option<String>, // For detecting self-recursion
 }
 
+#[derive(Clone)]
+pub struct EnclosingInfo {
+    pub symbols: HashMap<String, usize>,
+    pub state_vars: HashSet<String>,
+    pub upvalues: Rc<std::cell::RefCell<Vec<Upvalue>>>,
+    pub enclosing: Option<Rc<EnclosingInfo>>,
+}
+
 impl Compiler {
-    pub fn new(enclosing_opt: Option<&mut Compiler>) -> Self {
-        let global_table = if let Some(parent) = &enclosing_opt {
-            parent.global_table.clone()
-        } else {
-            HashMap::new()
-        };
-
-        let enclosing = match enclosing_opt {
-            Some(c) => c as *mut Compiler,
-            None => std::ptr::null_mut(),
-        };
-
+    pub fn new(enclosing: Option<Rc<EnclosingInfo>>) -> Self {
         Self {
             enclosing,
             module_id: 0, // Will be set by caller for non-main modules
             symbol_table: HashMap::new(),
-            global_table,
+            global_table: HashMap::new(),
             static_values: HashMap::new(),
             next_index: 0,
             reg_top: 0,
@@ -68,7 +67,8 @@ impl Compiler {
             enums: HashMap::new(),
             signatures: HashMap::new(),
             moved_locals: HashSet::new(),
-            upvalues: Vec::new(),
+            state_vars: HashSet::new(),
+            upvalues: Rc::new(std::cell::RefCell::new(Vec::new())),
             current_function_name: None,
         }
     }
@@ -82,33 +82,58 @@ impl Compiler {
         reg
     }
 
+    fn is_state_var(&self, name: &str) -> bool {
+        if self.state_vars.contains(name) {
+            return true;
+        }
+
+        let mut current = self.enclosing.clone();
+        while let Some(parent) = current {
+            if parent.state_vars.contains(name) {
+                return true;
+            }
+            current = parent.enclosing.clone();
+        }
+
+        false
+    }
+
     // Registers are allocated using a simple bump allocator
     // and freed by resetting reg_top to a previous state (temp_start or saved value)
 
     pub fn resolve_upvalue(&mut self, name: &str) -> Option<u16> {
-        if self.enclosing.is_null() {
-            return None;
-        }
-        let parent = unsafe { &mut *self.enclosing };
-
-        if let Some(&idx) = parent.symbol_table.get(name) {
-            return Some(self.add_upvalue(idx as u16, true));
-        }
-
-        if let Some(up_idx) = parent.resolve_upvalue(name) {
-            return Some(self.add_upvalue(up_idx, false));
-        }
-        None
+        let enclosing = self.enclosing.clone()?;
+        self.resolve_upvalue_from(&enclosing, name)
     }
 
     fn add_upvalue(&mut self, index: u16, is_local: bool) -> u16 {
-        for (i, up) in self.upvalues.iter().enumerate() {
+        Self::add_upvalue_to_list(&self.upvalues, index, is_local)
+    }
+
+    fn add_upvalue_to_list(
+        list: &Rc<std::cell::RefCell<Vec<Upvalue>>>,
+        index: u16,
+        is_local: bool,
+    ) -> u16 {
+        let mut upvalues = list.borrow_mut();
+        for (i, up) in upvalues.iter().enumerate() {
             if up.index == index && up.is_local == is_local {
                 return i as u16;
             }
         }
-        self.upvalues.push(Upvalue { index, is_local });
-        (self.upvalues.len() - 1) as u16
+        upvalues.push(Upvalue { index, is_local });
+        (upvalues.len() - 1) as u16
+    }
+
+    fn resolve_upvalue_from(&mut self, enclosing: &Rc<EnclosingInfo>, name: &str) -> Option<u16> {
+        if let Some(&idx) = enclosing.symbols.get(name) {
+            return Some(self.add_upvalue(idx as u16, true));
+        }
+
+        let parent = enclosing.enclosing.as_ref()?;
+        let up_idx = self.resolve_upvalue_from(parent, name)?;
+        let parent_up_idx = Self::add_upvalue_to_list(&enclosing.upvalues, up_idx, false);
+        Some(self.add_upvalue(parent_up_idx, false))
     }
 
     pub fn inject_builtins(&mut self) {
@@ -236,6 +261,11 @@ impl Compiler {
     pub fn compile_expr(&mut self, expr: &Expr) -> u16 {
         match &expr.kind {
             ExprKind::Assign { name, value } => {
+                if matches!(value.kind, ExprKind::State(_)) {
+                    self.state_vars.insert(name.clone());
+                } else {
+                    self.state_vars.remove(name);
+                }
                 let src_reg = self.compile_expr(value);
 
                 if let Some(&idx) = self.symbol_table.get(name) {
@@ -469,13 +499,18 @@ impl Compiler {
                 body,
                 return_type,
             } => {
+                let enclosing = Rc::new(EnclosingInfo {
+                    symbols: self.symbol_table.clone(),
+                    state_vars: self.state_vars.clone(),
+                    upvalues: self.upvalues.clone(),
+                    enclosing: self.enclosing.clone(),
+                });
+                let mut sub_compiler = Compiler::new(Some(enclosing));
                 let (func, upvalues) = {
                     let global_table = self.global_table.clone();
                     let static_values = self.static_values.clone();
                     let enums = self.enums.clone();
                     let signatures = self.signatures.clone();
-
-                    let mut sub_compiler = Compiler::new(Some(self));
                     sub_compiler.is_global = false;
                     sub_compiler.global_table = global_table;
                     sub_compiler.static_values = static_values;
@@ -518,12 +553,14 @@ impl Compiler {
                     sub_compiler.compile_statement(*body.clone());
                     sub_compiler.instructions.push(OpCode::ReturnVoid);
 
-                    let captured_upvalues = sub_compiler.upvalues.clone();
+                    let captured_upvalues = sub_compiler.upvalues.borrow().clone();
+                    let instructions = std::mem::take(&mut sub_compiler.instructions);
+                    let constants = std::mem::take(&mut sub_compiler.constants);
 
                     let func = Function {
                         name: "closure".to_string(),
-                        instructions: Arc::new(sub_compiler.instructions),
-                        constants: Arc::new(sub_compiler.constants),
+                        instructions: Arc::new(instructions),
+                        constants: Arc::new(constants),
                         home_globals: None, // Set by VM at load time
                         param_count: params.len(),
                         param_ownership,
@@ -1001,32 +1038,31 @@ impl Compiler {
                 let obj_reg = self.compile_expr(obj_expr);
                 let dest = self.alloc_reg();
 
-                // State actor and channel methods use dedicated opcodes
-                match method.as_str() {
-                    "read" => {
-                        self.instructions.push(OpCode::StateRead(dest, obj_reg));
-                        self.reg_top = dest + 1;
-                        return dest;
+                let is_state_target = matches!(obj_expr.kind, ExprKind::State(_))
+                    || matches!(&obj_expr.kind, ExprKind::Variable(name) if self.is_state_var(name));
+
+                if is_state_target {
+                    match method.as_str() {
+                        "read" => {
+                            self.instructions.push(OpCode::StateRead(dest, obj_reg));
+                            self.reg_top = dest + 1;
+                            return dest;
+                        }
+                        "write" => {
+                            let arg_reg = self.compile_expr(&args[0]);
+                            self.instructions.push(OpCode::StateWrite(obj_reg, arg_reg));
+                            self.reg_top = dest + 1;
+                            return dest;
+                        }
+                        "update" => {
+                            let arg_reg = self.compile_expr(&args[0]);
+                            self.instructions
+                                .push(OpCode::StateUpdate(obj_reg, arg_reg));
+                            self.reg_top = dest + 1;
+                            return dest;
+                        }
+                        _ => {}
                     }
-                    "write" => {
-                        let arg_reg = self.compile_expr(&args[0]);
-                        self.instructions.push(OpCode::StateWrite(obj_reg, arg_reg));
-                        self.reg_top = dest + 1;
-                        return dest;
-                    }
-                    "update" => {
-                        let arg_reg = self.compile_expr(&args[0]);
-                        self.instructions
-                            .push(OpCode::StateUpdate(obj_reg, arg_reg));
-                        self.reg_top = dest + 1;
-                        return dest;
-                    }
-                    "close" => {
-                        self.instructions.push(OpCode::CloseChannel(obj_reg));
-                        self.reg_top = dest + 1;
-                        return dest;
-                    }
-                    _ => {}
                 }
 
                 // For all other methods, use the generic CallMethod opcode
@@ -1342,6 +1378,11 @@ impl Compiler {
                 value,
                 declared_type: _,
             } => {
+                if matches!(value.kind, ExprKind::State(_)) {
+                    self.state_vars.insert(name.clone());
+                } else {
+                    self.state_vars.remove(&name);
+                }
                 let var_idx = self.next_index;
 
                 if is_global {
@@ -2277,8 +2318,8 @@ impl Compiler {
         // Condition was in match_reg, which will be freed when compile_match finishes
         self.reg_top = match_reg;
         self.temp_start = saved_temp_start.max(match_reg); // Restore but don't go below match_reg
-        // Note: DO NOT restore next_index - the state_var slot must stay reserved
-        // since DefVar was emitted for it and could cause collisions
+                                                           // Note: DO NOT restore next_index - the state_var slot must stay reserved
+                                                           // since DefVar was emitted for it and could cause collisions
     }
 
     fn compile_next(&mut self) {
@@ -2422,7 +2463,13 @@ impl Compiler {
         body: Vec<Statement>,
         return_type: Option<crate::parser::Type>,
     ) -> Function {
-        let mut sub_compiler = Compiler::new(Some(self));
+        let enclosing = Rc::new(EnclosingInfo {
+            symbols: self.symbol_table.clone(),
+            state_vars: self.state_vars.clone(),
+            upvalues: self.upvalues.clone(),
+            enclosing: self.enclosing.clone(),
+        });
+        let mut sub_compiler = Compiler::new(Some(enclosing));
         sub_compiler.is_global = false;
 
         // Only inherit actual globals, NOT local symbols from parent scope.
@@ -2477,10 +2524,14 @@ impl Compiler {
         self.signatures
             .insert(name.clone(), param_ownership.clone());
 
+        let instructions = std::mem::take(&mut sub_compiler.instructions);
+        let constants = std::mem::take(&mut sub_compiler.constants);
+        let upvalues = sub_compiler.upvalues.borrow().clone();
+
         Function {
             name,
-            instructions: Arc::new(sub_compiler.instructions),
-            constants: Arc::new(sub_compiler.constants),
+            instructions: Arc::new(instructions),
+            constants: Arc::new(constants),
             home_globals: None, // Set by VM at load time
             param_count: param_ownership.len(),
             param_ownership,
@@ -2489,7 +2540,7 @@ impl Compiler {
             param_is_maybe_wrapped,
             return_type: return_type.unwrap_or(crate::parser::Type::Void),
             reg_count: sub_compiler.max_reg as usize,
-            upvalues: sub_compiler.upvalues,
+            upvalues,
         }
     }
 }

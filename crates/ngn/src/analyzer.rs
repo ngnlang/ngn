@@ -1520,8 +1520,8 @@ impl Analyzer {
                 }
                 Type::Void
             }
-            StatementKind::ImportModule { alias, source } => {
-                if !source.starts_with("tbx::") && self.lookup(alias).is_none() {
+            StatementKind::ImportModule { alias, source: _ } => {
+                if self.lookup(alias).is_none() {
                     self.define(alias, Type::Any, false, stmt.span);
                 }
                 Type::Void
@@ -2559,6 +2559,12 @@ impl Analyzer {
                     return *return_type;
                 }
                 match obj_ty.clone() {
+                    Type::Any => {
+                        for arg in args {
+                            self.check_expression(arg);
+                        }
+                        Type::Any
+                    }
                     Type::Model(name) => {
                         // Special handling for built-in Response type methods
                         if name == "Response" {
@@ -4099,7 +4105,9 @@ impl Analyzer {
                         if let Some(v_ty) = &variant.data_type {
                             // If the matched type is a Generic (e.g., Option<i64>),
                             // substitute type parameters in the variant's data type
-                            let concrete_ty = if let Type::Generic(_, type_args) = matched_type {
+                            let concrete_ty = if matches!(matched_type, Type::Any) {
+                                Type::Any
+                            } else if let Type::Generic(_, type_args) = matched_type {
                                 self.substitute_type_params(v_ty, &e.type_params, type_args)
                             } else {
                                 v_ty.clone()

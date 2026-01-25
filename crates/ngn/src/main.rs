@@ -3,6 +3,7 @@ use ngn::bytecode::OpCode;
 use ngn::compiler::Compiler;
 use ngn::lexer::{Lexer, Span, Token};
 use ngn::parser::{Expr, ExprKind, Parser, Statement, StatementKind, Type};
+use ngn::toolbox::{self, Toolbox};
 use ngn::value::{ObjectData, Value};
 use ngn::vm::VM;
 use std::collections::HashMap;
@@ -255,6 +256,46 @@ fn main() {
         } else if let StatementKind::ImportModule { alias, source } = &stmt.kind {
             // import * as alias from "source"
             if source.starts_with("tbx::") {
+                let module_name = source.strip_prefix("tbx::").unwrap();
+                let toolbox = Toolbox::new();
+                let module = toolbox
+                    .get_module(module_name)
+                    .unwrap_or_else(|| panic!("Toolbox error: module '{}' not found", module_name));
+
+                let mut fields = HashMap::new();
+                for name in module.functions.keys() {
+                    if let Some(id) = toolbox::get_native_id(module_name, name) {
+                        fields.insert(name.clone(), Value::NativeFunction(id));
+                    } else {
+                        panic!("Toolbox error: {} not found in tbx::{}", name, module_name);
+                    }
+                }
+
+                let module_value = ObjectData::into_value("Module".to_string(), fields);
+                let const_idx = compiler.add_constant(module_value);
+                let var_idx = compiler.next_index;
+                compiler.global_table.insert(alias.clone(), var_idx);
+                compiler.next_index += 1;
+
+                let reg = compiler.alloc_reg();
+                compiler
+                    .instructions
+                    .push(OpCode::LoadConst(reg, const_idx));
+                compiler
+                    .instructions
+                    .push(OpCode::DefGlobal(var_idx, false));
+                compiler
+                    .instructions
+                    .push(OpCode::AssignGlobal(var_idx, reg));
+                compiler.reg_top = compiler.temp_start;
+
+                analyzer.define_global(
+                    alias.clone(),
+                    Symbol {
+                        ty: Type::Any,
+                        is_mutable: false,
+                    },
+                );
                 continue;
             }
 
@@ -447,7 +488,11 @@ fn main() {
                 panic!("ngn Error: No main() function or HTTP handler defined!");
             }
 
-            let mut my_vm = VM::new(final_instructions, compiler.constants, compiler.next_index);
+            let mut my_vm = VM::new(
+                final_instructions,
+                compiler.constants.clone(),
+                compiler.next_index,
+            );
             my_vm.run();
         }
         "build" => {
@@ -466,7 +511,7 @@ fn main() {
             }
 
             // Serialize bytecode
-            let payload = (final_instructions, compiler.constants);
+            let payload = (final_instructions, compiler.constants.clone());
             let bytecode_bytes = bincode::serialize(&payload).unwrap();
             let payload_len = bytecode_bytes.len() as u64;
             let magic: u64 = 0x4E474E20;
