@@ -3,7 +3,7 @@ use ngn::bytecode::OpCode;
 use ngn::compiler::Compiler;
 use ngn::lexer::{Lexer, Span, Token};
 use ngn::parser::{Expr, ExprKind, Parser, Statement, StatementKind, Type};
-use ngn::value::Value;
+use ngn::value::{ObjectData, Value};
 use ngn::vm::VM;
 use std::collections::HashMap;
 use std::env;
@@ -254,10 +254,85 @@ fn main() {
             }
         } else if let StatementKind::ImportModule { alias, source } = &stmt.kind {
             // import * as alias from "source"
-            eprintln!(
-                "Warning: Module imports ('import * as {} from \"{}\"') are not fully supported yet.",
-                alias, source
-            );
+            if source.starts_with("tbx::") {
+                continue;
+            }
+
+            let exports = load_module(source, &base_path, &mut module_cache);
+            let (module_value, symbol) = if exports.len() == 1 {
+                if let Some(val) = exports.get("default") {
+                    let symbol = if let Value::Function(f) = val {
+                        Symbol {
+                            ty: Type::Function {
+                                params: f.param_types.clone(),
+                                optional_count: 0,
+                                return_type: Box::new(f.return_type.clone()),
+                            },
+                            is_mutable: false,
+                        }
+                    } else if let Value::Closure(c) = val {
+                        Symbol {
+                            ty: Type::Function {
+                                params: c.function.param_types.clone(),
+                                optional_count: 0,
+                                return_type: Box::new(c.function.return_type.clone()),
+                            },
+                            is_mutable: false,
+                        }
+                    } else {
+                        Symbol {
+                            ty: Type::Any,
+                            is_mutable: false,
+                        }
+                    };
+                    (val.clone(), symbol)
+                } else {
+                    let module_obj = ObjectData::into_value("Module".to_string(), exports);
+                    (
+                        module_obj,
+                        Symbol {
+                            ty: Type::Any,
+                            is_mutable: false,
+                        },
+                    )
+                }
+            } else {
+                let module_obj = ObjectData::into_value("Module".to_string(), exports);
+                (
+                    module_obj,
+                    Symbol {
+                        ty: Type::Any,
+                        is_mutable: false,
+                    },
+                )
+            };
+
+            let const_idx = compiler.add_constant(module_value.clone());
+            let var_idx = compiler.next_index;
+            compiler.global_table.insert(alias.clone(), var_idx);
+            compiler.next_index += 1;
+
+            if let Value::Function(f) = &module_value {
+                let ownership: Vec<bool> = f.param_ownership.iter().cloned().collect();
+                compiler.signatures.insert(alias.clone(), ownership);
+            } else if let Value::Closure(c) = &module_value {
+                let ownership: Vec<bool> = c.function.param_ownership.iter().cloned().collect();
+                compiler.signatures.insert(alias.clone(), ownership);
+            }
+
+            let reg = compiler.alloc_reg();
+            compiler
+                .instructions
+                .push(OpCode::LoadConst(reg, const_idx));
+            compiler
+                .instructions
+                .push(OpCode::DefGlobal(var_idx, false));
+            compiler
+                .instructions
+                .push(OpCode::AssignGlobal(var_idx, reg));
+            compiler.reg_top = compiler.temp_start;
+
+            analyzer.define_global(alias.clone(), symbol);
         }
     }
 
@@ -466,7 +541,7 @@ fn load_module(module_path: &str, base_path: &PathBuf, cache: &mut ModuleCache) 
 
     // Check cache
     if let Some(entry) = cache.get(&resolved_path) {
-        return entry.0.0.clone(); // Return cached exports
+        return entry.0 .0.clone(); // Return cached exports
     }
 
     // Load source
