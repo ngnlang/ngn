@@ -37,6 +37,7 @@
           "keyword.declaration:ngn": "#569CD6",
           "keyword.readonly:ngn": "#569CD6",
           "function.defaultLibrary:ngn": "#e2a41d",
+          "variable.defaultLibrary:ngn": "#e2a41d",
           "variable.readonly:ngn": "#7BB5E6",
           "regexp:ngn": "#D16969"
         }
