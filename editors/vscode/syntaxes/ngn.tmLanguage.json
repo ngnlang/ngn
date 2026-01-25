@@ -80,7 +80,7 @@
     "keywords": {
       "patterns": [
         {
-          "match": "\\b(var|const|static|fn|return|if|else|while|loop|for|in|match|next|break|once|import|from|as|export|default|enum|model|role|extend|with|this)\\b",
+          "match": "\\b(var|const|global|fn|return|if|while|loop|for|in|match|next|break|once|import|from|as|export|default|enum|model|role|extend|with|this|check|null)\\b",
           "name": "keyword.control.ngn"
         }
       ]
@@ -88,7 +88,7 @@
     "builtins": {
       "patterns": [
         {
-          "match": "\\b(print|echo|sleep|thread|channel|state|map|set)\\b",
+          "match": "\\b(print|echo|sleep|thread|state|channel|bytes|json|spawn|map|set|fetch|panic|env|time)\\b",
           "name": "support.function.builtin.ngn"
         }
       ]
@@ -116,7 +116,7 @@
     "operators": {
       "patterns": [
         {
-          "match": "(=>|<-|==|!=|<=|>=|\\+\\+|--|\\+=|-=|\\*=|/=|%=)",
+          "match": "(=>|<-|==|!=|<=|>=|\\+\\+|--|\\+=|-=|\\*=|/=|%=|&&|\\|\\|)",
           "name": "keyword.operator.ngn"
         }
       ]

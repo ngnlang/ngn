@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
@@ -7,7 +7,8 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 use ngn::analyzer::Analyzer;
 use ngn::lexer::{Lexer, Span, Token};
-use ngn::parser::Parser;
+use ngn::parser::{Parser, StatementKind};
+use ngn::toolbox::core::GLOBAL_NAMES;
 
 #[derive(Debug)]
 struct Backend {
@@ -96,6 +97,7 @@ fn get_semantic_type(
     prev_token: Option<&Token>,
     next_token: Option<&Token>,
     is_constant: bool,
+    is_default_library: bool,
 ) -> (u32, u32) {
     let prev_is_class_keyword = matches!(
         prev_token,
@@ -109,6 +111,8 @@ fn get_semantic_type(
         matches!(prev_token, Some(Token::Period)) && matches!(next_token, Some(Token::LParen));
 
     let mut modifiers = vec![];
+    let is_map_set_type = matches!(token, Token::Map | Token::Set)
+        && matches!(next_token, Some(Token::LessThan));
 
     // Declaration check - determine if we are in a declaration
     if let Some(Token::Const | Token::Global) = prev_token {
@@ -133,21 +137,37 @@ fn get_semantic_type(
         Token::This => {
             modifiers.push("readonly");
         }
-        Token::Echo
-        | Token::Print
-        | Token::Thread
-        | Token::Channel
+        Token::Print
+        | Token::Echo
         | Token::Sleep
+        | Token::Thread
         | Token::State
+        | Token::Channel
+        | Token::Bytes
+        //| Token::Json
+        //| Token::Spawn
         | Token::Map
-        | Token::Set => {
-            if !matches!(prev_token, Some(Token::Period)) {
+        | Token::Set
+        //| Token::Fetch
+        //| Token::Panic
+        //| Token::Env
+        //| Token::Time
+        => {
+            if !matches!(prev_token, Some(Token::Period))
+                && !prev_is_class_keyword
+                && !is_map_set_type
+            {
                 modifiers.push("defaultLibrary");
             }
         }
         Token::Identifier(_) => {
             if is_constant {
                 modifiers.push("readonly");
+            }
+            if is_default_library
+                && !matches!(prev_token, Some(Token::Const | Token::Global | Token::Var))
+            {
+                modifiers.push("defaultLibrary");
             }
         }
         _ => {}
@@ -179,7 +199,10 @@ fn get_semantic_type(
         | Token::As
         | Token::Export
         | Token::Default
-        | Token::This => 0, // keyword
+        | Token::This
+        | Token::Check => 0, // keyword
+
+        Token::Null => 8,
 
         Token::Float(_) | Token::Number(_) => 1, // number
         Token::StringStart | Token::StringEnd | Token::StringPart(_) => 2, // string
@@ -194,14 +217,24 @@ fn get_semantic_type(
         | Token::Comma
         | Token::Period
         | Token::DoubleColon => 6,
-        Token::Echo
-        | Token::Print
-        | Token::Thread
-        | Token::Channel
+        Token::Map | Token::Set if is_map_set_type => 8,
+        Token::Map | Token::Set if prev_is_class_keyword => 9,
+        Token::Print
+        | Token::Echo
         | Token::Sleep
+        | Token::Thread
         | Token::State
+        | Token::Channel
+        | Token::Bytes
+        //| Token::Json
+        //| Token::Spawn
         | Token::Map
-        | Token::Set => 4, // function
+        | Token::Set
+        //| Token::Fetch
+        //| Token::Panic
+        //| Token::Env
+        //| Token::Time
+        => 4, // function
         Token::Identifier(_) => {
             if prev_is_class_keyword || is_likely_class {
                 9 // class
@@ -237,7 +270,9 @@ fn get_semantic_type(
         | Token::FatArrow
         | Token::LArrow
         | Token::Pipe
-        | Token::Bang => 5,
+        | Token::Bang
+        | Token::AndAnd
+        | Token::OrOr => 5,
 
         Token::Regex(_) => 10,
         Token::InterpolationStart | Token::InterpolationEnd => 3, // variable-like for braces
@@ -250,6 +285,44 @@ fn get_semantic_type(
         .fold(0, |acc, bit| acc | bit);
 
     (token_type, mod_bitset)
+}
+
+fn collect_toolbox_imports(text: &str) -> (HashSet<String>, HashSet<String>) {
+    let lexer = Lexer::new(text);
+    let mut parser = Parser::new(lexer);
+    let mut imports = HashSet::new();
+    let mut module_aliases = HashSet::new();
+
+    while parser.current_token != Token::EOF {
+        if parser.current_token == Token::Newline {
+            parser.advance();
+            continue;
+        }
+
+        let statement = parser.parse_statement();
+        match statement.kind {
+            StatementKind::Import { names, source } => {
+                if source.starts_with("tbx::") {
+                    for (name, alias) in names {
+                        imports.insert(alias.unwrap_or(name));
+                    }
+                }
+            }
+            StatementKind::ImportDefault { name, source } => {
+                if source.starts_with("tbx::") {
+                    imports.insert(name);
+                }
+            }
+            StatementKind::ImportModule { alias, source } => {
+                if source.starts_with("tbx::") {
+                    module_aliases.insert(alias);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    (imports, module_aliases)
 }
 
 #[tower_lsp::async_trait]
@@ -282,6 +355,7 @@ impl LanguageServer for Backend {
                                     "readonly".into(),       // 1
                                     "static".into(),         // 2
                                     "defaultLibrary".into(), // 3
+                                    "toolbox".into(),        // 4
                                 ],
                             },
                             full: Some(SemanticTokensFullOptions::Bool(true)),
@@ -348,6 +422,9 @@ impl LanguageServer for Backend {
             tokens_with_spans.push((token, span));
         }
 
+        let (toolbox_imports, toolbox_module_aliases) = collect_toolbox_imports(&text);
+        let core_globals: HashSet<&'static str> = GLOBAL_NAMES.iter().copied().collect();
+
         // Scope-based constant tracking
         let mut scopes: Vec<std::collections::HashSet<String>> =
             vec![std::collections::HashSet::new()]; // Global scope
@@ -396,6 +473,11 @@ impl LanguageServer for Backend {
                 None
             };
             let next_token = tokens_with_spans.get(i + 1).map(|(t, _)| t);
+            let prev_prev_token = if i > 1 {
+                Some(&tokens_with_spans[i - 2].0)
+            } else {
+                None
+            };
 
             // Skip newlines in semantic tokens
             if matches!(token, Token::Newline) {
@@ -454,8 +536,25 @@ impl LanguageServer for Backend {
                 }
             }
 
+            let is_toolbox_member = match (token, prev_token, prev_prev_token) {
+                (
+                    Token::Identifier(_),
+                    Some(Token::Period | Token::DoubleColon),
+                    Some(Token::Identifier(module)),
+                ) => toolbox_module_aliases.contains(module),
+                _ => false,
+            };
+            let is_default_library = match token {
+                Token::Identifier(name) => {
+                    toolbox_imports.contains(name)
+                        || core_globals.contains(name.as_str())
+                        || is_toolbox_member
+                }
+                _ => false,
+            };
+
             let (token_type, token_modifiers_bitset) =
-                get_semantic_type(token, prev_token, next_token, is_constant);
+                get_semantic_type(token, prev_token, next_token, is_constant, is_default_library);
 
             let token_text = &text[span.start..span.end];
 
