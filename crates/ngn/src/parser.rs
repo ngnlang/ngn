@@ -42,6 +42,71 @@ pub enum Type {
     Union(Vec<Type>),
 }
 
+impl std::fmt::Display for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Type::I64 => write!(f, "i64"),
+            Type::I32 => write!(f, "i32"),
+            Type::I16 => write!(f, "i16"),
+            Type::I8 => write!(f, "i8"),
+            Type::U64 => write!(f, "u64"),
+            Type::U32 => write!(f, "u32"),
+            Type::U16 => write!(f, "u16"),
+            Type::U8 => write!(f, "u8"),
+            Type::F64 => write!(f, "f64"),
+            Type::F32 => write!(f, "f32"),
+            Type::String => write!(f, "string"),
+            Type::Bytes => write!(f, "bytes"),
+            Type::Bool => write!(f, "bool"),
+            Type::Void => write!(f, "void"),
+            Type::Any => write!(f, "any"),
+            Type::Regex => write!(f, "regex"),
+            Type::Number => write!(f, "number"),
+            Type::Json => write!(f, "json"),
+            Type::Spawn => write!(f, "spawn"),
+            Type::Env => write!(f, "env"),
+            Type::Time => write!(f, "time"),
+            Type::TypeParam(name) => write!(f, "{}", name),
+            Type::Enum(name) => write!(f, "{}", name),
+            Type::Model(name) => write!(f, "{}", name),
+            Type::Role(name) => write!(f, "{}", name),
+            Type::Array(inner) => write!(f, "array<{}>", inner),
+            Type::Tuple(elements) => {
+                let parts: Vec<String> = elements.iter().map(|t| t.to_string()).collect();
+                write!(f, "({})", parts.join(", "))
+            }
+            Type::Function {
+                params,
+                optional_count,
+                return_type,
+            } => {
+                let mut rendered = Vec::with_capacity(params.len());
+                let required = params.len().saturating_sub(*optional_count);
+                for (i, param) in params.iter().enumerate() {
+                    if i < required {
+                        rendered.push(param.to_string());
+                    } else {
+                        rendered.push(format!("{}?", param));
+                    }
+                }
+                write!(f, "fn({}) -> {}", rendered.join(", "), return_type)
+            }
+            Type::Channel(inner) => write!(f, "channel<{}>", inner),
+            Type::State(inner) => write!(f, "state<{}>", inner),
+            Type::Generic(name, args) => {
+                let parts: Vec<String> = args.iter().map(|t| t.to_string()).collect();
+                write!(f, "{}<{}>", name, parts.join(", "))
+            }
+            Type::Map(key, value) => write!(f, "map<{}, {}>", key, value),
+            Type::Set(inner) => write!(f, "set<{}>", inner),
+            Type::Union(members) => {
+                let parts: Vec<String> = members.iter().map(|t| t.to_string()).collect();
+                write!(f, "{}", parts.join(" | "))
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Parameter {
     pub name: String,
@@ -649,7 +714,7 @@ impl Parser {
                 self.advance(); // consume 'export'
                 if self.current_token == Token::Default {
                     self.advance(); // consume 'default'
-                    // Expect an expression for now (typically an identifier)
+                                    // Expect an expression for now (typically an identifier)
                     let expr = self.parse_expression();
                     let end = self.previous_span.end;
                     Statement {
@@ -2503,7 +2568,7 @@ impl Parser {
 
             if self.current_token == Token::Colon {
                 self.advance(); // consume ':'
-                // Check for 'else if' vs 'else'
+                                // Check for 'else if' vs 'else'
                 if self.current_token == Token::LParen {
                     // Inline Else If (Implicit If)
                     else_branch = Some(Box::new(self.parse_implicit_if()));

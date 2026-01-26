@@ -109,7 +109,7 @@ pub enum LexMode {
 }
 
 /// Represents a span of source code with byte offsets
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Span {
     pub start: usize, // byte offset (inclusive)
     pub end: usize,   // byte offset (exclusive)

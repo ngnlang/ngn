@@ -17,6 +17,176 @@ pub struct Diagnostic {
     pub span: Span,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SymbolKind {
+    Variable,
+    Function,
+    Model,
+    Enum,
+    EnumVariant,
+    Role,
+    TypeAlias,
+}
+
+#[derive(Debug, Clone)]
+pub struct SymbolInfo {
+    pub name: String,
+    pub kind: SymbolKind,
+    pub ty: Type,
+    pub span: Span,
+    pub is_mutable: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScopeInfo {
+    pub id: usize,
+    pub parent: Option<usize>,
+    pub span: Span,
+    pub symbols: Vec<SymbolInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MemberKind {
+    Field,
+    Method,
+}
+
+#[derive(Debug, Clone)]
+pub struct MemberAccessInfo {
+    pub span: Span,
+    pub object_span: Span,
+    pub member: String,
+    pub kind: MemberKind,
+    pub is_optional: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct SignatureInfo {
+    pub params: Vec<Type>,
+    pub optional_count: usize,
+    pub return_type: Type,
+}
+
+#[derive(Debug, Clone)]
+pub struct CallSiteInfo {
+    pub span: Span,
+    pub callee: String,
+    pub arg_spans: Vec<Span>,
+    pub signature: Option<SignatureInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Analysis {
+    pub diagnostics: Vec<Diagnostic>,
+    pub warnings: Vec<Diagnostic>,
+    pub scopes: Vec<ScopeInfo>,
+    pub expr_types: HashMap<Span, Type>,
+    pub object_fields: HashMap<Span, Vec<(String, Type)>>,
+    pub object_bindings: HashMap<String, Vec<(String, Type)>>,
+    pub member_accesses: Vec<MemberAccessInfo>,
+    pub call_sites: Vec<CallSiteInfo>,
+    pub models: HashMap<String, ModelDef>,
+    pub enums: HashMap<String, EnumDef>,
+    pub roles: HashMap<String, RoleDef>,
+    pub type_aliases: HashMap<String, Type>,
+    pub custom_methods: HashMap<Type, HashMap<String, Type>>,
+}
+
+#[derive(Debug, Clone)]
+struct IndexState {
+    scopes: Vec<ScopeInfo>,
+    scope_stack: Vec<usize>,
+    expr_types: HashMap<Span, Type>,
+    object_fields: HashMap<Span, Vec<(String, Type)>>,
+    object_bindings: HashMap<String, Vec<(String, Type)>>,
+    member_accesses: Vec<MemberAccessInfo>,
+    call_sites: Vec<CallSiteInfo>,
+}
+
+impl IndexState {
+    fn new(source_len: usize) -> Self {
+        let root = ScopeInfo {
+            id: 0,
+            parent: None,
+            span: Span::new(0, source_len),
+            symbols: Vec::new(),
+        };
+        Self {
+            scopes: vec![root],
+            scope_stack: vec![0],
+            expr_types: HashMap::new(),
+            object_fields: HashMap::new(),
+            object_bindings: HashMap::new(),
+            member_accesses: Vec::new(),
+            call_sites: Vec::new(),
+        }
+    }
+
+    fn current_scope_id(&self) -> usize {
+        *self.scope_stack.last().unwrap_or(&0)
+    }
+
+    fn record_symbol(
+        &mut self,
+        name: &str,
+        kind: SymbolKind,
+        ty: Type,
+        span: Span,
+        is_mutable: bool,
+    ) {
+        let symbol = SymbolInfo {
+            name: name.to_string(),
+            kind,
+            ty,
+            span,
+            is_mutable,
+        };
+        let scope_id = self.current_scope_id();
+        if let Some(scope) = self.scopes.get_mut(scope_id) {
+            scope.symbols.push(symbol);
+        }
+    }
+
+    fn enter_scope(&mut self, span: Span) -> usize {
+        let id = self.scopes.len();
+        let parent = self.scope_stack.last().copied();
+        self.scopes.push(ScopeInfo {
+            id,
+            parent,
+            span,
+            symbols: Vec::new(),
+        });
+        self.scope_stack.push(id);
+        id
+    }
+
+    fn exit_scope(&mut self) {
+        if self.scope_stack.len() > 1 {
+            self.scope_stack.pop();
+        }
+    }
+
+    fn record_expr_type(&mut self, span: Span, ty: Type) {
+        self.expr_types.insert(span, ty);
+    }
+
+    fn record_object_fields(&mut self, span: Span, fields: Vec<(String, Type)>) {
+        self.object_fields.insert(span, fields);
+    }
+
+    fn record_object_binding(&mut self, name: &str, fields: Vec<(String, Type)>) {
+        self.object_bindings.insert(name.to_string(), fields);
+    }
+
+    fn record_member_access(&mut self, info: MemberAccessInfo) {
+        self.member_accesses.push(info);
+    }
+
+    fn record_call_site(&mut self, info: CallSiteInfo) {
+        self.call_sites.push(info);
+    }
+}
+
 impl std::fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} at {:?}", self.message, self.span)
@@ -40,6 +210,7 @@ pub struct Analyzer {
     type_aliases: HashMap<String, Type>,
     custom_methods: HashMap<Type, HashMap<String, Type>>,
     model_roles: HashMap<Type, HashSet<String>>,
+    index: Option<IndexState>,
 }
 
 impl Analyzer {
@@ -108,6 +279,7 @@ impl Analyzer {
             type_aliases: HashMap::new(),
             custom_methods: HashMap::new(),
             model_roles: HashMap::new(),
+            index: None,
         };
 
         analyzer.register_enum(&result_enum, Span::default());
@@ -339,9 +511,179 @@ impl Analyzer {
         analyzer
     }
 
+    pub fn new_with_index(source_len: usize) -> Self {
+        let mut analyzer = Self::new();
+        analyzer.index = Some(IndexState::new(source_len));
+        analyzer.index_builtin_symbols();
+        analyzer
+    }
+
+    pub fn analyze_with_index(
+        &mut self,
+        statements: &[Statement],
+    ) -> (Analysis, Result<(), Vec<Diagnostic>>) {
+        let result = self.analyze(statements);
+        let analysis = self.take_index().unwrap_or_else(|| Analysis {
+            diagnostics: self.diagnostics.clone(),
+            warnings: self.warnings.clone(),
+            scopes: Vec::new(),
+            expr_types: HashMap::new(),
+            object_fields: HashMap::new(),
+            object_bindings: HashMap::new(),
+            member_accesses: Vec::new(),
+            call_sites: Vec::new(),
+            models: self.models.clone(),
+            enums: self.enums.clone(),
+            roles: self.roles.clone(),
+            type_aliases: self.type_aliases.clone(),
+            custom_methods: self.custom_methods.clone(),
+        });
+        (analysis, result)
+    }
+
+    fn take_index(&mut self) -> Option<Analysis> {
+        let index = self.index.take()?;
+        Some(Analysis {
+            diagnostics: self.diagnostics.clone(),
+            warnings: self.warnings.clone(),
+            scopes: index.scopes,
+            expr_types: index.expr_types,
+            object_fields: index.object_fields,
+            object_bindings: index.object_bindings,
+            member_accesses: index.member_accesses,
+            call_sites: index.call_sites,
+            models: self.models.clone(),
+            enums: self.enums.clone(),
+            roles: self.roles.clone(),
+            type_aliases: self.type_aliases.clone(),
+            custom_methods: self.custom_methods.clone(),
+        })
+    }
+
+    fn index_builtin_symbols(&mut self) {
+        let Some(index) = self.index.as_mut() else {
+            return;
+        };
+
+        if let Some(global_scope) = self.scopes.first() {
+            for (name, sym) in global_scope {
+                let kind = if matches!(sym.ty, Type::Function { .. }) {
+                    SymbolKind::Function
+                } else {
+                    SymbolKind::Variable
+                };
+                index.record_symbol(name, kind, sym.ty.clone(), Span::default(), sym.is_mutable);
+            }
+        }
+
+        for (name, enum_def) in self.enums.clone() {
+            index.record_symbol(
+                &name,
+                SymbolKind::Enum,
+                Type::Enum(name.clone()),
+                Span::default(),
+                false,
+            );
+            for variant in enum_def.variants {
+                index.record_symbol(
+                    &variant.name,
+                    SymbolKind::EnumVariant,
+                    Type::Any,
+                    Span::default(),
+                    false,
+                );
+            }
+        }
+
+        for (name, _) in self.models.clone() {
+            index.record_symbol(
+                &name,
+                SymbolKind::Model,
+                Type::Model(name.clone()),
+                Span::default(),
+                false,
+            );
+        }
+
+        for (name, _) in self.roles.clone() {
+            index.record_symbol(
+                &name,
+                SymbolKind::Role,
+                Type::Role(name.clone()),
+                Span::default(),
+                false,
+            );
+        }
+
+        for (name, ty) in self.type_aliases.clone() {
+            index.record_symbol(&name, SymbolKind::TypeAlias, ty, Span::default(), false);
+        }
+    }
+
+    fn record_symbol(
+        &mut self,
+        name: &str,
+        kind: SymbolKind,
+        ty: Type,
+        span: Span,
+        is_mutable: bool,
+    ) {
+        if let Some(index) = self.index.as_mut() {
+            index.record_symbol(name, kind, ty, span, is_mutable);
+        }
+    }
+
+    fn record_expr_type(&mut self, span: Span, ty: Type) {
+        if let Some(index) = self.index.as_mut() {
+            index.record_expr_type(span, ty);
+        }
+    }
+
+    fn record_object_fields(&mut self, span: Span, fields: Vec<(String, Type)>) {
+        if let Some(index) = self.index.as_mut() {
+            index.record_object_fields(span, fields);
+        }
+    }
+
+    fn record_object_binding(&mut self, name: &str, fields: Vec<(String, Type)>) {
+        if let Some(index) = self.index.as_mut() {
+            index.record_object_binding(name, fields);
+        }
+    }
+
+    fn record_member_access(&mut self, info: MemberAccessInfo) {
+        if let Some(index) = self.index.as_mut() {
+            index.record_member_access(info);
+        }
+    }
+
+    fn record_call_site(&mut self, info: CallSiteInfo) {
+        if let Some(index) = self.index.as_mut() {
+            index.record_call_site(info);
+        }
+    }
+
+    fn enter_scope_with_span(&mut self, span: Span) {
+        self.scopes.push(HashMap::new());
+        self.refinements.push(HashMap::new());
+        if let Some(index) = self.index.as_mut() {
+            index.enter_scope(span);
+        }
+    }
+
     pub fn define_global(&mut self, name: String, sym: Symbol) {
         if let Some(scope) = self.scopes.first_mut() {
-            scope.insert(name, sym);
+            scope.insert(name.clone(), sym);
+        }
+        if let Some(scope) = self.scopes.first() {
+            if let Some(sym) = scope.get(&name) {
+                let kind = if matches!(sym.ty, Type::Function { .. }) {
+                    SymbolKind::Function
+                } else {
+                    SymbolKind::Variable
+                };
+                self.record_symbol(&name, kind, sym.ty.clone(), Span::default(), sym.is_mutable);
+            }
         }
     }
 
@@ -413,13 +755,34 @@ impl Analyzer {
                 StatementKind::Model(model_def) => {
                     self.models
                         .insert(model_def.name.clone(), model_def.clone());
+                    self.record_symbol(
+                        &model_def.name,
+                        SymbolKind::Model,
+                        Type::Model(model_def.name.clone()),
+                        stmt.span,
+                        false,
+                    );
                 }
                 StatementKind::Role(role_def) => {
                     self.roles.insert(role_def.name.clone(), role_def.clone());
+                    self.record_symbol(
+                        &role_def.name,
+                        SymbolKind::Role,
+                        Type::Role(role_def.name.clone()),
+                        stmt.span,
+                        false,
+                    );
                 }
                 StatementKind::TypeAlias { name, target } => {
                     let normalized = self.normalize_type(target.clone());
                     self.type_aliases.insert(name.clone(), normalized);
+                    self.record_symbol(
+                        name,
+                        SymbolKind::TypeAlias,
+                        self.type_aliases.get(name).cloned().unwrap_or(Type::Any),
+                        stmt.span,
+                        false,
+                    );
                 }
                 _ => {}
             }
@@ -542,14 +905,12 @@ impl Analyzer {
         self.warnings.push(Diagnostic { message, span });
     }
 
-    fn enter_scope(&mut self) {
-        self.scopes.push(HashMap::new());
-        self.refinements.push(HashMap::new());
-    }
-
     fn exit_scope(&mut self) {
         self.scopes.pop();
         self.refinements.pop();
+        if let Some(index) = self.index.as_mut() {
+            index.exit_scope();
+        }
     }
 
     fn apply_narrowings(&mut self, narrowings: &HashMap<String, Type>) {
@@ -696,11 +1057,25 @@ impl Analyzer {
                 return;
             }
             scope.insert(name.to_string(), Symbol { ty, is_mutable });
+            let kind = if matches!(scope.get(name).map(|s| &s.ty), Some(Type::Function { .. })) {
+                SymbolKind::Function
+            } else {
+                SymbolKind::Variable
+            };
+            let symbol_ty = scope.get(name).map(|s| s.ty.clone()).unwrap_or(Type::Any);
+            self.record_symbol(name, kind, symbol_ty, span, is_mutable);
         }
     }
 
     fn register_enum(&mut self, enum_def: &EnumDef, span: Span) {
         self.enums.insert(enum_def.name.clone(), enum_def.clone());
+        self.record_symbol(
+            &enum_def.name,
+            SymbolKind::Enum,
+            Type::Enum(enum_def.name.clone()),
+            span,
+            false,
+        );
         // Register variants in global scope (accessible as bare names if unambiguous)
         for v in &enum_def.variants {
             self.define(&v.name, Type::Any, false, span);
@@ -722,6 +1097,13 @@ impl Analyzer {
                 ..
             } => {
                 let inferred = self.check_expression(value);
+                if matches!(value.kind, ExprKind::Object(_)) {
+                    if let Some(index) = self.index.as_ref() {
+                        if let Some(fields) = index.object_fields.get(&value.span) {
+                            self.record_object_binding(name, fields.clone());
+                        }
+                    }
+                }
 
                 if let Type::Array(inner) = &inferred {
                     if matches!(**inner, Type::Any) && declared_type.is_none() {
@@ -952,7 +1334,7 @@ impl Analyzer {
                 let prev_return = self.current_return_type.clone();
                 self.current_return_type = Some(actual_return_type);
 
-                self.enter_scope();
+                self.enter_scope_with_span(stmt.span);
                 for param in params {
                     let param_type = if let Some(ty) = &param.ty {
                         // If parameter is optional (?), wrap the type in Maybe<T>
@@ -1023,7 +1405,7 @@ impl Analyzer {
                     };
 
                     // Create scope for then-branch with binding defined
-                    self.enter_scope();
+                    self.enter_scope_with_span(then_branch.span);
                     self.define(bind_name, unwrapped_type, false, condition.span);
                     self.check_statement(then_branch);
                     self.exit_scope();
@@ -1093,7 +1475,7 @@ impl Analyzer {
 
                 // Check failure block with error binding in scope if provided
                 if let Some(err_name) = error_binding {
-                    self.enter_scope();
+                    self.enter_scope_with_span(failure_block.span);
                     if let Some(ref e_ty) = error_type {
                         self.define(err_name, e_ty.clone(), false, source.span);
                     }
@@ -1171,7 +1553,7 @@ impl Analyzer {
                     }
                 };
 
-                self.enter_scope();
+                self.enter_scope_with_span(body.span);
                 self.define(binding, element_ty, false, stmt.span);
                 if let Some(idx_name) = index_binding {
                     self.define(idx_name, Type::I64, false, stmt.span);
@@ -1191,7 +1573,7 @@ impl Analyzer {
 
                 for arm in arms {
                     let saved = self.refinements.clone();
-                    self.enter_scope();
+                    self.enter_scope_with_span(arm.body.span);
 
                     // Smart narrowing for simple literal patterns when matching on a variable.
                     if let Some(var_name) = &scrutinee_var {
@@ -1250,7 +1632,7 @@ impl Analyzer {
                         let prev_return = self.current_return_type.clone();
                         self.current_return_type = Some(actual_return_type);
 
-                        self.enter_scope();
+                        self.enter_scope_with_span(*method_span);
                         self.define("this", target.clone(), false, *method_span);
 
                         for param in params {
@@ -1273,7 +1655,7 @@ impl Analyzer {
                 Type::Void
             }
             StatementKind::Block(stmts) => {
-                self.enter_scope();
+                self.enter_scope_with_span(stmt.span);
                 for s in stmts {
                     self.check_statement(s);
                 }
@@ -1535,6 +1917,12 @@ impl Analyzer {
     }
 
     fn check_expression(&mut self, expr: &Expr) -> Type {
+        let ty = self.check_expression_inner(expr);
+        self.record_expr_type(expr.span, ty.clone());
+        ty
+    }
+
+    fn check_expression_inner(&mut self, expr: &Expr) -> Type {
         match &expr.kind {
             ExprKind::Number(_) => Type::I64,
             ExprKind::Float(_) => Type::F64,
@@ -1552,7 +1940,7 @@ impl Analyzer {
                 body,
                 return_type,
             } => {
-                self.enter_scope();
+                self.enter_scope_with_span(expr.span);
                 let mut param_types = Vec::new();
                 for param in params {
                     let ty = if let Some(t) = &param.ty {
@@ -1845,6 +2233,7 @@ impl Analyzer {
             }
             ExprKind::Call { name, args } => {
                 let arg_types: Vec<Type> = args.iter().map(|a| self.check_expression(a)).collect();
+                let arg_spans: Vec<Span> = args.iter().map(|a| a.span).collect();
 
                 // Check if it's an enum variant constructor
                 let enum_info = self
@@ -1959,7 +2348,16 @@ impl Analyzer {
                                     }
                                 }
                             }
-
+                            self.record_call_site(CallSiteInfo {
+                                span: expr.span,
+                                callee: name.clone(),
+                                arg_spans: arg_spans.clone(),
+                                signature: Some(SignatureInfo {
+                                    params: params.clone(),
+                                    optional_count,
+                                    return_type: *return_type.clone(),
+                                }),
+                            });
                             return *return_type;
                         }
                         Type::Any => {
@@ -2284,13 +2682,22 @@ impl Analyzer {
                 }
             }
             ExprKind::Object(fields) => {
-                // Anonymous object literal - just check field expressions
-                for (_, f_val_expr) in fields {
-                    self.check_expression(f_val_expr);
+                let mut object_fields = Vec::new();
+                for (name, f_val_expr) in fields {
+                    let ty = self.check_expression(f_val_expr);
+                    object_fields.push((name.clone(), ty));
                 }
+                self.record_object_fields(expr.span, object_fields);
                 Type::Any
             }
             ExprKind::FieldAccess { object, field } => {
+                self.record_member_access(MemberAccessInfo {
+                    span: expr.span,
+                    object_span: object.span,
+                    member: field.clone(),
+                    kind: MemberKind::Field,
+                    is_optional: false,
+                });
                 let obj_ty = self.check_expression(object);
                 match &obj_ty {
                     Type::Model(name) => {
@@ -2356,6 +2763,13 @@ impl Analyzer {
                 Type::Generic("Maybe".to_string(), vec![Type::Any])
             }
             ExprKind::OptionalFieldAccess { object, field } => {
+                self.record_member_access(MemberAccessInfo {
+                    span: expr.span,
+                    object_span: object.span,
+                    member: field.clone(),
+                    kind: MemberKind::Field,
+                    is_optional: true,
+                });
                 // obj?.field where obj is Maybe<T> - unwrap T, access field, wrap result in Maybe
                 let obj_ty = self.check_expression(object);
 
@@ -2419,6 +2833,13 @@ impl Analyzer {
                 Type::Generic("Maybe".to_string(), vec![field_ty])
             }
             ExprKind::OptionalMethodCall(object, method, args) => {
+                self.record_member_access(MemberAccessInfo {
+                    span: expr.span,
+                    object_span: object.span,
+                    member: method.clone(),
+                    kind: MemberKind::Method,
+                    is_optional: true,
+                });
                 // obj?.method() where obj is Maybe<T>
                 let obj_ty = self.check_expression(object);
 
@@ -2496,6 +2917,13 @@ impl Analyzer {
                 }
             }
             ExprKind::MethodCall(obj_expr, method, args) => {
+                self.record_member_access(MemberAccessInfo {
+                    span: expr.span,
+                    object_span: obj_expr.span,
+                    member: method.clone(),
+                    kind: MemberKind::Method,
+                    is_optional: false,
+                });
                 // Check for immutability
                 if matches!(
                     method.as_str(),
@@ -3161,7 +3589,7 @@ impl Analyzer {
                             } = &args[0].kind
                             {
                                 // Analyze closure specially with mutable param for update()
-                                self.enter_scope();
+                                self.enter_scope_with_span(expr.span);
 
                                 // Define the closure param as mutable
                                 let param_ty = if closure_params.len() == 1 {
