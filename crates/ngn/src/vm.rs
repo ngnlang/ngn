@@ -1046,156 +1046,165 @@ impl Fiber {
                 self.set_reg_at(dest, Value::Channel(chan));
             }
             OpCode::Fetch(dest, url_reg, options_reg) => {
-                let url_val = self.get_reg_at(url_reg);
-                if let Value::String(url) = url_val {
-                    // Parse options if provided
-                    let mut method = "GET".to_string();
-                    let mut body: Option<String> = None;
-                    let mut headers: Vec<(String, String)> = Vec::new();
-                    let mut timeout_ms: u64 = 10000; // Default 10s
+                #[cfg(feature = "fetch")]
+                {
+                    let url_val = self.get_reg_at(url_reg);
+                    if let Value::String(url) = url_val {
+                        // Parse options if provided
+                        let mut method = "GET".to_string();
+                        let mut body: Option<String> = None;
+                        let mut headers: Vec<(String, String)> = Vec::new();
+                        let mut timeout_ms: u64 = 10000; // Default 10s
 
-                    if options_reg != u16::MAX {
-                        let options_val = self.get_reg_at(options_reg);
-                        if let Value::Object(opts) = options_val {
-                            // method
-                            if let Some(Value::String(m)) = opts.fields.get("method") {
-                                method = m.to_uppercase();
-                            }
-                            // body
-                            if let Some(Value::String(b)) = opts.fields.get("body") {
-                                body = Some(b.clone());
-                            }
-                            // timeout
-                            if let Some(Value::Numeric(n)) = opts.fields.get("timeout") {
-                                timeout_ms = match n {
-                                    crate::value::Number::I64(v) => *v as u64,
-                                    crate::value::Number::I32(v) => *v as u64,
-                                    crate::value::Number::U64(v) => *v,
-                                    _ => 30000,
-                                };
-                            }
-                            // headers (accepts Map<String, String> or object literal)
-                            match opts.fields.get("headers") {
-                                Some(Value::Map(h)) => {
-                                    for (k, v) in h {
-                                        if let (Value::String(key), Value::String(val)) = (k, v) {
-                                            headers.push((key.clone(), val.clone()));
+                        if options_reg != u16::MAX {
+                            let options_val = self.get_reg_at(options_reg);
+                            if let Value::Object(opts) = options_val {
+                                // method
+                                if let Some(Value::String(m)) = opts.fields.get("method") {
+                                    method = m.to_uppercase();
+                                }
+                                // body
+                                if let Some(Value::String(b)) = opts.fields.get("body") {
+                                    body = Some(b.clone());
+                                }
+                                // timeout
+                                if let Some(Value::Numeric(n)) = opts.fields.get("timeout") {
+                                    timeout_ms = match n {
+                                        crate::value::Number::I64(v) => *v as u64,
+                                        crate::value::Number::I32(v) => *v as u64,
+                                        crate::value::Number::U64(v) => *v,
+                                        _ => 30000,
+                                    };
+                                }
+                                // headers (accepts Map<String, String> or object literal)
+                                match opts.fields.get("headers") {
+                                    Some(Value::Map(h)) => {
+                                        for (k, v) in h {
+                                            if let (Value::String(key), Value::String(val)) = (k, v)
+                                            {
+                                                headers.push((key.clone(), val.clone()));
+                                            }
                                         }
                                     }
-                                }
-                                Some(Value::Object(obj)) => {
-                                    for (key, val) in &obj.fields {
-                                        if let Value::String(v) = val {
-                                            headers.push((key.clone(), v.clone()));
+                                    Some(Value::Object(obj)) => {
+                                        for (key, val) in &obj.fields {
+                                            if let Value::String(v) = val {
+                                                headers.push((key.clone(), v.clone()));
+                                            }
                                         }
                                     }
+                                    _ => {}
                                 }
-                                _ => {}
                             }
                         }
-                    }
 
-                    // Create a channel for the result
-                    let chan = Channel {
-                        name: "fetch_result".to_string(),
-                        buffer: Arc::new(Mutex::new(VecDeque::new())),
-                        capacity: 1,
-                        is_closed: Arc::new(Mutex::new(false)),
-                    };
-
-                    let chan_clone = chan.clone();
-
-                    // Run fetch on bounded blocking pool.
-                    let submit = global_blocking_pool().try_submit(Box::new(move || {
-                        let client = reqwest::blocking::Client::builder()
-                            .timeout(std::time::Duration::from_millis(timeout_ms))
-                            .build()
-                            .unwrap_or_else(|_| reqwest::blocking::Client::new());
-
-                        let mut request = match method.as_str() {
-                            "GET" => client.get(&url),
-                            "POST" => client.post(&url),
-                            "PUT" => client.put(&url),
-                            "DELETE" => client.delete(&url),
-                            "PATCH" => client.patch(&url),
-                            "HEAD" => client.head(&url),
-                            "OPTIONS" => client.request(reqwest::Method::OPTIONS, &url),
-                            _ => client.get(&url),
+                        // Create a channel for the result
+                        let chan = Channel {
+                            name: "fetch_result".to_string(),
+                            buffer: Arc::new(Mutex::new(VecDeque::new())),
+                            capacity: 1,
+                            is_closed: Arc::new(Mutex::new(false)),
                         };
 
-                        // Add headers
-                        for (key, val) in headers {
-                            request = request.header(&key, &val);
-                        }
+                        let chan_clone = chan.clone();
 
-                        // Add body if present
-                        if let Some(b) = body {
-                            request = request.body(b);
-                        }
+                        // Run fetch on bounded blocking pool.
+                        let submit = global_blocking_pool().try_submit(Box::new(move || {
+                            let client = reqwest::blocking::Client::builder()
+                                .timeout(std::time::Duration::from_millis(timeout_ms))
+                                .build()
+                                .unwrap_or_else(|_| reqwest::blocking::Client::new());
 
-                        let result = match request.send() {
-                            Ok(response) => {
-                                // Capture response metadata before consuming body
-                                let status = response.status().as_u16();
-                                let status_text = response
-                                    .status()
-                                    .canonical_reason()
-                                    .unwrap_or("Unknown")
-                                    .to_string();
+                            let mut request = match method.as_str() {
+                                "GET" => client.get(&url),
+                                "POST" => client.post(&url),
+                                "PUT" => client.put(&url),
+                                "DELETE" => client.delete(&url),
+                                "PATCH" => client.patch(&url),
+                                "HEAD" => client.head(&url),
+                                "OPTIONS" => client.request(reqwest::Method::OPTIONS, &url),
+                                _ => client.get(&url),
+                            };
 
-                                // Convert headers to HashMap (lowercase keys for case-insensitivity)
-                                let mut resp_headers = std::collections::HashMap::new();
-                                for (key, val) in response.headers() {
-                                    if let Ok(val_str) = val.to_str() {
-                                        resp_headers.insert(
-                                            key.as_str().to_lowercase(),
-                                            val_str.to_string(),
-                                        );
+                            // Add headers
+                            for (key, val) in headers {
+                                request = request.header(&key, &val);
+                            }
+
+                            // Add body if present
+                            if let Some(b) = body {
+                                request = request.body(b);
+                            }
+
+                            let result = match request.send() {
+                                Ok(response) => {
+                                    // Capture response metadata before consuming body
+                                    let status = response.status().as_u16();
+                                    let status_text = response
+                                        .status()
+                                        .canonical_reason()
+                                        .unwrap_or("Unknown")
+                                        .to_string();
+
+                                    // Convert headers to HashMap (lowercase keys for case-insensitivity)
+                                    let mut resp_headers = std::collections::HashMap::new();
+                                    for (key, val) in response.headers() {
+                                        if let Ok(val_str) = val.to_str() {
+                                            resp_headers.insert(
+                                                key.as_str().to_lowercase(),
+                                                val_str.to_string(),
+                                            );
+                                        }
                                     }
+
+                                    // Get body as text
+                                    let body = response.text().unwrap_or_default();
+
+                                    crate::value::ResponseData::new(
+                                        status,
+                                        status_text,
+                                        resp_headers,
+                                        body,
+                                    )
+                                    .into_value()
                                 }
+                                Err(e) => {
+                                    // Return error as a Response with status 0
+                                    crate::value::ResponseData::new(
+                                        0,
+                                        format!("Error: {}", e),
+                                        std::collections::HashMap::new(),
+                                        String::new(),
+                                    )
+                                    .into_value()
+                                }
+                            };
+                            chan_clone.buffer.lock().unwrap().push_back(result);
 
-                                // Get body as text
-                                let body = response.text().unwrap_or_default();
+                            *chan_clone.is_closed.lock().unwrap() = true;
+                        }));
 
-                                crate::value::ResponseData::new(
-                                    status,
-                                    status_text,
-                                    resp_headers,
-                                    body,
-                                )
-                                .into_value()
-                            }
-                            Err(e) => {
-                                // Return error as a Response with status 0
-                                crate::value::ResponseData::new(
-                                    0,
-                                    format!("Error: {}", e),
-                                    std::collections::HashMap::new(),
-                                    String::new(),
-                                )
-                                .into_value()
-                            }
-                        };
-                        chan_clone.buffer.lock().unwrap().push_back(result);
+                        if submit.is_err() {
+                            let result = crate::value::ResponseData::new(
+                                0,
+                                "Error: fetch() queue is full".to_string(),
+                                std::collections::HashMap::new(),
+                                String::new(),
+                            )
+                            .into_value();
+                            chan.buffer.lock().unwrap().push_back(result);
+                            *chan.is_closed.lock().unwrap() = true;
+                        }
 
-                        *chan_clone.is_closed.lock().unwrap() = true;
-                    }));
-
-                    if submit.is_err() {
-                        let result = crate::value::ResponseData::new(
-                            0,
-                            "Error: fetch() queue is full".to_string(),
-                            std::collections::HashMap::new(),
-                            String::new(),
-                        )
-                        .into_value();
-                        chan.buffer.lock().unwrap().push_back(result);
-                        *chan.is_closed.lock().unwrap() = true;
+                        self.set_reg_at(dest, Value::Channel(chan));
+                    } else {
+                        panic!("Runtime Error: fetch() expects a string URL");
                     }
-
-                    self.set_reg_at(dest, Value::Channel(chan));
-                } else {
-                    panic!("Runtime Error: fetch() expects a string URL");
+                }
+                #[cfg(not(feature = "fetch"))]
+                {
+                    let _ = (dest, url_reg, options_reg);
+                    panic!("Runtime Error: fetch() is not available in this runtime");
                 }
             }
             OpCode::Yield => {

@@ -35,6 +35,7 @@ struct ToolboxNeeds {
 const ADDON_OS: u8 = 1 << 0;
 const ADDON_HTTP: u8 = 1 << 1;
 const ADDON_LLM: u8 = 1 << 2;
+const ADDON_FETCH: u8 = 1 << 3;
 
 #[derive(Debug, Clone, Copy)]
 enum RuntimeVariant {
@@ -56,6 +57,14 @@ impl RuntimeVariant {
                 5 => "runtime_min_os_llm",
                 6 => "runtime_min_http_llm",
                 7 => "runtime_min_os_http_llm",
+                8 => "runtime_min_fetch",
+                9 => "runtime_min_os_fetch",
+                10 => "runtime_min_http_fetch",
+                11 => "runtime_min_os_http_fetch",
+                12 => "runtime_min_llm_fetch",
+                13 => "runtime_min_os_llm_fetch",
+                14 => "runtime_min_http_llm_fetch",
+                15 => "runtime_min_os_http_llm_fetch",
                 _ => "runtime_min",
             },
             RuntimeVariant::Core(flags) => match flags {
@@ -67,6 +76,14 @@ impl RuntimeVariant {
                 5 => "runtime_core_os_llm",
                 6 => "runtime_core_http_llm",
                 7 => "runtime_core_os_http_llm",
+                8 => "runtime_core_fetch",
+                9 => "runtime_core_os_fetch",
+                10 => "runtime_core_http_fetch",
+                11 => "runtime_core_os_http_fetch",
+                12 => "runtime_core_llm_fetch",
+                13 => "runtime_core_os_llm_fetch",
+                14 => "runtime_core_http_llm_fetch",
+                15 => "runtime_core_os_http_llm_fetch",
                 _ => "runtime_core",
             },
         }
@@ -88,6 +105,22 @@ fn runtime_bytes_for(variant: RuntimeVariant) -> &'static [u8] {
         include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_http_llm"));
     static RUNTIME_MIN_OS_HTTP_LLM: &[u8] =
         include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_os_http_llm"));
+    static RUNTIME_MIN_FETCH: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_fetch"));
+    static RUNTIME_MIN_OS_FETCH: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_os_fetch"));
+    static RUNTIME_MIN_HTTP_FETCH: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_http_fetch"));
+    static RUNTIME_MIN_OS_HTTP_FETCH: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_os_http_fetch"));
+    static RUNTIME_MIN_LLM_FETCH: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_llm_fetch"));
+    static RUNTIME_MIN_OS_LLM_FETCH: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_os_llm_fetch"));
+    static RUNTIME_MIN_HTTP_LLM_FETCH: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_http_llm_fetch"));
+    static RUNTIME_MIN_OS_HTTP_LLM_FETCH: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_os_http_llm_fetch"));
 
     static RUNTIME_CORE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core"));
     static RUNTIME_CORE_OS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_os"));
@@ -102,6 +135,22 @@ fn runtime_bytes_for(variant: RuntimeVariant) -> &'static [u8] {
         include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_http_llm"));
     static RUNTIME_CORE_OS_HTTP_LLM: &[u8] =
         include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_os_http_llm"));
+    static RUNTIME_CORE_FETCH: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_fetch"));
+    static RUNTIME_CORE_OS_FETCH: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_os_fetch"));
+    static RUNTIME_CORE_HTTP_FETCH: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_http_fetch"));
+    static RUNTIME_CORE_OS_HTTP_FETCH: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_os_http_fetch"));
+    static RUNTIME_CORE_LLM_FETCH: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_llm_fetch"));
+    static RUNTIME_CORE_OS_LLM_FETCH: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_os_llm_fetch"));
+    static RUNTIME_CORE_HTTP_LLM_FETCH: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_http_llm_fetch"));
+    static RUNTIME_CORE_OS_HTTP_LLM_FETCH: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_os_http_llm_fetch"));
 
     match variant {
         RuntimeVariant::Full => RUNTIME_FULL,
@@ -114,6 +163,14 @@ fn runtime_bytes_for(variant: RuntimeVariant) -> &'static [u8] {
             5 => RUNTIME_MIN_OS_LLM,
             6 => RUNTIME_MIN_HTTP_LLM,
             7 => RUNTIME_MIN_OS_HTTP_LLM,
+            8 => RUNTIME_MIN_FETCH,
+            9 => RUNTIME_MIN_OS_FETCH,
+            10 => RUNTIME_MIN_HTTP_FETCH,
+            11 => RUNTIME_MIN_OS_HTTP_FETCH,
+            12 => RUNTIME_MIN_LLM_FETCH,
+            13 => RUNTIME_MIN_OS_LLM_FETCH,
+            14 => RUNTIME_MIN_HTTP_LLM_FETCH,
+            15 => RUNTIME_MIN_OS_HTTP_LLM_FETCH,
             _ => RUNTIME_MIN,
         },
         RuntimeVariant::Core(flags) => match flags {
@@ -125,6 +182,14 @@ fn runtime_bytes_for(variant: RuntimeVariant) -> &'static [u8] {
             5 => RUNTIME_CORE_OS_LLM,
             6 => RUNTIME_CORE_HTTP_LLM,
             7 => RUNTIME_CORE_OS_HTTP_LLM,
+            8 => RUNTIME_CORE_FETCH,
+            9 => RUNTIME_CORE_OS_FETCH,
+            10 => RUNTIME_CORE_HTTP_FETCH,
+            11 => RUNTIME_CORE_OS_HTTP_FETCH,
+            12 => RUNTIME_CORE_LLM_FETCH,
+            13 => RUNTIME_CORE_OS_LLM_FETCH,
+            14 => RUNTIME_CORE_HTTP_LLM_FETCH,
+            15 => RUNTIME_CORE_OS_HTTP_LLM_FETCH,
             _ => RUNTIME_CORE,
         },
     }
@@ -132,6 +197,7 @@ fn runtime_bytes_for(variant: RuntimeVariant) -> &'static [u8] {
 
 fn select_runtime_variant(statements: &[Statement]) -> RuntimeVariant {
     let mut needs = ToolboxNeeds::default();
+    let needs_fetch;
 
     for stmt in statements {
         let source = match &stmt.kind {
@@ -162,6 +228,8 @@ fn select_runtime_variant(statements: &[Statement]) -> RuntimeVariant {
         }
     }
 
+    needs_fetch = statements.iter().any(statement_uses_fetch);
+
     if needs.all {
         return RuntimeVariant::Full;
     }
@@ -176,11 +244,106 @@ fn select_runtime_variant(statements: &[Statement]) -> RuntimeVariant {
     if needs.llm {
         addons |= ADDON_LLM;
     }
+    if needs_fetch {
+        addons |= ADDON_FETCH;
+    }
 
     if needs.math || needs.encoding || needs.test {
         RuntimeVariant::Core(addons)
     } else {
         RuntimeVariant::Min(addons)
+    }
+}
+
+fn statement_uses_fetch(stmt: &Statement) -> bool {
+    match &stmt.kind {
+        StatementKind::Declaration { value, .. } => expr_uses_fetch(value),
+        StatementKind::DestructureObject { value, .. } => expr_uses_fetch(value),
+        StatementKind::DestructureArray { value, .. } => expr_uses_fetch(value),
+        StatementKind::DestructureTuple { value, .. } => expr_uses_fetch(value),
+        StatementKind::Expression(expr) => expr_uses_fetch(expr),
+        StatementKind::Function { body, .. } => body.iter().any(statement_uses_fetch),
+        StatementKind::ExportDefault(expr) => expr_uses_fetch(expr),
+        StatementKind::Print(expr) => expr_uses_fetch(expr),
+        StatementKind::Echo(expr) => expr_uses_fetch(expr),
+        StatementKind::Sleep(expr) => expr_uses_fetch(expr),
+        StatementKind::Block(statements) => statements.iter().any(statement_uses_fetch),
+        StatementKind::If {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            expr_uses_fetch(condition)
+                || statement_uses_fetch(then_branch)
+                || else_branch
+                    .as_ref()
+                    .map(|stmt| statement_uses_fetch(stmt))
+                    .unwrap_or(false)
+        }
+        StatementKind::Check {
+            source,
+            failure_block,
+            ..
+        } => expr_uses_fetch(source) || statement_uses_fetch(failure_block),
+        StatementKind::While {
+            condition, body, ..
+        } => expr_uses_fetch(condition) || statement_uses_fetch(body),
+        StatementKind::Loop(body) => statement_uses_fetch(body),
+        StatementKind::For { iterable, body, .. } => {
+            expr_uses_fetch(iterable) || statement_uses_fetch(body)
+        }
+        StatementKind::Match { condition, arms } => {
+            expr_uses_fetch(condition)
+                || arms.iter().any(|arm| {
+                    arm.patterns.iter().any(pattern_uses_fetch) || statement_uses_fetch(&arm.body)
+                })
+        }
+        StatementKind::Return(expr) => expr.as_ref().map(expr_uses_fetch).unwrap_or(false),
+        StatementKind::Role(role) => role.methods.iter().any(statement_uses_fetch),
+        StatementKind::Extend { methods, .. } => methods.iter().any(statement_uses_fetch),
+        _ => false,
+    }
+}
+
+fn pattern_uses_fetch(pattern: &ngn::parser::Pattern) -> bool {
+    match pattern {
+        ngn::parser::Pattern::Literal(expr) => expr_uses_fetch(expr),
+        _ => false,
+    }
+}
+
+fn expr_uses_fetch(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Call { name, args } => name == "fetch" || args.iter().any(expr_uses_fetch),
+        ExprKind::Assign { value, .. } => expr_uses_fetch(value),
+        ExprKind::FieldAssign { object, value, .. } => {
+            expr_uses_fetch(object) || expr_uses_fetch(value)
+        }
+        ExprKind::Binary { left, right, .. } => expr_uses_fetch(left) || expr_uses_fetch(right),
+        ExprKind::Array(items) => items.iter().any(expr_uses_fetch),
+        ExprKind::Tuple(items) => items.iter().any(expr_uses_fetch),
+        ExprKind::InterpolatedString(items) => items.iter().any(expr_uses_fetch),
+        ExprKind::EnumVariant { args, .. } => args.iter().any(expr_uses_fetch),
+        ExprKind::Closure { body, .. } => statement_uses_fetch(body),
+        ExprKind::Thread(expr) => expr_uses_fetch(expr),
+        ExprKind::Send(lhs, rhs) => expr_uses_fetch(lhs) || expr_uses_fetch(rhs),
+        ExprKind::Receive(expr) => expr_uses_fetch(expr),
+        ExprKind::ReceiveCount(lhs, rhs) => expr_uses_fetch(lhs) || expr_uses_fetch(rhs),
+        ExprKind::ReceiveMaybe(expr) => expr_uses_fetch(expr),
+        ExprKind::State(expr) => expr_uses_fetch(expr),
+        ExprKind::Bytes(expr) => expr.as_ref().map(|v| expr_uses_fetch(v)).unwrap_or(false),
+        ExprKind::MethodCall(object, _, args) | ExprKind::OptionalMethodCall(object, _, args) => {
+            expr_uses_fetch(object) || args.iter().any(expr_uses_fetch)
+        }
+        ExprKind::Index(lhs, rhs) => expr_uses_fetch(lhs) || expr_uses_fetch(rhs),
+        ExprKind::Unary { right, .. } => expr_uses_fetch(right),
+        ExprKind::ModelInstance { fields, .. } => fields.iter().any(|(_, v)| expr_uses_fetch(v)),
+        ExprKind::FieldAccess { object, .. } | ExprKind::OptionalFieldAccess { object, .. } => {
+            expr_uses_fetch(object)
+        }
+        ExprKind::Object(fields) => fields.iter().any(|(_, v)| expr_uses_fetch(v)),
+        _ => false,
     }
 }
 
