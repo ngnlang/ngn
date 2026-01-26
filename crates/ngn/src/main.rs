@@ -34,13 +34,17 @@ fn main() {
 
     if args.len() < 3 {
         println!("Usage:");
-        println!("  ngn run <file.ngn>    - Compile and run immediately");
-        println!("  ngn build <file.ngn>  - Compile to bytecode file");
+        println!("  ngn run <file.ngn>           - Compile and run immediately");
+        println!("  ngn build <file.ngn> [--stats]  - Compile to bytecode file");
         return;
     }
 
     let command = &args[1];
     let filename = &args[2];
+    let flags = &args[3..];
+    let show_stats = flags
+        .iter()
+        .any(|flag| flag == "--stats" || flag == "--size-report" || flag == "--report-size");
 
     if filename.ends_with(".mod") {
         let bytes = fs::read(filename).expect("Could not read binary file");
@@ -520,6 +524,18 @@ fn main() {
             let runtime_bytes = include_bytes!(concat!(env!("OUT_DIR"), "/runtime_binary"));
             let mut output_bytes = runtime_bytes.to_vec();
 
+            if show_stats {
+                let runtime_len = runtime_bytes.len();
+                let final_len = runtime_len + payload_len as usize + 16;
+                print_bytecode_stats(
+                    &payload.0,
+                    &payload.1,
+                    bytecode_bytes.len(),
+                    runtime_len,
+                    final_len,
+                );
+            }
+
             // Append bytecode and footer
             output_bytes.extend(bytecode_bytes);
             output_bytes.extend(magic.to_le_bytes());
@@ -540,6 +556,84 @@ fn main() {
             println!("Built ngn: {}", output_name);
         }
         _ => println!("Unknown command: {}", command),
+    }
+}
+
+fn print_bytecode_stats(
+    instructions: &[OpCode],
+    constants: &[Value],
+    payload_bytes: usize,
+    runtime_bytes: usize,
+    final_bytes: usize,
+) {
+    let instructions_bytes = bincode::serialize(instructions)
+        .map(|bytes| bytes.len())
+        .unwrap_or(0);
+    let constants_bytes = bincode::serialize(constants)
+        .map(|bytes| bytes.len())
+        .unwrap_or(0);
+
+    let mut by_kind: HashMap<&'static str, (usize, u64)> = HashMap::new();
+    let mut total_constant_bytes: u64 = 0;
+
+    for value in constants {
+        let kind = match value {
+            Value::Bool(_) => "Bool",
+            Value::Function(_) => "Function",
+            Value::Closure(_) => "Closure",
+            Value::NativeFunction(_) => "NativeFunction",
+            Value::Numeric(_) => "Numeric",
+            Value::String(_) => "String",
+            Value::Bytes(_) => "Bytes",
+            Value::Reference(_, _) => "Reference",
+            Value::Array(_) => "Array",
+            Value::Tuple(_) => "Tuple",
+            Value::Channel(_) => "Channel",
+            Value::Enum(_) => "Enum",
+            Value::State(_) => "State",
+            Value::Object(_) => "Object",
+            Value::Map(_) => "Map",
+            Value::Set(_) => "Set",
+            Value::Response(_) => "Response",
+            Value::StreamingResponse(_) => "StreamingResponse",
+            Value::SseResponse(_) => "SseResponse",
+            Value::WebSocketResponse(_) => "WebSocketResponse",
+            Value::External(_) => "External",
+            Value::Void => "Void",
+            Value::Regex(_) => "Regex",
+        };
+
+        let size = bincode::serialized_size(value).unwrap_or(0);
+        total_constant_bytes += size;
+        let entry = by_kind.entry(kind).or_insert((0, 0));
+        entry.0 += 1;
+        entry.1 += size;
+    }
+
+    let mut kinds: Vec<(&str, usize, u64)> = by_kind
+        .into_iter()
+        .map(|(k, (count, bytes))| (k, count, bytes))
+        .collect();
+    kinds.sort_by(|a, b| b.2.cmp(&a.2));
+
+    println!("Bytecode size report:");
+    println!(
+        "  instructions: {} ops, {} bytes (standalone)",
+        instructions.len(),
+        instructions_bytes
+    );
+    println!(
+        "  constants: {} values, {} bytes (standalone)",
+        constants.len(),
+        constants_bytes
+    );
+    println!("  constants (sum of items): {} bytes", total_constant_bytes);
+    println!("  payload (tuple): {} bytes", payload_bytes);
+    println!("  runtime_binary: {} bytes", runtime_bytes);
+    println!("  final output: {} bytes", final_bytes);
+    println!("  constants by kind (count, bytes):");
+    for (kind, count, bytes) in kinds {
+        println!("    {:<20} {:>8} {:>12}", kind, count, bytes);
     }
 }
 
