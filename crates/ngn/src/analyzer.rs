@@ -3204,10 +3204,38 @@ impl Analyzer {
                             } else {
                                 let closure_ty = self.check_expression(&args[0]);
                                 if let Type::Function { params, .. } = closure_ty {
-                                    if params.is_empty()
-                                        || !self.types_compatible(&params[0], &inner)
-                                    {
-                                        self.add_error(format!("Type Error: .each() closure must accept item of type {:?}", *inner), expr.span);
+                                    if params.is_empty() {
+                                        self.add_error(
+                                            "Type Error: .each() closure must accept at least 1 parameter"
+                                                .to_string(),
+                                            expr.span,
+                                        );
+                                    } else {
+                                        if !self.types_compatible(&params[0], &inner) {
+                                            self.add_error(
+                                                format!(
+                                                    "Type Error: .each() closure must accept item of type {:?}",
+                                                    *inner
+                                                ),
+                                                expr.span,
+                                            );
+                                        }
+                                        if params.len() > 2 {
+                                            self.add_error(
+                                                "Type Error: .each() closure accepts at most 2 parameters"
+                                                    .to_string(),
+                                                expr.span,
+                                            );
+                                        }
+                                        if params.len() == 2
+                                            && !self.types_compatible(&params[1], &Type::I64)
+                                        {
+                                            self.add_error(
+                                                "Type Error: .each() index parameter must be i64"
+                                                    .to_string(),
+                                                expr.span,
+                                            );
+                                        }
                                     }
                                 } else {
                                     self.add_error(

@@ -68,7 +68,16 @@ pub struct CallFrame {
     pub closure: Option<Box<Closure>>,
     pub dest_reg: Option<u16>,
     pub update_state: Option<Arc<Mutex<Value>>>,
+    pub each_state: Option<EachState>,
     pub home_globals: Option<Arc<Vec<Value>>>, // Saved home globals for restoration on return
+}
+
+pub struct EachState {
+    pub items: Vec<Value>,
+    pub index: usize,
+    pub closure: Value,
+    pub param_count: usize,
+    pub dest_reg: u16,
 }
 
 pub enum FiberStatus {
@@ -512,6 +521,7 @@ impl Fiber {
                     closure: None, // Self-calls don't need to save/restore closure
                     dest_reg: Some(dest),
                     update_state: None,
+                    each_state: None,
                     home_globals: None, // Same module, no need to restore
                 };
                 self.frames.push(frame);
@@ -636,7 +646,7 @@ impl Fiber {
             }
             OpCode::Return(src) => {
                 let result = self.get_reg_at(src);
-                if let Some(frame) = self.frames.pop() {
+                if let Some(mut frame) = self.frames.pop() {
                     // Lazy truncation: only truncate if stack grew significantly
                     // This avoids drop overhead on every return
                     let stack_threshold = self.fp + 512;
@@ -649,12 +659,21 @@ impl Fiber {
                     self.fp = frame.fp;
                     self.current_closure = frame.closure;
                     self.home_globals = frame.home_globals;
-                    if let Some(dest) = frame.dest_reg {
-                        self.set_reg_at(dest, result.clone());
+                    let each_state = frame.each_state.take();
+                    if each_state.is_none() {
+                        if let Some(dest) = frame.dest_reg {
+                            self.set_reg_at(dest, result.clone());
+                        }
                     }
 
                     if let Some(state) = frame.update_state {
                         *state.lock().unwrap() = result;
+                    }
+
+                    if let Some(each_state) = each_state {
+                        if self.resume_each_state(each_state) {
+                            return FiberStatus::Running;
+                        }
                     }
                 } else {
                     if let Some(chan) = &self.completion_channel {
@@ -666,7 +685,7 @@ impl Fiber {
                 }
             }
             OpCode::ReturnVoid => {
-                if let Some(frame) = self.frames.pop() {
+                if let Some(mut frame) = self.frames.pop() {
                     // Lazy truncation: only truncate if stack grew significantly
                     let stack_threshold = self.fp + 512;
                     if self.stack.len() > stack_threshold {
@@ -678,11 +697,20 @@ impl Fiber {
                     self.fp = frame.fp;
                     self.current_closure = frame.closure;
                     self.home_globals = frame.home_globals; // Restore home globals context
-                    if let Some(dest) = frame.dest_reg {
-                        self.set_reg_at(dest, Value::Void);
+                    let each_state = frame.each_state.take();
+                    if each_state.is_none() {
+                        if let Some(dest) = frame.dest_reg {
+                            self.set_reg_at(dest, Value::Void);
+                        }
                     }
                     if let Some(state) = frame.update_state {
                         *state.lock().unwrap() = Value::Void;
+                    }
+
+                    if let Some(each_state) = each_state {
+                        if self.resume_each_state(each_state) {
+                            return FiberStatus::Running;
+                        }
                     }
                 } else {
                     if let Some(chan) = &self.completion_channel {
@@ -1496,6 +1524,73 @@ impl Fiber {
                         arg_count + 1,
                     );
                     return FiberStatus::Running;
+                }
+
+                if method_name == "each" {
+                    if let Value::Array(arr) = obj {
+                        if arg_count != 1 {
+                            panic!("Runtime Error: .each() expects 1 argument");
+                        }
+
+                        let closure_val = self.get_reg_at(arg_start);
+                        let param_count = match &closure_val {
+                            Value::Closure(closure) => closure.function.param_count,
+                            Value::Function(func) => func.param_count,
+                            _ => panic!("Runtime Error: each() expects a closure"),
+                        };
+
+                        if param_count == 0 {
+                            panic!("Runtime Error: each() closure must accept at least 1 argument");
+                        }
+
+                        if param_count > 2 {
+                            panic!("Runtime Error: each() closure accepts at most 2 parameters");
+                        }
+
+                        if arr.is_empty() {
+                            self.set_reg_at(dest, Value::Void);
+                            return FiberStatus::Running;
+                        }
+
+                        let item = arr[0].clone();
+                        let idx_val = Value::Numeric(crate::value::Number::I64(0));
+                        let arg_count = if param_count >= 2 { 2 } else { 1 };
+                        let arg_start = (self.stack.len() - self.fp) as u16;
+                        self.stack.push(item);
+                        if arg_count == 2 {
+                            self.stack.push(idx_val);
+                        }
+
+                        match &closure_val {
+                            Value::Closure(closure) => {
+                                let func = closure.function.clone();
+                                self.invoke_function(
+                                    &func,
+                                    Some(closure.clone()),
+                                    None,
+                                    arg_start,
+                                    arg_count as u8,
+                                );
+                            }
+                            Value::Function(func) => {
+                                self.invoke_function(func, None, None, arg_start, arg_count as u8);
+                            }
+                            _ => panic!("Runtime Error: each() expects a closure"),
+                        }
+
+                        if let Some(frame) = self.frames.last_mut() {
+                            frame.each_state = Some(EachState {
+                                items: arr,
+                                index: 1,
+                                closure: closure_val,
+                                param_count,
+                                dest_reg: dest,
+                            });
+                            frame.dest_reg = None;
+                        }
+
+                        return FiberStatus::Running;
+                    }
                 }
 
                 // Collect arguments
@@ -2415,6 +2510,48 @@ impl Fiber {
         FiberStatus::Running
     }
 
+    fn resume_each_state(&mut self, mut each_state: EachState) -> bool {
+        if each_state.index < each_state.items.len() {
+            let item = each_state.items[each_state.index].clone();
+            let idx_val = Value::Numeric(crate::value::Number::I64(each_state.index as i64));
+            let arg_count = if each_state.param_count >= 2 { 2 } else { 1 };
+            each_state.index += 1;
+
+            let arg_start = (self.stack.len() - self.fp) as u16;
+            self.stack.push(item);
+            if arg_count == 2 {
+                self.stack.push(idx_val);
+            }
+
+            match &each_state.closure {
+                Value::Closure(closure) => {
+                    let func = closure.function.clone();
+                    self.invoke_function(
+                        &func,
+                        Some(closure.clone()),
+                        None,
+                        arg_start,
+                        arg_count as u8,
+                    );
+                }
+                Value::Function(func) => {
+                    self.invoke_function(func, None, None, arg_start, arg_count as u8);
+                }
+                _ => {
+                    panic!("Runtime Error: each() expects a closure");
+                }
+            }
+
+            if let Some(next_frame) = self.frames.last_mut() {
+                next_frame.each_state = Some(each_state);
+            }
+            return true;
+        }
+
+        self.set_reg_at(each_state.dest_reg, Value::Void);
+        false
+    }
+
     fn invoke_function(
         &mut self,
         func: &Function,
@@ -2431,6 +2568,7 @@ impl Fiber {
             closure: self.current_closure.take(),
             dest_reg,
             update_state: None,
+            each_state: None,
             home_globals: self.home_globals.clone(),
         };
         self.frames.push(frame);
@@ -3109,7 +3247,7 @@ impl Fiber {
         })
     }
 
-    /// Array non-mutating methods: size, copy, each (placeholder)
+    /// Array non-mutating methods: size, copy
     fn array_method(&self, arr: Vec<Value>, method: &str, args: Vec<Value>) -> Value {
         match method {
             "size" => Value::Numeric(crate::value::Number::I64(arr.len() as i64)),
@@ -3129,9 +3267,7 @@ impl Fiber {
                 }
                 Value::Array(arr[start..end].to_vec())
             }
-            "each" => panic!(
-                "Runtime Error: each() method not yet implemented in v2 (try 'for' loop instead)"
-            ),
+            "each" => panic!("Runtime Error: each() should be dispatched by the VM"),
             _ => panic!(
                 "Runtime Error: Unknown non-mutating array method '{}'",
                 method
