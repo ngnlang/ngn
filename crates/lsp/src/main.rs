@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -8,13 +9,15 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 use ngn::analyzer::Analyzer;
 use ngn::lexer::{Lexer, Span, Token};
-use ngn::parser::{ParseDiagnostic, Parser, StatementKind, Type};
+use ngn::parser::{ExprKind, ParseDiagnostic, Parser, Statement, StatementKind, Type};
 use ngn::toolbox::core::{get_type, GLOBAL_NAMES};
+use ngn::toolbox::Toolbox;
 
 #[derive(Debug)]
 struct Backend {
     client: Client,
     documents: Arc<RwLock<HashMap<String, DocumentState>>>,
+    module_cache: Arc<RwLock<HashMap<PathBuf, ModuleExports>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -22,6 +25,14 @@ struct DocumentState {
     text: String,
     analysis: Option<ngn::analyzer::Analysis>,
     tokens: Vec<(Token, Span)>,
+    imported_symbols: HashMap<String, Type>,
+    module_aliases: HashMap<String, ModuleExports>,
+}
+
+#[derive(Debug, Clone)]
+struct ModuleExports {
+    exports: HashMap<String, Type>,
+    default_export: Option<Type>,
 }
 
 fn offset_to_position(text: &str, offset: usize) -> Position {
@@ -137,6 +148,67 @@ fn lookup_symbol_in_scope(
         break;
     }
     None
+}
+
+fn lookup_symbol_global(scopes: &[ngn::analyzer::ScopeInfo], name: &str) -> Option<Type> {
+    let global = scopes.iter().find(|s| s.parent.is_none())?;
+    global
+        .symbols
+        .iter()
+        .rev()
+        .find(|s| s.name == name)
+        .map(|s| s.ty.clone())
+}
+
+fn compute_module_exports(statements: &[Statement], analysis: &ngn::analyzer::Analysis) -> ModuleExports {
+    let mut exports = HashMap::new();
+    let mut default_export = None;
+
+    for stmt in statements {
+        match &stmt.kind {
+            StatementKind::Function { name, is_exported, .. } => {
+                if *is_exported {
+                    let ty = lookup_symbol_global(&analysis.scopes, name)
+                        .unwrap_or(Type::Any);
+                    exports.insert(name.clone(), ty);
+                }
+            }
+            StatementKind::ExportDefault(expr) => {
+                let mut ty = analysis.expr_types.get(&expr.span).cloned();
+                if ty.is_none() {
+                    if let ExprKind::Variable(name) = &expr.kind {
+                        ty = lookup_symbol_global(&analysis.scopes, name);
+                    }
+                }
+                default_export = ty.or(Some(Type::Any));
+            }
+            _ => {}
+        }
+    }
+
+    ModuleExports {
+        exports,
+        default_export,
+    }
+}
+
+fn resolve_module_path(current_uri: &Url, source: &str) -> Option<PathBuf> {
+    if source == "tbx" || source.starts_with("tbx::") {
+        return None;
+    }
+
+    let path = Path::new(source);
+    if path.extension().is_none() {
+        return None;
+    }
+
+    if path.is_absolute() {
+        return Some(path.to_path_buf());
+    }
+
+    let current_path = current_uri.to_file_path().ok()?;
+    let base = current_path.parent()?;
+    Some(base.join(path))
 }
 
 fn find_member_access<'a>(
@@ -695,6 +767,188 @@ fn builtin_method_type(ty: &Type, method: &str) -> Option<Type> {
     }
 }
 
+fn tbx_function_type(module: &str, name: &str) -> Option<Type> {
+    let ty = match (module, name) {
+        ("test", "assert") => Type::Function {
+            params: vec![Type::Bool, Type::String],
+            optional_count: 1,
+            return_type: Box::new(Type::Void),
+        },
+        ("math", "abs")
+        | ("math", "round")
+        | ("math", "floor")
+        | ("math", "ceil")
+        | ("math", "trunc") => Type::Function {
+            params: vec![Type::Any],
+            optional_count: 0,
+            return_type: Box::new(Type::Any),
+        },
+        ("math", "sign") => Type::Function {
+            params: vec![Type::Any],
+            optional_count: 0,
+            return_type: Box::new(Type::F64),
+        },
+        ("math", "sin")
+        | ("math", "cos")
+        | ("math", "tan")
+        | ("math", "asin")
+        | ("math", "acos")
+        | ("math", "atan")
+        | ("math", "sqrt")
+        | ("math", "exp")
+        | ("math", "log")
+        | ("math", "log10")
+        | ("math", "log2") => Type::Function {
+            params: vec![Type::Any],
+            optional_count: 0,
+            return_type: Box::new(Type::F64),
+        },
+        ("math", "pow") | ("math", "atan2") => Type::Function {
+            params: vec![Type::Any, Type::Any],
+            optional_count: 0,
+            return_type: Box::new(Type::F64),
+        },
+        ("math", "min") | ("math", "max") => Type::Function {
+            params: vec![Type::Any, Type::Any, Type::Any, Type::Any, Type::Any],
+            optional_count: 3,
+            return_type: Box::new(Type::F64),
+        },
+        ("math", "clamp") => Type::Function {
+            params: vec![Type::Any, Type::Any, Type::Any],
+            optional_count: 0,
+            return_type: Box::new(Type::F64),
+        },
+        ("math", "PI") => Type::Function {
+            params: vec![],
+            optional_count: 0,
+            return_type: Box::new(Type::F64),
+        },
+        ("http", "serve") => Type::Function {
+            params: vec![Type::Any, Type::Any],
+            optional_count: 1,
+            return_type: Box::new(Type::Void),
+        },
+        ("io", "read") => Type::Function {
+            params: vec![Type::String],
+            optional_count: 0,
+            return_type: Box::new(Type::Generic(
+                "Result".to_string(),
+                vec![Type::String, Type::String],
+            )),
+        },
+        ("io", "write") | ("io", "append") => Type::Function {
+            params: vec![Type::String, Type::String],
+            optional_count: 0,
+            return_type: Box::new(Type::Generic(
+                "Result".to_string(),
+                vec![Type::Void, Type::String],
+            )),
+        },
+        ("io", "exists") => Type::Function {
+            params: vec![Type::String],
+            optional_count: 0,
+            return_type: Box::new(Type::Bool),
+        },
+        ("io", "delete") => Type::Function {
+            params: vec![Type::String],
+            optional_count: 0,
+            return_type: Box::new(Type::Generic(
+                "Result".to_string(),
+                vec![Type::Void, Type::String],
+            )),
+        },
+        ("encoding", "hexEncode") => Type::Function {
+            params: vec![Type::Bytes],
+            optional_count: 0,
+            return_type: Box::new(Type::String),
+        },
+        ("encoding", "hexDecode") => Type::Function {
+            params: vec![Type::String],
+            optional_count: 0,
+            return_type: Box::new(Type::Bytes),
+        },
+        ("encoding", "base64Encode") => Type::Function {
+            params: vec![Type::Bytes],
+            optional_count: 0,
+            return_type: Box::new(Type::String),
+        },
+        ("encoding", "base64Decode") => Type::Function {
+            params: vec![Type::String],
+            optional_count: 0,
+            return_type: Box::new(Type::Bytes),
+        },
+        ("process", "run") => Type::Function {
+            params: vec![Type::String, Type::Any],
+            optional_count: 1,
+            return_type: Box::new(Type::Channel(Box::new(Type::Generic(
+                "Result".to_string(),
+                vec![Type::Model("ProcessOutput".to_string()), Type::String],
+            )))),
+        },
+        ("process", "stream") | ("process", "streamRaw") => Type::Function {
+            params: vec![Type::String, Type::Any],
+            optional_count: 1,
+            return_type: Box::new(Type::Generic(
+                "Result".to_string(),
+                vec![Type::Model("ProcessStream".to_string()), Type::String],
+            )),
+        },
+        ("llm", "load") => Type::Function {
+            params: vec![Type::String, Type::Any],
+            optional_count: 1,
+            return_type: Box::new(Type::Generic(
+                "Result".to_string(),
+                vec![Type::Model("LlmModel".to_string()), Type::String],
+            )),
+        },
+        ("llm", "generate") => Type::Function {
+            params: vec![
+                Type::Model("LlmModel".to_string()),
+                Type::String,
+                Type::Any,
+            ],
+            optional_count: 1,
+            return_type: Box::new(Type::Generic(
+                "Result".to_string(),
+                vec![Type::String, Type::String],
+            )),
+        },
+        ("llm", "stream") => Type::Function {
+            params: vec![
+                Type::Model("LlmModel".to_string()),
+                Type::String,
+                Type::Any,
+            ],
+            optional_count: 1,
+            return_type: Box::new(Type::Channel(Box::new(Type::Model(
+                "LlmChunk".to_string(),
+            )))),
+        },
+        _ => return None,
+    };
+    Some(ty)
+}
+
+fn tbx_module_exports(module: &str) -> Option<ModuleExports> {
+    let toolbox = Toolbox::new();
+    let tbx_module = toolbox.get_module(module)?;
+    let mut exports = HashMap::new();
+
+    for name in tbx_module.functions.keys() {
+        let ty = tbx_function_type(module, name).unwrap_or(Type::Function {
+            params: vec![Type::Any],
+            optional_count: 0,
+            return_type: Box::new(Type::Any),
+        });
+        exports.insert(name.clone(), ty);
+    }
+
+    Some(ModuleExports {
+        exports,
+        default_export: None,
+    })
+}
+
 fn token_builtin_name(token: &Token) -> Option<&'static str> {
     match token {
         Token::Print => Some("print"),
@@ -711,6 +965,36 @@ fn token_builtin_name(token: &Token) -> Option<&'static str> {
 }
 
 impl Backend {
+    async fn load_module_exports(&self, path: &Path) -> Option<ModuleExports> {
+        if let Some(cached) = self.module_cache.read().await.get(path).cloned() {
+            return Some(cached);
+        }
+
+        let text = std::fs::read_to_string(path).ok()?;
+        let lexer = Lexer::new(&text);
+        let mut parser = Parser::new(lexer);
+        let mut statements = Vec::new();
+
+        while parser.current_token != Token::EOF {
+            if parser.current_token == Token::Newline {
+                parser.advance();
+                continue;
+            }
+            statements.push(parser.parse_statement());
+        }
+
+        let mut analyzer = Analyzer::new_with_index(text.len());
+        let (analysis, _) = analyzer.analyze_with_index(&statements);
+        let exports = compute_module_exports(&statements, &analysis);
+
+        self.module_cache
+            .write()
+            .await
+            .insert(path.to_path_buf(), exports.clone());
+
+        Some(exports)
+    }
+
     async fn validate_document(&self, uri: Url, text: &str) -> DocumentState {
         let result = catch_unwind(AssertUnwindSafe(|| {
             let lexer = Lexer::new(text);
@@ -736,12 +1020,18 @@ impl Backend {
 
             let tokens = collect_tokens(text);
 
-            (parser_diagnostics, analyzer_diagnostics, analysis, tokens)
+            (
+                parser_diagnostics,
+                analyzer_diagnostics,
+                analysis,
+                tokens,
+                statements,
+            )
         }));
 
-        let (parser_diagnostics, analyzer_diagnostics, analysis, tokens) = match result {
-            Ok((parser_diagnostics, analyzer_diagnostics, analysis, tokens)) => {
-                (parser_diagnostics, analyzer_diagnostics, analysis, tokens)
+        let (parser_diagnostics, analyzer_diagnostics, analysis, tokens, statements) = match result {
+            Ok((parser_diagnostics, analyzer_diagnostics, analysis, tokens, statements)) => {
+                (parser_diagnostics, analyzer_diagnostics, analysis, tokens, statements)
             }
             Err(_) => {
                 let diagnostic = Diagnostic {
@@ -761,6 +1051,8 @@ impl Backend {
                     text: text.to_string(),
                     analysis: None,
                     tokens: Vec::new(),
+                    imported_symbols: HashMap::new(),
+                    module_aliases: HashMap::new(),
                 };
             }
         };
@@ -792,13 +1084,98 @@ impl Backend {
         }
 
         self.client
-            .publish_diagnostics(uri, lsp_diagnostics, None)
+            .publish_diagnostics(uri.clone(), lsp_diagnostics, None)
             .await;
+
+        let mut imported_symbols = HashMap::new();
+        let mut module_aliases = HashMap::new();
+
+        if let Ok(path) = uri.to_file_path() {
+            let module_exports = compute_module_exports(&statements, &analysis);
+            self.module_cache
+                .write()
+                .await
+                .insert(path, module_exports);
+        }
+
+        for stmt in &statements {
+            match &stmt.kind {
+                StatementKind::Import { names, source } => {
+                    if source.starts_with("tbx::") {
+                        let module = source.trim_start_matches("tbx::");
+                        if let Some(exports) = tbx_module_exports(module) {
+                            for (name, alias) in names {
+                                let import_name = alias.as_ref().unwrap_or(name);
+                                let ty = exports
+                                    .exports
+                                    .get(name)
+                                    .cloned()
+                                    .unwrap_or(Type::Any);
+                                imported_symbols.insert(import_name.clone(), ty);
+                            }
+                        }
+                        continue;
+                    }
+
+                    if let Some(path) = resolve_module_path(&uri, source) {
+                        let exports = self.load_module_exports(&path).await;
+                        if let Some(exports) = exports {
+                            for (name, alias) in names {
+                                let import_name = alias.as_ref().unwrap_or(name);
+                                let ty = exports
+                                    .exports
+                                    .get(name)
+                                    .cloned()
+                                    .unwrap_or(Type::Any);
+                                imported_symbols.insert(import_name.clone(), ty);
+                            }
+                        }
+                    }
+                }
+                StatementKind::ImportDefault { name, source } => {
+                    if source.starts_with("tbx::") {
+                        if let Some(def) = get_type(name) {
+                            imported_symbols.insert(name.clone(), def.ty);
+                        } else {
+                            imported_symbols.insert(name.clone(), Type::Any);
+                        }
+                        continue;
+                    }
+
+                    if let Some(path) = resolve_module_path(&uri, source) {
+                        let exports = self.load_module_exports(&path).await;
+                        if let Some(exports) = exports {
+                            let ty = exports.default_export.unwrap_or(Type::Any);
+                            imported_symbols.insert(name.clone(), ty);
+                        }
+                    }
+                }
+                StatementKind::ImportModule { alias, source } => {
+                    if source.starts_with("tbx::") {
+                        let module = source.trim_start_matches("tbx::");
+                        if let Some(exports) = tbx_module_exports(module) {
+                            module_aliases.insert(alias.clone(), exports);
+                        }
+                        continue;
+                    }
+
+                    if let Some(path) = resolve_module_path(&uri, source) {
+                        let exports = self.load_module_exports(&path).await;
+                        if let Some(exports) = exports {
+                            module_aliases.insert(alias.clone(), exports);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
 
         DocumentState {
             text: text.to_string(),
             analysis: Some(analysis),
             tokens,
+            imported_symbols,
+            module_aliases,
         }
     }
 }
@@ -1403,6 +1780,11 @@ impl LanguageServer for Backend {
                 }
                 if hover_text.is_none() && token_idx >= 2 {
                     if let Token::Identifier(obj_name) = &doc.tokens[token_idx - 2].0 {
+                        if let Some(exports) = doc.module_aliases.get(obj_name) {
+                            if let Some(ty) = exports.exports.get(name) {
+                                hover_text = Some(format!("{}: {}", name, ty));
+                            }
+                        }
                         if let Some(fields) = analysis.object_bindings.get(obj_name) {
                             if let Some((_, field_ty)) =
                                 fields.iter().find(|(field_name, _)| field_name == name)
@@ -1413,13 +1795,17 @@ impl LanguageServer for Backend {
                     }
                 }
             } else {
-                let scope_id = find_scope_for_offset(&analysis.scopes, offset);
-                if let Some(symbol) = lookup_symbol_in_scope(&analysis.scopes, scope_id, name) {
-                    hover_text = Some(format!("{}: {}", symbol.name, symbol.ty));
-                } else if let Some(ty) = analysis.expr_types.get(&token_span) {
+                if let Some(ty) = doc.imported_symbols.get(name) {
                     hover_text = Some(format!("{}: {}", name, ty));
-                } else if let Some(def) = get_type(name) {
-                    hover_text = Some(format!("{}: {}", name, def.ty));
+                } else {
+                    let scope_id = find_scope_for_offset(&analysis.scopes, offset);
+                    if let Some(symbol) = lookup_symbol_in_scope(&analysis.scopes, scope_id, name) {
+                        hover_text = Some(format!("{}: {}", symbol.name, symbol.ty));
+                    } else if let Some(ty) = analysis.expr_types.get(&token_span) {
+                    hover_text = Some(format!("{}: {}", name, ty));
+                    } else if let Some(def) = get_type(name) {
+                        hover_text = Some(format!("{}: {}", name, def.ty));
+                    }
                 }
             }
         }
@@ -1547,6 +1933,21 @@ impl LanguageServer for Backend {
         }
 
         if member_context {
+            if let Some(name) = &member_object_name {
+                if let Some(exports) = doc.module_aliases.get(name) {
+                    let mut items = Vec::new();
+                    for (export_name, export_ty) in &exports.exports {
+                        items.push(CompletionItem {
+                            label: export_name.clone(),
+                            kind: Some(CompletionItemKind::FUNCTION),
+                            detail: Some(export_ty.to_string()),
+                            ..Default::default()
+                        });
+                    }
+                    return Ok(Some(CompletionResponse::Array(items)));
+                }
+            }
+
             let mut obj_ty = if let Some(member_access) = find_member_access(analysis, offset) {
                 analysis
                     .expr_types
@@ -1678,7 +2079,15 @@ impl LanguageServer for Backend {
         while let Some(scope) = current.and_then(|id| analysis.scopes.get(id)) {
             for symbol in scope.symbols.iter().rev() {
                 if seen.insert(symbol.name.clone()) {
-                    let kind = match symbol.kind {
+                    let (kind, detail_ty) = if let Some(import_ty) = doc.imported_symbols.get(&symbol.name) {
+                        let kind = if matches!(import_ty, Type::Function { .. }) {
+                            CompletionItemKind::FUNCTION
+                        } else {
+                            CompletionItemKind::VARIABLE
+                        };
+                        (kind, import_ty.clone())
+                    } else {
+                        let kind = match symbol.kind {
                         ngn::analyzer::SymbolKind::Function => CompletionItemKind::FUNCTION,
                         ngn::analyzer::SymbolKind::Variable => CompletionItemKind::VARIABLE,
                         ngn::analyzer::SymbolKind::Model => CompletionItemKind::STRUCT,
@@ -1686,11 +2095,13 @@ impl LanguageServer for Backend {
                         ngn::analyzer::SymbolKind::EnumVariant => CompletionItemKind::ENUM_MEMBER,
                         ngn::analyzer::SymbolKind::Role => CompletionItemKind::INTERFACE,
                         ngn::analyzer::SymbolKind::TypeAlias => CompletionItemKind::TYPE_PARAMETER,
+                        };
+                        (kind, symbol.ty.clone())
                     };
                     items.push(CompletionItem {
                         label: symbol.name.clone(),
                         kind: Some(kind),
-                        detail: Some(symbol.ty.to_string()),
+                        detail: Some(detail_ty.to_string()),
                         ..Default::default()
                     });
                 }
@@ -1845,6 +2256,7 @@ async fn main() {
     let (service, socket) = LspService::new(|client| Backend {
         client,
         documents: Arc::new(RwLock::new(HashMap::new())),
+        module_cache: Arc::new(RwLock::new(HashMap::new())),
     });
     Server::new(stdin, stdout, socket).serve(service).await;
 }
