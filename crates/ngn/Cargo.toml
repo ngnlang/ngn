@@ -27,3 +27,10 @@ sha1 = "0.10"
 base64 = "0.22"
 hex = "0.4"
 chrono = "0.4"
+
+[features]
+default = ["core", "http", "os"]
+llm = []
+http = []
+os = []
+core = []

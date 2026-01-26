@@ -1835,18 +1835,25 @@ impl Fiber {
                     .or_insert_with(std::collections::HashMap::new);
                 target_methods.insert(method_name, closure);
             }
-            OpCode::ServeHttp(handler_idx) => {
-                // Get the handler object from globals
-                let handler = globals[handler_idx].clone();
+            OpCode::ServeHttp(_handler_idx) => {
+                #[cfg(feature = "http")]
+                {
+                    // Get the handler object from globals
+                    let handler = globals[_handler_idx].clone();
 
-                // Extract config from handler.config field
-                // Supported config keys:
-                // - port: i64
-                // - keepAliveTimeoutMs: i64
-                // - maxRequestsPerConnection: i64
-                // - tls: { cert: string, key: string }
-                let (port, tls_cert, tls_key, keep_alive_timeout_ms, max_requests_per_connection) =
-                    if let Value::Object(obj) = &handler {
+                    // Extract config from handler.config field
+                    // Supported config keys:
+                    // - port: i64
+                    // - keepAliveTimeoutMs: i64
+                    // - maxRequestsPerConnection: i64
+                    // - tls: { cert: string, key: string }
+                    let (
+                        port,
+                        tls_cert,
+                        tls_key,
+                        keep_alive_timeout_ms,
+                        max_requests_per_connection,
+                    ) = if let Value::Object(obj) = &handler {
                         if let Some(Value::Object(config)) = obj.fields.get("config") {
                             let port = match config.fields.get("port") {
                                 Some(Value::Numeric(n)) => match n {
@@ -1917,62 +1924,70 @@ impl Fiber {
                         (3000, None, None, 30_000, 1000)
                     };
 
-                let fetch_handler = if let Value::Object(obj) = &handler {
-                    if !obj.model_name.is_empty() && obj.model_name != "__anon__" {
-                        // Model instance: look up in custom_methods
-                        let methods = custom_methods.lock().unwrap();
-                        methods
-                            .get(&obj.model_name)
-                            .and_then(|m| m.get("fetch"))
-                            .cloned()
+                    let fetch_handler = if let Value::Object(obj) = &handler {
+                        if !obj.model_name.is_empty() && obj.model_name != "__anon__" {
+                            // Model instance: look up in custom_methods
+                            let methods = custom_methods.lock().unwrap();
+                            methods
+                                .get(&obj.model_name)
+                                .and_then(|m| m.get("fetch"))
+                                .cloned()
+                        } else {
+                            // Anonymous object literal: fetch is directly in fields
+                            obj.fields.get("fetch").cloned()
+                        }
                     } else {
-                        // Anonymous object literal: fetch is directly in fields
-                        obj.fields.get("fetch").cloned()
-                    }
-                } else {
-                    None
-                };
-
-                if let Some(fetch_handler) = fetch_handler {
-                    use crate::toolbox::http;
-
-                    let globals_arc = std::sync::Arc::new(std::sync::Mutex::new(globals.clone()));
-                    let methods_arc = custom_methods.clone();
-
-                    let options = http::HttpServerOptions {
-                        keep_alive_timeout: std::time::Duration::from_millis(keep_alive_timeout_ms),
-                        max_requests_per_connection,
+                        None
                     };
 
-                    if let (Some(cert), Some(key)) = (tls_cert, tls_key) {
-                        if let Err(e) = http::serve_tls_with_options(
-                            port,
-                            fetch_handler,
-                            &cert,
-                            &key,
-                            options,
-                            globals_arc,
-                            methods_arc,
-                        ) {
-                            eprintln!("HTTPS Server Error: {}", e);
+                    if let Some(fetch_handler) = fetch_handler {
+                        use crate::toolbox::http;
+
+                        let globals_arc =
+                            std::sync::Arc::new(std::sync::Mutex::new(globals.clone()));
+                        let methods_arc = custom_methods.clone();
+
+                        let options = http::HttpServerOptions {
+                            keep_alive_timeout: std::time::Duration::from_millis(
+                                keep_alive_timeout_ms,
+                            ),
+                            max_requests_per_connection,
+                        };
+
+                        if let (Some(cert), Some(key)) = (tls_cert, tls_key) {
+                            if let Err(e) = http::serve_tls_with_options(
+                                port,
+                                fetch_handler,
+                                &cert,
+                                &key,
+                                options,
+                                globals_arc,
+                                methods_arc,
+                            ) {
+                                eprintln!("HTTPS Server Error: {}", e);
+                            }
+                        } else {
+                            if let Err(e) = http::serve_with_options(
+                                port,
+                                fetch_handler,
+                                options,
+                                globals_arc,
+                                methods_arc,
+                            ) {
+                                eprintln!("HTTP Server Error: {}", e);
+                            }
                         }
                     } else {
-                        if let Err(e) = http::serve_with_options(
-                            port,
-                            fetch_handler,
-                            options,
-                            globals_arc,
-                            methods_arc,
-                        ) {
-                            eprintln!("HTTP Server Error: {}", e);
-                        }
+                        eprintln!("ngn Error: No fetch method found on exported handler");
                     }
-                } else {
-                    eprintln!("ngn Error: No fetch method found on exported handler");
-                }
 
-                self.status = FiberStatus::Finished;
-                return FiberStatus::Finished;
+                    self.status = FiberStatus::Finished;
+                    return FiberStatus::Finished;
+                }
+                #[cfg(not(feature = "http"))]
+                {
+                    panic!("Runtime Error: tbx::http is not available in this runtime");
+                }
             }
             OpCode::JsonParse(dest_reg, src_reg) => {
                 let src_val = self.get_reg_at(src_reg);
@@ -2475,6 +2490,7 @@ impl Fiber {
         }
     }
 
+    #[allow(unused_variables)]
     fn call_native_function(
         &mut self,
         id: u16,
@@ -2486,144 +2502,213 @@ impl Fiber {
         >,
     ) -> FiberStatus {
         if id == 4 {
-            if args.is_empty() {
-                panic!("Runtime Error: serve requires at least 1 argument (handler)");
+            #[cfg(feature = "http")]
+            {
+                if args.is_empty() {
+                    panic!("Runtime Error: serve requires at least 1 argument (handler)");
+                }
+
+                let handler = args
+                    .get(0)
+                    .cloned()
+                    .expect("Runtime Error: serve requires a handler function");
+
+                let mut port: u16 = 3000;
+                let mut keep_alive_timeout_ms: u64 = 30_000;
+                let mut max_requests_per_connection: usize = 1000;
+                let mut tls_cert: Option<String> = None;
+                let mut tls_key: Option<String> = None;
+
+                if let Some(Value::Object(cfg)) = args.get(1) {
+                    if let Some(Value::Numeric(n)) = cfg.fields.get("port") {
+                        port = match n {
+                            crate::value::Number::I64(v) => *v as u16,
+                            crate::value::Number::I32(v) => *v as u16,
+                            _ => port,
+                        };
+                    }
+
+                    if let Some(Value::Numeric(n)) = cfg.fields.get("keepAliveTimeoutMs") {
+                        keep_alive_timeout_ms = match n {
+                            crate::value::Number::I64(v) if *v > 0 => *v as u64,
+                            crate::value::Number::I32(v) if *v > 0 => *v as u64,
+                            _ => keep_alive_timeout_ms,
+                        };
+                    }
+
+                    if let Some(Value::Numeric(n)) = cfg.fields.get("maxRequestsPerConnection") {
+                        max_requests_per_connection = match n {
+                            crate::value::Number::I64(v) if *v > 0 => *v as usize,
+                            crate::value::Number::I32(v) if *v > 0 => *v as usize,
+                            _ => max_requests_per_connection,
+                        };
+                    }
+
+                    if let Some(Value::Object(tls)) = cfg.fields.get("tls") {
+                        tls_cert = tls.fields.get("cert").and_then(|v| {
+                            if let Value::String(s) = v {
+                                Some(s.clone())
+                            } else {
+                                None
+                            }
+                        });
+                        tls_key = tls.fields.get("key").and_then(|v| {
+                            if let Value::String(s) = v {
+                                Some(s.clone())
+                            } else {
+                                None
+                            }
+                        });
+                    }
+                }
+
+                let shared_globals = Arc::new(Mutex::new(globals.clone()));
+                let shared_methods = custom_methods.clone();
+
+                let options = crate::toolbox::http::HttpServerOptions {
+                    keep_alive_timeout: std::time::Duration::from_millis(keep_alive_timeout_ms),
+                    max_requests_per_connection,
+                };
+
+                let has_tls = tls_cert.is_some() || tls_key.is_some();
+
+                if let (Some(cert), Some(key)) = (&tls_cert, &tls_key) {
+                    if let Err(e) = crate::toolbox::http::serve_tls_with_options(
+                        port,
+                        handler,
+                        cert,
+                        key,
+                        options,
+                        shared_globals,
+                        shared_methods,
+                    ) {
+                        panic!("Runtime Error: {}", e);
+                    }
+                } else if has_tls {
+                    panic!("Runtime Error: tls config requires both cert and key");
+                } else {
+                    if let Err(e) = crate::toolbox::http::serve_with_options(
+                        port,
+                        handler,
+                        options,
+                        shared_globals,
+                        shared_methods,
+                    ) {
+                        panic!("Runtime Error: {}", e);
+                    }
+                }
+
+                self.set_reg_at(dest, Value::Void);
+                return FiberStatus::Finished;
             }
-
-            let handler = args
-                .get(0)
-                .cloned()
-                .expect("Runtime Error: serve requires a handler function");
-
-            let mut port: u16 = 3000;
-            let mut keep_alive_timeout_ms: u64 = 30_000;
-            let mut max_requests_per_connection: usize = 1000;
-            let mut tls_cert: Option<String> = None;
-            let mut tls_key: Option<String> = None;
-
-            if let Some(Value::Object(cfg)) = args.get(1) {
-                if let Some(Value::Numeric(n)) = cfg.fields.get("port") {
-                    port = match n {
-                        crate::value::Number::I64(v) => *v as u16,
-                        crate::value::Number::I32(v) => *v as u16,
-                        _ => port,
-                    };
-                }
-
-                if let Some(Value::Numeric(n)) = cfg.fields.get("keepAliveTimeoutMs") {
-                    keep_alive_timeout_ms = match n {
-                        crate::value::Number::I64(v) if *v > 0 => *v as u64,
-                        crate::value::Number::I32(v) if *v > 0 => *v as u64,
-                        _ => keep_alive_timeout_ms,
-                    };
-                }
-
-                if let Some(Value::Numeric(n)) = cfg.fields.get("maxRequestsPerConnection") {
-                    max_requests_per_connection = match n {
-                        crate::value::Number::I64(v) if *v > 0 => *v as usize,
-                        crate::value::Number::I32(v) if *v > 0 => *v as usize,
-                        _ => max_requests_per_connection,
-                    };
-                }
-
-                if let Some(Value::Object(tls)) = cfg.fields.get("tls") {
-                    tls_cert = tls.fields.get("cert").and_then(|v| {
-                        if let Value::String(s) = v {
-                            Some(s.clone())
-                        } else {
-                            None
-                        }
-                    });
-                    tls_key = tls.fields.get("key").and_then(|v| {
-                        if let Value::String(s) = v {
-                            Some(s.clone())
-                        } else {
-                            None
-                        }
-                    });
-                }
+            #[cfg(not(feature = "http"))]
+            {
+                panic!("Runtime Error: tbx::http is not available in this runtime");
             }
-
-            let shared_globals = Arc::new(Mutex::new(globals.clone()));
-            let shared_methods = custom_methods.clone();
-
-            let options = crate::toolbox::http::HttpServerOptions {
-                keep_alive_timeout: std::time::Duration::from_millis(keep_alive_timeout_ms),
-                max_requests_per_connection,
-            };
-
-            let has_tls = tls_cert.is_some() || tls_key.is_some();
-
-            if let (Some(cert), Some(key)) = (&tls_cert, &tls_key) {
-                if let Err(e) = crate::toolbox::http::serve_tls_with_options(
-                    port,
-                    handler,
-                    cert,
-                    key,
-                    options,
-                    shared_globals,
-                    shared_methods,
-                ) {
-                    panic!("Runtime Error: {}", e);
-                }
-            } else if has_tls {
-                panic!("Runtime Error: tls config requires both cert and key");
-            } else {
-                if let Err(e) = crate::toolbox::http::serve_with_options(
-                    port,
-                    handler,
-                    options,
-                    shared_globals,
-                    shared_methods,
-                ) {
-                    panic!("Runtime Error: {}", e);
-                }
-            }
-
-            self.set_reg_at(dest, Value::Void);
-            return FiberStatus::Finished;
         }
 
         let result = match id {
-            1 => crate::toolbox::math::abs(args),             // NATIVE_ABS
-            2 => crate::toolbox::test::assert(args),          // NATIVE_ASSERT
-            3 => crate::toolbox::math::round(args),           // NATIVE_ROUND
-            5 => crate::toolbox::encoding::hex_encode(args),  // NATIVE_HEX_ENCODE
-            6 => crate::toolbox::io::file_read(args),         // NATIVE_FILE_READ
-            7 => crate::toolbox::io::file_write(args),        // NATIVE_FILE_WRITE
-            8 => crate::toolbox::io::file_append(args),       // NATIVE_FILE_APPEND
-            9 => crate::toolbox::io::file_exists(args),       // NATIVE_FILE_EXISTS
-            10 => crate::toolbox::io::file_delete(args),      // NATIVE_FILE_DELETE
+            #[cfg(feature = "core")]
+            1 => crate::toolbox::math::abs(args), // NATIVE_ABS
+            #[cfg(feature = "core")]
+            2 => crate::toolbox::test::assert(args), // NATIVE_ASSERT
+            #[cfg(feature = "core")]
+            3 => crate::toolbox::math::round(args), // NATIVE_ROUND
+            #[cfg(feature = "core")]
+            5 => crate::toolbox::encoding::hex_encode(args), // NATIVE_HEX_ENCODE
+            #[cfg(feature = "os")]
+            6 => crate::toolbox::io::file_read(args), // NATIVE_FILE_READ
+            #[cfg(feature = "os")]
+            7 => crate::toolbox::io::file_write(args), // NATIVE_FILE_WRITE
+            #[cfg(feature = "os")]
+            8 => crate::toolbox::io::file_append(args), // NATIVE_FILE_APPEND
+            #[cfg(feature = "os")]
+            9 => crate::toolbox::io::file_exists(args), // NATIVE_FILE_EXISTS
+            #[cfg(feature = "os")]
+            10 => crate::toolbox::io::file_delete(args), // NATIVE_FILE_DELETE
+            #[cfg(feature = "core")]
             11 => crate::toolbox::encoding::hex_decode(args), // NATIVE_HEX_DECODE
+            #[cfg(feature = "core")]
             12 => crate::toolbox::encoding::base64_encode(args), // NATIVE_BASE64_ENCODE
+            #[cfg(feature = "core")]
             13 => crate::toolbox::encoding::base64_decode(args), // NATIVE_BASE64_DECODE
+            #[cfg(feature = "os")]
             14 => crate::toolbox::process::process_run(args), // NATIVE_PROCESS_RUN
+            #[cfg(feature = "os")]
             15 => crate::toolbox::process::process_stream(args), // NATIVE_PROCESS_STREAM
+            #[cfg(feature = "os")]
             16 => crate::toolbox::process::process_stream_raw(args), // NATIVE_PROCESS_STREAM_RAW
-            17 => crate::toolbox::llm::llm_load(args),        // NATIVE_LLM_LOAD
-            18 => crate::toolbox::llm::llm_generate(args),    // NATIVE_LLM_GENERATE
-            19 => crate::toolbox::llm::llm_stream(args),      // NATIVE_LLM_STREAM
-            20 => crate::toolbox::math::floor(args),          // NATIVE_FLOOR
-            21 => crate::toolbox::math::ceil(args),           // NATIVE_CEIL
-            22 => crate::toolbox::math::trunc(args),          // NATIVE_TRUNC
-            23 => crate::toolbox::math::sign(args),           // NATIVE_SIGN
-            24 => crate::toolbox::math::sin(args),            // NATIVE_SIN
-            25 => crate::toolbox::math::cos(args),            // NATIVE_COS
-            26 => crate::toolbox::math::tan(args),            // NATIVE_TAN
-            27 => crate::toolbox::math::asin(args),           // NATIVE_ASIN
-            28 => crate::toolbox::math::acos(args),           // NATIVE_ACOS
-            29 => crate::toolbox::math::atan(args),           // NATIVE_ATAN
-            30 => crate::toolbox::math::atan2(args),          // NATIVE_ATAN2
-            31 => crate::toolbox::math::sqrt(args),           // NATIVE_SQRT
-            32 => crate::toolbox::math::pow(args),            // NATIVE_POW
-            33 => crate::toolbox::math::exp(args),            // NATIVE_EXP
-            34 => crate::toolbox::math::log(args),            // NATIVE_LOG
-            35 => crate::toolbox::math::log10(args),          // NATIVE_LOG10
-            36 => crate::toolbox::math::log2(args),           // NATIVE_LOG2
-            37 => crate::toolbox::math::min(args),            // NATIVE_MIN
-            38 => crate::toolbox::math::max(args),            // NATIVE_MAX
-            39 => crate::toolbox::math::clamp(args),          // NATIVE_CLAMP
-            40 => crate::toolbox::math::pi(args),             // NATIVE_PI
+            #[cfg(not(feature = "os"))]
+            6 | 7 | 8 | 9 | 10 | 14 | 15 | 16 => Err(crate::error::RuntimeError::ImportError(
+                "tbx::io/process are not available in this runtime".to_string(),
+            )),
+            #[cfg(feature = "llm")]
+            17 => crate::toolbox::llm::llm_load(args), // NATIVE_LLM_LOAD
+            #[cfg(feature = "llm")]
+            18 => crate::toolbox::llm::llm_generate(args), // NATIVE_LLM_GENERATE
+            #[cfg(feature = "llm")]
+            19 => crate::toolbox::llm::llm_stream(args), // NATIVE_LLM_STREAM
+            #[cfg(not(feature = "llm"))]
+            17 => Err(crate::error::RuntimeError::ImportError(
+                "tbx::llm is not available in this runtime".to_string(),
+            )),
+            #[cfg(not(feature = "llm"))]
+            18 => Err(crate::error::RuntimeError::ImportError(
+                "tbx::llm is not available in this runtime".to_string(),
+            )),
+            #[cfg(not(feature = "llm"))]
+            19 => Err(crate::error::RuntimeError::ImportError(
+                "tbx::llm is not available in this runtime".to_string(),
+            )),
+            #[cfg(feature = "core")]
+            20 => crate::toolbox::math::floor(args), // NATIVE_FLOOR
+            #[cfg(feature = "core")]
+            21 => crate::toolbox::math::ceil(args), // NATIVE_CEIL
+            #[cfg(feature = "core")]
+            22 => crate::toolbox::math::trunc(args), // NATIVE_TRUNC
+            #[cfg(feature = "core")]
+            23 => crate::toolbox::math::sign(args), // NATIVE_SIGN
+            #[cfg(feature = "core")]
+            24 => crate::toolbox::math::sin(args), // NATIVE_SIN
+            #[cfg(feature = "core")]
+            25 => crate::toolbox::math::cos(args), // NATIVE_COS
+            #[cfg(feature = "core")]
+            26 => crate::toolbox::math::tan(args), // NATIVE_TAN
+            #[cfg(feature = "core")]
+            27 => crate::toolbox::math::asin(args), // NATIVE_ASIN
+            #[cfg(feature = "core")]
+            28 => crate::toolbox::math::acos(args), // NATIVE_ACOS
+            #[cfg(feature = "core")]
+            29 => crate::toolbox::math::atan(args), // NATIVE_ATAN
+            #[cfg(feature = "core")]
+            30 => crate::toolbox::math::atan2(args), // NATIVE_ATAN2
+            #[cfg(feature = "core")]
+            31 => crate::toolbox::math::sqrt(args), // NATIVE_SQRT
+            #[cfg(feature = "core")]
+            32 => crate::toolbox::math::pow(args), // NATIVE_POW
+            #[cfg(feature = "core")]
+            33 => crate::toolbox::math::exp(args), // NATIVE_EXP
+            #[cfg(feature = "core")]
+            34 => crate::toolbox::math::log(args), // NATIVE_LOG
+            #[cfg(feature = "core")]
+            35 => crate::toolbox::math::log10(args), // NATIVE_LOG10
+            #[cfg(feature = "core")]
+            36 => crate::toolbox::math::log2(args), // NATIVE_LOG2
+            #[cfg(feature = "core")]
+            37 => crate::toolbox::math::min(args), // NATIVE_MIN
+            #[cfg(feature = "core")]
+            38 => crate::toolbox::math::max(args), // NATIVE_MAX
+            #[cfg(feature = "core")]
+            39 => crate::toolbox::math::clamp(args), // NATIVE_CLAMP
+            #[cfg(feature = "core")]
+            40 => crate::toolbox::math::pi(args), // NATIVE_PI
+            #[cfg(not(feature = "core"))]
+            1 | 2 | 3 | 5 | 11 | 12 | 13 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30
+            | 31 | 32 | 33 | 34 | 35 | 36 | 37 | 38 | 39 | 40 => {
+                Err(crate::error::RuntimeError::ImportError(
+                    "tbx::core modules are not available in this runtime".to_string(),
+                ))
+            }
             _ => panic!("Runtime Error: Unknown native function ID: {}", id),
         };
 

@@ -10,7 +10,19 @@ use std::process::Command;
 
 fn main() {
     build_llama_cpp();
-    copy_runtime_binary();
+    if should_copy_runtime_binaries() {
+        copy_runtime_binaries();
+    }
+}
+
+fn should_copy_runtime_binaries() -> bool {
+    if env::var("NGN_SKIP_RUNTIME_COPY").is_ok() {
+        return false;
+    }
+
+    env::var("CARGO_BIN_NAME")
+        .map(|name| name != "runtime")
+        .unwrap_or(true)
 }
 
 fn repo_root(manifest_dir: &str) -> PathBuf {
@@ -28,6 +40,11 @@ fn build_llama_cpp() {
 
     println!("cargo:rerun-if-env-changed=NGN_LLAMA_BACKEND");
 
+    let feature_enabled = env::var("CARGO_FEATURE_LLM").is_ok();
+    if !feature_enabled {
+        return;
+    }
+
     let llama_src = root.join("vendor").join("llama.cpp");
     let ggml_src = llama_src.join("ggml").join("src");
     let llama_include = llama_src.join("include");
@@ -42,8 +59,12 @@ fn build_llama_cpp() {
     println!("cargo:rerun-if-changed={}", llama_src.display());
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let bridge_cpp = PathBuf::from(&manifest_dir).join("src").join("llama_bridge.cpp");
-    let bridge_h = PathBuf::from(&manifest_dir).join("src").join("llama_bridge.h");
+    let bridge_cpp = PathBuf::from(&manifest_dir)
+        .join("src")
+        .join("llama_bridge.cpp");
+    let bridge_h = PathBuf::from(&manifest_dir)
+        .join("src")
+        .join("llama_bridge.h");
 
     println!("cargo:rerun-if-changed={}", bridge_cpp.display());
     println!("cargo:rerun-if-changed={}", bridge_h.display());
@@ -218,7 +239,10 @@ fn build_llama_cuda(llama_src: &Path) -> PathBuf {
         return lib64;
     }
 
-    panic!("CUDA build completed but no lib dir found under {}", dst.display());
+    panic!(
+        "CUDA build completed but no lib dir found under {}",
+        dst.display()
+    );
 }
 
 fn detect_static_libs(lib_dir: &Path) -> Vec<String> {
@@ -239,7 +263,11 @@ fn detect_static_libs(lib_dir: &Path) -> Vec<String> {
             if !(name.contains("llama") || name.contains("ggml")) {
                 continue;
             }
-            libs.push(name.trim_start_matches("lib").trim_end_matches(".a").to_string());
+            libs.push(
+                name.trim_start_matches("lib")
+                    .trim_end_matches(".a")
+                    .to_string(),
+            );
         }
     }
 
@@ -304,37 +332,88 @@ fn collect_sources_shallow(dir: &Path, c_files: &mut Vec<PathBuf>, cpp_files: &m
     }
 }
 
-fn copy_runtime_binary() {
+fn copy_runtime_binaries() {
     let out_dir = env::var("OUT_DIR").unwrap();
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    let out_dir = PathBuf::from(&out_dir);
 
     // Look for pre-built runtime in workspace target/embed/
-    let runtime_path = PathBuf::from(&manifest_dir)
+    let embed_dir = PathBuf::from(&manifest_dir)
         .parent()
         .unwrap()
         .parent()
         .unwrap()
         .join("target")
-        .join("embed")
-        .join("runtime_binary");
+        .join("embed");
 
-    if runtime_path.exists() {
-        let dest_path = PathBuf::from(&out_dir).join("runtime_binary");
-        fs::copy(&runtime_path, &dest_path).expect("Failed to copy runtime binary to OUT_DIR");
+    let variant_names = [
+        "runtime_full",
+        "runtime_min",
+        "runtime_min_os",
+        "runtime_min_http",
+        "runtime_min_os_http",
+        "runtime_min_llm",
+        "runtime_min_os_llm",
+        "runtime_min_http_llm",
+        "runtime_min_os_http_llm",
+        "runtime_core",
+        "runtime_core_os",
+        "runtime_core_http",
+        "runtime_core_os_http",
+        "runtime_core_llm",
+        "runtime_core_os_llm",
+        "runtime_core_http_llm",
+        "runtime_core_os_http_llm",
+    ];
+
+    let full_path = embed_dir.join("runtime_full");
+    let legacy_path = embed_dir.join("runtime_binary");
+    let fallback = if full_path.exists() {
+        Some(full_path)
+    } else if legacy_path.exists() {
+        Some(legacy_path)
     } else {
-        // Create a placeholder if runtime not built yet (for initial cargo check)
-        let dest_path = PathBuf::from(&out_dir).join("runtime_binary");
-        fs::write(
-            &dest_path,
-            b"PLACEHOLDER - run 'make release' to build properly",
-        )
-        .expect("Failed to write placeholder");
+        None
+    };
 
-        // This will cause a build error if someone tries to use it
-        println!("cargo:warning=Runtime not found! Run 'make release' instead of 'cargo build'");
+    for name in variant_names {
+        let src_path = embed_dir.join(name);
+        let dest_path = out_dir.join(name);
+        if src_path.exists() {
+            fs::copy(&src_path, &dest_path)
+                .unwrap_or_else(|_| panic!("Failed to copy {} to OUT_DIR", name));
+        } else if let Some(fallback_path) = &fallback {
+            fs::copy(fallback_path, &dest_path)
+                .unwrap_or_else(|_| panic!("Failed to copy fallback runtime to {}", name));
+            println!(
+                "cargo:warning=Runtime '{}' missing; using fallback runtime",
+                name
+            );
+        } else {
+            fs::write(
+                &dest_path,
+                b"PLACEHOLDER - run 'make release' to build properly",
+            )
+            .unwrap_or_else(|_| panic!("Failed to write placeholder for {}", name));
+
+            println!(
+                "cargo:warning=Runtime not found! Run 'make release' instead of 'cargo build'"
+            );
+        }
+    }
+
+    // Keep legacy path for tooling that expects runtime_binary
+    let legacy_dest = out_dir.join("runtime_binary");
+    if !legacy_dest.exists() {
+        if let Some(fallback_path) = &fallback {
+            fs::copy(fallback_path, &legacy_dest).expect("Failed to copy legacy runtime_binary");
+        }
     }
 
     // Tell cargo to rerun if runtime changes
     println!("cargo:rerun-if-changed=target/embed/runtime_binary");
+    for name in variant_names {
+        println!("cargo:rerun-if-changed=target/embed/{}", name);
+    }
     println!("cargo:rerun-if-changed=src/bin/runtime.rs");
 }

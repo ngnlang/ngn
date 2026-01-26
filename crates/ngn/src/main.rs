@@ -20,6 +20,170 @@ type ModuleGlobals = Arc<Vec<Value>>;
 type ModuleCacheEntry = (ModuleExports, ModuleGlobals);
 type ModuleCache = HashMap<PathBuf, (ModuleCacheEntry, SystemTime)>;
 
+#[derive(Debug, Clone, Copy, Default)]
+struct ToolboxNeeds {
+    all: bool,
+    http: bool,
+    llm: bool,
+    process: bool,
+    io: bool,
+    math: bool,
+    encoding: bool,
+    test: bool,
+}
+
+const ADDON_OS: u8 = 1 << 0;
+const ADDON_HTTP: u8 = 1 << 1;
+const ADDON_LLM: u8 = 1 << 2;
+
+#[derive(Debug, Clone, Copy)]
+enum RuntimeVariant {
+    Full,
+    Min(u8),
+    Core(u8),
+}
+
+impl RuntimeVariant {
+    fn name(self) -> &'static str {
+        match self {
+            RuntimeVariant::Full => "runtime_full",
+            RuntimeVariant::Min(flags) => match flags {
+                0 => "runtime_min",
+                1 => "runtime_min_os",
+                2 => "runtime_min_http",
+                3 => "runtime_min_os_http",
+                4 => "runtime_min_llm",
+                5 => "runtime_min_os_llm",
+                6 => "runtime_min_http_llm",
+                7 => "runtime_min_os_http_llm",
+                _ => "runtime_min",
+            },
+            RuntimeVariant::Core(flags) => match flags {
+                0 => "runtime_core",
+                1 => "runtime_core_os",
+                2 => "runtime_core_http",
+                3 => "runtime_core_os_http",
+                4 => "runtime_core_llm",
+                5 => "runtime_core_os_llm",
+                6 => "runtime_core_http_llm",
+                7 => "runtime_core_os_http_llm",
+                _ => "runtime_core",
+            },
+        }
+    }
+}
+
+fn runtime_bytes_for(variant: RuntimeVariant) -> &'static [u8] {
+    static RUNTIME_FULL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/runtime_full"));
+
+    static RUNTIME_MIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min"));
+    static RUNTIME_MIN_OS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_os"));
+    static RUNTIME_MIN_HTTP: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_http"));
+    static RUNTIME_MIN_OS_HTTP: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_os_http"));
+    static RUNTIME_MIN_LLM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_llm"));
+    static RUNTIME_MIN_OS_LLM: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_os_llm"));
+    static RUNTIME_MIN_HTTP_LLM: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_http_llm"));
+    static RUNTIME_MIN_OS_HTTP_LLM: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_os_http_llm"));
+
+    static RUNTIME_CORE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core"));
+    static RUNTIME_CORE_OS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_os"));
+    static RUNTIME_CORE_HTTP: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_http"));
+    static RUNTIME_CORE_OS_HTTP: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_os_http"));
+    static RUNTIME_CORE_LLM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_llm"));
+    static RUNTIME_CORE_OS_LLM: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_os_llm"));
+    static RUNTIME_CORE_HTTP_LLM: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_http_llm"));
+    static RUNTIME_CORE_OS_HTTP_LLM: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_os_http_llm"));
+
+    match variant {
+        RuntimeVariant::Full => RUNTIME_FULL,
+        RuntimeVariant::Min(flags) => match flags {
+            0 => RUNTIME_MIN,
+            1 => RUNTIME_MIN_OS,
+            2 => RUNTIME_MIN_HTTP,
+            3 => RUNTIME_MIN_OS_HTTP,
+            4 => RUNTIME_MIN_LLM,
+            5 => RUNTIME_MIN_OS_LLM,
+            6 => RUNTIME_MIN_HTTP_LLM,
+            7 => RUNTIME_MIN_OS_HTTP_LLM,
+            _ => RUNTIME_MIN,
+        },
+        RuntimeVariant::Core(flags) => match flags {
+            0 => RUNTIME_CORE,
+            1 => RUNTIME_CORE_OS,
+            2 => RUNTIME_CORE_HTTP,
+            3 => RUNTIME_CORE_OS_HTTP,
+            4 => RUNTIME_CORE_LLM,
+            5 => RUNTIME_CORE_OS_LLM,
+            6 => RUNTIME_CORE_HTTP_LLM,
+            7 => RUNTIME_CORE_OS_HTTP_LLM,
+            _ => RUNTIME_CORE,
+        },
+    }
+}
+
+fn select_runtime_variant(statements: &[Statement]) -> RuntimeVariant {
+    let mut needs = ToolboxNeeds::default();
+
+    for stmt in statements {
+        let source = match &stmt.kind {
+            StatementKind::Import { source, .. }
+            | StatementKind::ImportDefault { source, .. }
+            | StatementKind::ImportModule { source, .. } => source.as_str(),
+            _ => continue,
+        };
+
+        if source == "tbx" {
+            needs.all = true;
+            continue;
+        }
+
+        let Some(module) = source.strip_prefix("tbx::") else {
+            continue;
+        };
+
+        match module {
+            "http" => needs.http = true,
+            "llm" => needs.llm = true,
+            "process" => needs.process = true,
+            "io" => needs.io = true,
+            "math" => needs.math = true,
+            "encoding" => needs.encoding = true,
+            "test" => needs.test = true,
+            _ => needs.all = true,
+        }
+    }
+
+    if needs.all {
+        return RuntimeVariant::Full;
+    }
+
+    let mut addons = 0u8;
+    if needs.process || needs.io {
+        addons |= ADDON_OS;
+    }
+    if needs.http {
+        addons |= ADDON_HTTP;
+    }
+    if needs.llm {
+        addons |= ADDON_LLM;
+    }
+
+    if needs.math || needs.encoding || needs.test {
+        RuntimeVariant::Core(addons)
+    } else {
+        RuntimeVariant::Min(addons)
+    }
+}
+
 fn main() {
     // Check for "Self-Running" mode
     if let Some((instructions, constants)) = check_for_embedded_bytecode() {
@@ -115,6 +279,12 @@ fn main() {
         }
         statements.push(parser.parse_statement());
     }
+
+    let runtime_variant = if command == "build" {
+        Some(select_runtime_variant(&statements))
+    } else {
+        None
+    };
 
     // 2. Process file imports first (so Analyzer knows about them)
     let mut analyzer = Analyzer::new();
@@ -520,8 +690,8 @@ fn main() {
             let payload_len = bytecode_bytes.len() as u64;
             let magic: u64 = 0x4E474E20;
 
-            // Use embedded runtime binary (VM-only, much smaller than full ngn)
-            let runtime_bytes = include_bytes!(concat!(env!("OUT_DIR"), "/runtime_binary"));
+            let runtime_variant = runtime_variant.unwrap_or(RuntimeVariant::Full);
+            let runtime_bytes = runtime_bytes_for(runtime_variant);
             let mut output_bytes = runtime_bytes.to_vec();
 
             if show_stats {
@@ -533,6 +703,7 @@ fn main() {
                     bytecode_bytes.len(),
                     runtime_len,
                     final_len,
+                    runtime_variant.name(),
                 );
             }
 
@@ -565,6 +736,7 @@ fn print_bytecode_stats(
     payload_bytes: usize,
     runtime_bytes: usize,
     final_bytes: usize,
+    runtime_variant: &str,
 ) {
     let instructions_bytes = bincode::serialize(instructions)
         .map(|bytes| bytes.len())
@@ -631,6 +803,7 @@ fn print_bytecode_stats(
     println!("  payload (tuple): {} bytes", payload_bytes);
     println!("  runtime_binary: {} bytes", runtime_bytes);
     println!("  final output: {} bytes", final_bytes);
+    println!("  runtime variant: {}", runtime_variant);
     println!("  constants by kind (count, bytes):");
     for (kind, count, bytes) in kinds {
         println!("    {:<20} {:>8} {:>12}", kind, count, bytes);
