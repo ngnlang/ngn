@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -20,330 +20,89 @@ type ModuleGlobals = Arc<Vec<Value>>;
 type ModuleCacheEntry = (ModuleExports, ModuleGlobals);
 type ModuleCache = HashMap<PathBuf, (ModuleCacheEntry, SystemTime)>;
 
-#[derive(Debug, Clone, Copy, Default)]
-struct ToolboxNeeds {
-    all: bool,
-    http: bool,
-    llm: bool,
-    process: bool,
-    io: bool,
-    math: bool,
-    encoding: bool,
-    test: bool,
-}
-
-const ADDON_OS: u8 = 1 << 0;
-const ADDON_HTTP: u8 = 1 << 1;
-const ADDON_LLM: u8 = 1 << 2;
-const ADDON_FETCH: u8 = 1 << 3;
-
-#[derive(Debug, Clone, Copy)]
-enum RuntimeVariant {
-    Full,
-    Min(u8),
-    Core(u8),
-}
-
-impl RuntimeVariant {
-    fn name(self) -> &'static str {
-        match self {
-            RuntimeVariant::Full => "runtime_full",
-            RuntimeVariant::Min(flags) => match flags {
-                0 => "runtime_min",
-                1 => "runtime_min_os",
-                2 => "runtime_min_http",
-                3 => "runtime_min_os_http",
-                4 => "runtime_min_llm",
-                5 => "runtime_min_os_llm",
-                6 => "runtime_min_http_llm",
-                7 => "runtime_min_os_http_llm",
-                8 => "runtime_min_fetch",
-                9 => "runtime_min_os_fetch",
-                10 => "runtime_min_http_fetch",
-                11 => "runtime_min_os_http_fetch",
-                12 => "runtime_min_llm_fetch",
-                13 => "runtime_min_os_llm_fetch",
-                14 => "runtime_min_http_llm_fetch",
-                15 => "runtime_min_os_http_llm_fetch",
-                _ => "runtime_min",
-            },
-            RuntimeVariant::Core(flags) => match flags {
-                0 => "runtime_core",
-                1 => "runtime_core_os",
-                2 => "runtime_core_http",
-                3 => "runtime_core_os_http",
-                4 => "runtime_core_llm",
-                5 => "runtime_core_os_llm",
-                6 => "runtime_core_http_llm",
-                7 => "runtime_core_os_http_llm",
-                8 => "runtime_core_fetch",
-                9 => "runtime_core_os_fetch",
-                10 => "runtime_core_http_fetch",
-                11 => "runtime_core_os_http_fetch",
-                12 => "runtime_core_llm_fetch",
-                13 => "runtime_core_os_llm_fetch",
-                14 => "runtime_core_http_llm_fetch",
-                15 => "runtime_core_os_http_llm_fetch",
-                _ => "runtime_core",
-            },
-        }
-    }
-}
-
-fn runtime_bytes_for(variant: RuntimeVariant) -> &'static [u8] {
-    static RUNTIME_FULL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/runtime_full"));
-
-    static RUNTIME_MIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min"));
-    static RUNTIME_MIN_OS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_os"));
-    static RUNTIME_MIN_HTTP: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_http"));
-    static RUNTIME_MIN_OS_HTTP: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_os_http"));
-    static RUNTIME_MIN_LLM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_llm"));
-    static RUNTIME_MIN_OS_LLM: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_os_llm"));
-    static RUNTIME_MIN_HTTP_LLM: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_http_llm"));
-    static RUNTIME_MIN_OS_HTTP_LLM: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_os_http_llm"));
-    static RUNTIME_MIN_FETCH: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_fetch"));
-    static RUNTIME_MIN_OS_FETCH: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_os_fetch"));
-    static RUNTIME_MIN_HTTP_FETCH: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_http_fetch"));
-    static RUNTIME_MIN_OS_HTTP_FETCH: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_os_http_fetch"));
-    static RUNTIME_MIN_LLM_FETCH: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_llm_fetch"));
-    static RUNTIME_MIN_OS_LLM_FETCH: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_os_llm_fetch"));
-    static RUNTIME_MIN_HTTP_LLM_FETCH: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_http_llm_fetch"));
-    static RUNTIME_MIN_OS_HTTP_LLM_FETCH: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_min_os_http_llm_fetch"));
-
-    static RUNTIME_CORE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core"));
-    static RUNTIME_CORE_OS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_os"));
-    static RUNTIME_CORE_HTTP: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_http"));
-    static RUNTIME_CORE_OS_HTTP: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_os_http"));
-    static RUNTIME_CORE_LLM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_llm"));
-    static RUNTIME_CORE_OS_LLM: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_os_llm"));
-    static RUNTIME_CORE_HTTP_LLM: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_http_llm"));
-    static RUNTIME_CORE_OS_HTTP_LLM: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_os_http_llm"));
-    static RUNTIME_CORE_FETCH: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_fetch"));
-    static RUNTIME_CORE_OS_FETCH: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_os_fetch"));
-    static RUNTIME_CORE_HTTP_FETCH: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_http_fetch"));
-    static RUNTIME_CORE_OS_HTTP_FETCH: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_os_http_fetch"));
-    static RUNTIME_CORE_LLM_FETCH: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_llm_fetch"));
-    static RUNTIME_CORE_OS_LLM_FETCH: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_os_llm_fetch"));
-    static RUNTIME_CORE_HTTP_LLM_FETCH: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_http_llm_fetch"));
-    static RUNTIME_CORE_OS_HTTP_LLM_FETCH: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/runtime_core_os_http_llm_fetch"));
-
-    match variant {
-        RuntimeVariant::Full => RUNTIME_FULL,
-        RuntimeVariant::Min(flags) => match flags {
-            0 => RUNTIME_MIN,
-            1 => RUNTIME_MIN_OS,
-            2 => RUNTIME_MIN_HTTP,
-            3 => RUNTIME_MIN_OS_HTTP,
-            4 => RUNTIME_MIN_LLM,
-            5 => RUNTIME_MIN_OS_LLM,
-            6 => RUNTIME_MIN_HTTP_LLM,
-            7 => RUNTIME_MIN_OS_HTTP_LLM,
-            8 => RUNTIME_MIN_FETCH,
-            9 => RUNTIME_MIN_OS_FETCH,
-            10 => RUNTIME_MIN_HTTP_FETCH,
-            11 => RUNTIME_MIN_OS_HTTP_FETCH,
-            12 => RUNTIME_MIN_LLM_FETCH,
-            13 => RUNTIME_MIN_OS_LLM_FETCH,
-            14 => RUNTIME_MIN_HTTP_LLM_FETCH,
-            15 => RUNTIME_MIN_OS_HTTP_LLM_FETCH,
-            _ => RUNTIME_MIN,
-        },
-        RuntimeVariant::Core(flags) => match flags {
-            0 => RUNTIME_CORE,
-            1 => RUNTIME_CORE_OS,
-            2 => RUNTIME_CORE_HTTP,
-            3 => RUNTIME_CORE_OS_HTTP,
-            4 => RUNTIME_CORE_LLM,
-            5 => RUNTIME_CORE_OS_LLM,
-            6 => RUNTIME_CORE_HTTP_LLM,
-            7 => RUNTIME_CORE_OS_HTTP_LLM,
-            8 => RUNTIME_CORE_FETCH,
-            9 => RUNTIME_CORE_OS_FETCH,
-            10 => RUNTIME_CORE_HTTP_FETCH,
-            11 => RUNTIME_CORE_OS_HTTP_FETCH,
-            12 => RUNTIME_CORE_LLM_FETCH,
-            13 => RUNTIME_CORE_OS_LLM_FETCH,
-            14 => RUNTIME_CORE_HTTP_LLM_FETCH,
-            15 => RUNTIME_CORE_OS_HTTP_LLM_FETCH,
-            _ => RUNTIME_CORE,
-        },
-    }
-}
-
-fn select_runtime_variant(statements: &[Statement]) -> RuntimeVariant {
-    let mut needs = ToolboxNeeds::default();
-    let needs_fetch;
-
-    for stmt in statements {
-        let source = match &stmt.kind {
-            StatementKind::Import { source, .. }
-            | StatementKind::ImportDefault { source, .. }
-            | StatementKind::ImportModule { source, .. } => source.as_str(),
-            _ => continue,
-        };
-
-        if source == "tbx" {
-            needs.all = true;
-            continue;
-        }
-
-        let Some(module) = source.strip_prefix("tbx::") else {
-            continue;
-        };
-
-        match module {
-            "http" => needs.http = true,
-            "llm" => needs.llm = true,
-            "process" => needs.process = true,
-            "io" => needs.io = true,
-            "math" => needs.math = true,
-            "encoding" => needs.encoding = true,
-            "test" => needs.test = true,
-            _ => needs.all = true,
-        }
-    }
-
-    needs_fetch = statements.iter().any(statement_uses_fetch);
-
-    if needs.all {
-        return RuntimeVariant::Full;
-    }
-
-    let mut addons = 0u8;
-    if needs.process || needs.io {
-        addons |= ADDON_OS;
-    }
-    if needs.http {
-        addons |= ADDON_HTTP;
-    }
-    if needs.llm {
-        addons |= ADDON_LLM;
-    }
-    if needs_fetch {
-        addons |= ADDON_FETCH;
-    }
-
-    if needs.math || needs.encoding || needs.test {
-        RuntimeVariant::Core(addons)
+fn runtime_binary_name() -> &'static str {
+    if cfg!(windows) {
+        "ngnr.exe"
     } else {
-        RuntimeVariant::Min(addons)
+        "ngnr"
     }
 }
 
-fn statement_uses_fetch(stmt: &Statement) -> bool {
-    match &stmt.kind {
-        StatementKind::Declaration { value, .. } => expr_uses_fetch(value),
-        StatementKind::DestructureObject { value, .. } => expr_uses_fetch(value),
-        StatementKind::DestructureArray { value, .. } => expr_uses_fetch(value),
-        StatementKind::DestructureTuple { value, .. } => expr_uses_fetch(value),
-        StatementKind::Expression(expr) => expr_uses_fetch(expr),
-        StatementKind::Function { body, .. } => body.iter().any(statement_uses_fetch),
-        StatementKind::ExportDefault(expr) => expr_uses_fetch(expr),
-        StatementKind::Print(expr) => expr_uses_fetch(expr),
-        StatementKind::Echo(expr) => expr_uses_fetch(expr),
-        StatementKind::Sleep(expr) => expr_uses_fetch(expr),
-        StatementKind::Block(statements) => statements.iter().any(statement_uses_fetch),
-        StatementKind::If {
-            condition,
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            expr_uses_fetch(condition)
-                || statement_uses_fetch(then_branch)
-                || else_branch
-                    .as_ref()
-                    .map(|stmt| statement_uses_fetch(stmt))
-                    .unwrap_or(false)
+fn find_runtime_binary() -> Option<PathBuf> {
+    if let Ok(path) = env::var("NGN_RUNTIME_BIN") {
+        let candidate = PathBuf::from(path);
+        if candidate.exists() {
+            return Some(candidate);
         }
-        StatementKind::Check {
-            source,
-            failure_block,
-            ..
-        } => expr_uses_fetch(source) || statement_uses_fetch(failure_block),
-        StatementKind::While {
-            condition, body, ..
-        } => expr_uses_fetch(condition) || statement_uses_fetch(body),
-        StatementKind::Loop(body) => statement_uses_fetch(body),
-        StatementKind::For { iterable, body, .. } => {
-            expr_uses_fetch(iterable) || statement_uses_fetch(body)
-        }
-        StatementKind::Match { condition, arms } => {
-            expr_uses_fetch(condition)
-                || arms.iter().any(|arm| {
-                    arm.patterns.iter().any(pattern_uses_fetch) || statement_uses_fetch(&arm.body)
-                })
-        }
-        StatementKind::Return(expr) => expr.as_ref().map(expr_uses_fetch).unwrap_or(false),
-        StatementKind::Role(role) => role.methods.iter().any(statement_uses_fetch),
-        StatementKind::Extend { methods, .. } => methods.iter().any(statement_uses_fetch),
-        _ => false,
     }
+
+    if let Ok(exe_path) = env::current_exe() {
+        if let Some(parent) = exe_path.parent() {
+            let candidate = parent.join(runtime_binary_name());
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    if let Ok(paths) = env::var("PATH") {
+        for path in env::split_paths(&paths) {
+            let candidate = path.join(runtime_binary_name());
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
 }
 
-fn pattern_uses_fetch(pattern: &ngn::parser::Pattern) -> bool {
-    match pattern {
-        ngn::parser::Pattern::Literal(expr) => expr_uses_fetch(expr),
-        _ => false,
-    }
+fn require_runtime_binary() -> PathBuf {
+    find_runtime_binary().unwrap_or_else(|| {
+        eprintln!("ngn Error: runtime binary not found");
+        eprintln!("  Install ngnr or set NGN_RUNTIME_BIN");
+        std::process::exit(1);
+    })
 }
 
-fn expr_uses_fetch(expr: &Expr) -> bool {
-    match &expr.kind {
-        ExprKind::Call { name, args } => name == "fetch" || args.iter().any(expr_uses_fetch),
-        ExprKind::Assign { value, .. } => expr_uses_fetch(value),
-        ExprKind::FieldAssign { object, value, .. } => {
-            expr_uses_fetch(object) || expr_uses_fetch(value)
+fn read_runtime_bytes() -> Vec<u8> {
+    if let Some(path) = find_runtime_binary() {
+        if let Ok(bytes) = fs::read(&path) {
+            return bytes;
         }
-        ExprKind::Binary { left, right, .. } => expr_uses_fetch(left) || expr_uses_fetch(right),
-        ExprKind::Array(items) => items.iter().any(expr_uses_fetch),
-        ExprKind::Tuple(items) => items.iter().any(expr_uses_fetch),
-        ExprKind::InterpolatedString(items) => items.iter().any(expr_uses_fetch),
-        ExprKind::EnumVariant { args, .. } => args.iter().any(expr_uses_fetch),
-        ExprKind::Closure { body, .. } => statement_uses_fetch(body),
-        ExprKind::Thread(expr) => expr_uses_fetch(expr),
-        ExprKind::Send(lhs, rhs) => expr_uses_fetch(lhs) || expr_uses_fetch(rhs),
-        ExprKind::Receive(expr) => expr_uses_fetch(expr),
-        ExprKind::ReceiveCount(lhs, rhs) => expr_uses_fetch(lhs) || expr_uses_fetch(rhs),
-        ExprKind::ReceiveMaybe(expr) => expr_uses_fetch(expr),
-        ExprKind::State(expr) => expr_uses_fetch(expr),
-        ExprKind::Bytes(expr) => expr.as_ref().map(|v| expr_uses_fetch(v)).unwrap_or(false),
-        ExprKind::MethodCall(object, _, args) | ExprKind::OptionalMethodCall(object, _, args) => {
-            expr_uses_fetch(object) || args.iter().any(expr_uses_fetch)
-        }
-        ExprKind::Index(lhs, rhs) => expr_uses_fetch(lhs) || expr_uses_fetch(rhs),
-        ExprKind::Unary { right, .. } => expr_uses_fetch(right),
-        ExprKind::ModelInstance { fields, .. } => fields.iter().any(|(_, v)| expr_uses_fetch(v)),
-        ExprKind::FieldAccess { object, .. } | ExprKind::OptionalFieldAccess { object, .. } => {
-            expr_uses_fetch(object)
-        }
-        ExprKind::Object(fields) => fields.iter().any(|(_, v)| expr_uses_fetch(v)),
-        _ => false,
+    }
+
+    include_bytes!(concat!(env!("OUT_DIR"), "/runtime_binary")).to_vec()
+}
+
+fn write_temp_mod(payload: &[u8]) -> PathBuf {
+    let mut path = env::temp_dir();
+    let stamp = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let pid = std::process::id();
+    path.push(format!("ngn-{}-{}.mod", pid, stamp));
+    fs::write(&path, payload).expect("Failed to write temporary bytecode file");
+    path
+}
+
+fn run_mod_with_runtime(path: &Path, working_dir: Option<&Path>) -> std::process::ExitStatus {
+    let runtime = require_runtime_binary();
+    let mut command = std::process::Command::new(runtime);
+    command.arg(path);
+    if let Some(dir) = working_dir {
+        command.env("NGN_WORKDIR", dir);
+    }
+    command.status().expect("Failed to run runtime")
+}
+
+fn run_payload_with_runtime(payload: &[u8], working_dir: &Path) {
+    let temp_path = write_temp_mod(payload);
+    let status = run_mod_with_runtime(&temp_path, Some(working_dir));
+    let _ = fs::remove_file(&temp_path);
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
     }
 }
 
@@ -359,10 +118,18 @@ fn main() {
 
     let args: Vec<String> = env::args().collect();
 
+    if args.len() == 2 {
+        let flag = args[1].as_str();
+        if flag == "--version" || flag == "-V" {
+            println!("{}", env!("CARGO_PKG_VERSION"));
+            return;
+        }
+    }
+
     if args.len() < 3 {
         println!("Usage:");
         println!("  ngn run <file.ngn>           - Compile and run immediately");
-        println!("  ngn build <file.ngn> [--stats]  - Compile to bytecode file");
+        println!("  ngn build <file.ngn> [--bundle] [--stats]  - Compile to .mod or bundle");
         return;
     }
 
@@ -372,16 +139,13 @@ fn main() {
     let show_stats = flags
         .iter()
         .any(|flag| flag == "--stats" || flag == "--size-report" || flag == "--report-size");
+    let bundle = flags.iter().any(|flag| flag == "--bundle");
 
     if filename.ends_with(".mod") {
-        let bytes = fs::read(filename).expect("Could not read binary file");
-
-        // Deserialize the (Instructions, Constants) tuple we saved earlier
-        let (instructions, constants): (Vec<OpCode>, Vec<Value>) =
-            bincode::deserialize(&bytes).expect("Failed to deserialize bytecode");
-
-        let mut vm = VM::new(instructions, constants, 0);
-        vm.run();
+        let status = run_mod_with_runtime(Path::new(filename), None);
+        if !status.success() {
+            std::process::exit(status.code().unwrap_or(1));
+        }
         return;
     }
 
@@ -442,12 +206,6 @@ fn main() {
         }
         statements.push(parser.parse_statement());
     }
-
-    let runtime_variant = if command == "build" {
-        Some(select_runtime_variant(&statements))
-    } else {
-        None
-    };
 
     // 2. Process file imports first (so Analyzer knows about them)
     let mut analyzer = Analyzer::new();
@@ -825,15 +583,17 @@ fn main() {
                 panic!("ngn Error: No main() function or HTTP handler defined!");
             }
 
-            let mut my_vm = VM::new(
-                final_instructions,
-                compiler.constants.clone(),
-                compiler.next_index,
-            );
-            my_vm.run();
+            let payload = (final_instructions, compiler.constants.clone());
+            let bytecode_bytes = bincode::serialize(&payload).unwrap();
+            run_payload_with_runtime(&bytecode_bytes, working_dir);
         }
         "build" => {
-            let output_name = filename.replace(".ngn", "");
+            let base_name = filename.replace(".ngn", "");
+            let output_name = if bundle {
+                base_name.clone()
+            } else {
+                format!("{}.mod", base_name)
+            };
             let mut final_instructions = compiler.instructions.clone();
 
             // Add the bootstrap call (main or ServeHttp)
@@ -850,44 +610,59 @@ fn main() {
             // Serialize bytecode
             let payload = (final_instructions, compiler.constants.clone());
             let bytecode_bytes = bincode::serialize(&payload).unwrap();
-            let payload_len = bytecode_bytes.len() as u64;
-            let magic: u64 = 0x4E474E20;
+            if bundle {
+                let payload_len = bytecode_bytes.len() as u64;
+                let magic: u64 = 0x4E474E20;
 
-            let runtime_variant = runtime_variant.unwrap_or(RuntimeVariant::Full);
-            let runtime_bytes = runtime_bytes_for(runtime_variant);
-            let mut output_bytes = runtime_bytes.to_vec();
+                let runtime_bytes = read_runtime_bytes();
+                let mut output_bytes = runtime_bytes.to_vec();
 
-            if show_stats {
-                let runtime_len = runtime_bytes.len();
-                let final_len = runtime_len + payload_len as usize + 16;
-                print_bytecode_stats(
-                    &payload.0,
-                    &payload.1,
-                    bytecode_bytes.len(),
-                    runtime_len,
-                    final_len,
-                    runtime_variant.name(),
-                );
+                if show_stats {
+                    let runtime_len = runtime_bytes.len();
+                    let final_len = runtime_len + payload_len as usize + 16;
+                    print_bytecode_stats(
+                        &payload.0,
+                        &payload.1,
+                        bytecode_bytes.len(),
+                        runtime_len,
+                        final_len,
+                    );
+                }
+
+                // Append bytecode and footer
+                output_bytes.extend(bytecode_bytes);
+                output_bytes.extend(magic.to_le_bytes());
+                output_bytes.extend(payload_len.to_le_bytes());
+
+                // Write the final binary
+                std::fs::write(&output_name, output_bytes).expect("Failed to write binary");
+
+                // Make it executable (On Linux/Mac)
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mut perms = std::fs::metadata(&output_name).unwrap().permissions();
+                    perms.set_mode(0o755);
+                    std::fs::set_permissions(&output_name, perms).unwrap();
+                }
+
+                println!("Built ngn bundle: {}", output_name);
+            } else {
+                if show_stats {
+                    let final_len = bytecode_bytes.len();
+                    print_bytecode_stats(
+                        &payload.0,
+                        &payload.1,
+                        bytecode_bytes.len(),
+                        0,
+                        final_len,
+                    );
+                }
+
+                std::fs::write(&output_name, bytecode_bytes)
+                    .expect("Failed to write bytecode file");
+                println!("Built ngn module: {}", output_name);
             }
-
-            // Append bytecode and footer
-            output_bytes.extend(bytecode_bytes);
-            output_bytes.extend(magic.to_le_bytes());
-            output_bytes.extend(payload_len.to_le_bytes());
-
-            // Write the final binary
-            std::fs::write(&output_name, output_bytes).expect("Failed to write binary");
-
-            // Make it executable (On Linux/Mac)
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let mut perms = std::fs::metadata(&output_name).unwrap().permissions();
-                perms.set_mode(0o755);
-                std::fs::set_permissions(&output_name, perms).unwrap();
-            }
-
-            println!("Built ngn: {}", output_name);
         }
         _ => println!("Unknown command: {}", command),
     }
@@ -899,7 +674,6 @@ fn print_bytecode_stats(
     payload_bytes: usize,
     runtime_bytes: usize,
     final_bytes: usize,
-    runtime_variant: &str,
 ) {
     let instructions_bytes = bincode::serialize(instructions)
         .map(|bytes| bytes.len())
@@ -966,7 +740,6 @@ fn print_bytecode_stats(
     println!("  payload (tuple): {} bytes", payload_bytes);
     println!("  runtime_binary: {} bytes", runtime_bytes);
     println!("  final output: {} bytes", final_bytes);
-    println!("  runtime variant: {}", runtime_variant);
     println!("  constants by kind (count, bytes):");
     for (kind, count, bytes) in kinds {
         println!("    {:<20} {:>8} {:>12}", kind, count, bytes);

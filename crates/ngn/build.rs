@@ -346,90 +346,22 @@ fn copy_runtime_binaries() {
         .join("target")
         .join("embed");
 
-    let variant_names = [
-        "runtime_full",
-        "runtime_min",
-        "runtime_min_os",
-        "runtime_min_http",
-        "runtime_min_os_http",
-        "runtime_min_llm",
-        "runtime_min_os_llm",
-        "runtime_min_http_llm",
-        "runtime_min_os_http_llm",
-        "runtime_min_fetch",
-        "runtime_min_os_fetch",
-        "runtime_min_http_fetch",
-        "runtime_min_os_http_fetch",
-        "runtime_min_llm_fetch",
-        "runtime_min_os_llm_fetch",
-        "runtime_min_http_llm_fetch",
-        "runtime_min_os_http_llm_fetch",
-        "runtime_core",
-        "runtime_core_os",
-        "runtime_core_http",
-        "runtime_core_os_http",
-        "runtime_core_llm",
-        "runtime_core_os_llm",
-        "runtime_core_http_llm",
-        "runtime_core_os_http_llm",
-        "runtime_core_fetch",
-        "runtime_core_os_fetch",
-        "runtime_core_http_fetch",
-        "runtime_core_os_http_fetch",
-        "runtime_core_llm_fetch",
-        "runtime_core_os_llm_fetch",
-        "runtime_core_http_llm_fetch",
-        "runtime_core_os_http_llm_fetch",
-    ];
+    let src_path = embed_dir.join("ngnr");
+    let dest_path = out_dir.join("runtime_binary");
 
-    let full_path = embed_dir.join("runtime_full");
-    let legacy_path = embed_dir.join("runtime_binary");
-    let fallback = if full_path.exists() {
-        Some(full_path)
-    } else if legacy_path.exists() {
-        Some(legacy_path)
+    if src_path.exists() {
+        fs::copy(&src_path, &dest_path).expect("Failed to copy ngnr to OUT_DIR");
     } else {
-        None
-    };
+        fs::write(
+            &dest_path,
+            b"PLACEHOLDER - run 'make runtime' to build properly",
+        )
+        .expect("Failed to write placeholder runtime_binary");
 
-    for name in variant_names {
-        let src_path = embed_dir.join(name);
-        let dest_path = out_dir.join(name);
-        if src_path.exists() {
-            fs::copy(&src_path, &dest_path)
-                .unwrap_or_else(|_| panic!("Failed to copy {} to OUT_DIR", name));
-        } else if let Some(fallback_path) = &fallback {
-            fs::copy(fallback_path, &dest_path)
-                .unwrap_or_else(|_| panic!("Failed to copy fallback runtime to {}", name));
-            println!(
-                "cargo:warning=Runtime '{}' missing; using fallback runtime",
-                name
-            );
-        } else {
-            fs::write(
-                &dest_path,
-                b"PLACEHOLDER - run 'make release' to build properly",
-            )
-            .unwrap_or_else(|_| panic!("Failed to write placeholder for {}", name));
-
-            println!(
-                "cargo:warning=Runtime not found! Run 'make release' instead of 'cargo build'"
-            );
-        }
-    }
-
-    // Keep legacy path for tooling that expects runtime_binary
-    let legacy_dest = out_dir.join("runtime_binary");
-    if !legacy_dest.exists() {
-        if let Some(fallback_path) = &fallback {
-            fs::copy(fallback_path, &legacy_dest).expect("Failed to copy legacy runtime_binary");
-        }
+        println!("cargo:warning=Runtime not found! Run 'make runtime' instead of 'cargo build'");
     }
 
     // Tell cargo to rerun if runtime changes
-    println!("cargo:rerun-if-changed=target/embed/runtime_binary");
-    for name in variant_names {
-        println!("cargo:rerun-if-changed=target/embed/{}", name);
-    }
+    println!("cargo:rerun-if-changed=target/embed/ngnr");
     println!("cargo:rerun-if-changed=src/bin/runtime.rs");
 }
