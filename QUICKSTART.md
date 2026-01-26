@@ -20,7 +20,25 @@ A modern, expressive programming language designed for **building APIs** and **A
 
 ## 🚀 Quick Start
 
+### Install
+
+```bash
+# NOT AVAILABLE YET
+curl -fsSL https://ngnlang.com/install | sh
+
+# Or install to a custom directory
+NGN_INSTALL_DIR=$HOME/bin curl -fsSL https://ngnlang.com/install | sh
+
+ngn --version
+```
+
 ### Hello, World
+
+```bash
+mkdir ngn && cd ngn
+# Open the ngn directory in your code editor of choice
+# Create a new file named `main.ngn`
+```
 
 Every ngn program starts with a `main()` function:
 
@@ -488,11 +506,15 @@ import { read, write } from "tbx::io"
 ## 🏃 Running Your Code
 
 ```bash
-# Run directly
+# Run directly (requires ngnr in PATH)
 ngn run main.ngn
 
-# Build an executable
+# Build a mod
 ngn build main.ngn
+ngnr main.mod
+
+# Build a standalone binary
+ngn build main.ngn --bundle
 ./main
 ```
 

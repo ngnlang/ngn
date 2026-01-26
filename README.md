@@ -4,6 +4,18 @@ Pronounced "engine".
 
 An expressive and easy to use high-level programming language.
 
+## Install
+
+```bash
+# NOT AVAILABLE YET
+curl -fsSL https://ngnlang.com/install | sh
+
+# Or install to a custom directory
+NGN_INSTALL_DIR=$HOME/bin curl -fsSL https://ngnlang.com/install | sh
+
+ngn --version
+```
+
 Checkout the [Quickstart](QUICKSTART.md) for an overview of the language, otherwise, proceed.
 
 ## Status
