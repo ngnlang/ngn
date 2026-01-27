@@ -54,10 +54,12 @@ pub enum OpCode {
     IterNext(u16, u16, usize), // (ValueReg, IterReg, JumpOffset)
 
     // Data Structures
-    BuildArray(u16, u16, usize), // (DestReg, StartReg, Count)
-    BuildTuple(u16, u16, usize), // (DestReg, StartReg, Count)
-    CreateMap(u16),              // (DestReg) - creates empty HashMap
-    CreateSet(u16),              // (DestReg) - creates empty HashSet
+    BuildArray(u16, u16, usize),      // (DestReg, StartReg, Count)
+    BuildTuple(u16, u16, usize),      // (DestReg, StartReg, Count)
+    CreateMap(u16),                   // (DestReg) - creates empty HashMap
+    CreateSet(u16),                   // (DestReg) - creates empty HashSet
+    CreateRange(u16, u16, u16, bool), // (DestReg, StartReg, EndReg, Inclusive)
+    RangeToArray(u16, u16),           // (DestReg, RangeReg)
 
     // Enums
     CreateEnum(u16, usize, u16, u8), // (DestReg, NamesConstIdx, StartReg, Count)

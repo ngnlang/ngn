@@ -1,6 +1,6 @@
 use crate::blocking_pool::{global_blocking_pool, global_cpu_pool};
 use crate::bytecode::OpCode;
-use crate::value::{Channel, Closure, EnumData, Function, ObjectData, Value};
+use crate::value::{Channel, Closure, EnumData, Function, Number, ObjectData, RangeData, Value};
 use regex::Regex as RegexLib;
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -190,6 +190,25 @@ impl Fiber {
                 idx,
                 other.type_name()
             ),
+        }
+    }
+
+    fn expect_integer_value(&self, val: &Value) -> i64 {
+        match val {
+            Value::Numeric(Number::I64(v)) => *v,
+            Value::Numeric(Number::I32(v)) => *v as i64,
+            Value::Numeric(Number::I16(v)) => *v as i64,
+            Value::Numeric(Number::I8(v)) => *v as i64,
+            Value::Numeric(Number::U64(v)) => {
+                if *v > i64::MAX as u64 {
+                    panic!("Runtime Error: Range bound out of i64 range");
+                }
+                *v as i64
+            }
+            Value::Numeric(Number::U32(v)) => *v as i64,
+            Value::Numeric(Number::U16(v)) => *v as i64,
+            Value::Numeric(Number::U8(v)) => *v as i64,
+            _ => panic!("Runtime Error: Range bounds must be integers"),
         }
     }
 
@@ -578,24 +597,23 @@ impl Fiber {
                 let src = self.get_reg_at(src_reg);
                 self.set_reg_at(iter_reg, src.clone());
                 if let Value::Channel(_) = src {
-                    self.set_reg_at(iter_reg + 1, Value::Numeric(crate::value::Number::I64(-1)));
+                    self.set_reg_at(iter_reg + 1, Value::Numeric(Number::I64(-1)));
+                } else if let Value::Range(r) = src {
+                    self.set_reg_at(iter_reg + 1, Value::Numeric(Number::I64(r.start)));
                 } else {
-                    self.set_reg_at(iter_reg + 1, Value::Numeric(crate::value::Number::I64(0)));
+                    self.set_reg_at(iter_reg + 1, Value::Numeric(Number::I64(0)));
                 }
             }
             OpCode::IterNext(dest, iter_reg, jump_offset) => {
                 let collection = self.get_reg_at(iter_reg);
                 let index_val = self.get_reg_at(iter_reg + 1);
 
-                if let Value::Numeric(crate::value::Number::I64(idx)) = index_val {
+                if let Value::Numeric(Number::I64(idx)) = index_val {
                     match collection {
                         Value::Array(items) => {
                             if (idx as usize) < items.len() {
                                 self.set_reg_at(dest, items[idx as usize].clone());
-                                self.set_reg_at(
-                                    iter_reg + 1,
-                                    Value::Numeric(crate::value::Number::I64(idx + 1)),
-                                );
+                                self.set_reg_at(iter_reg + 1, Value::Numeric(Number::I64(idx + 1)));
                             } else {
                                 self.ip = jump_offset;
                             }
@@ -603,10 +621,7 @@ impl Fiber {
                         Value::Tuple(items) => {
                             if (idx as usize) < items.len() {
                                 self.set_reg_at(dest, items[idx as usize].clone());
-                                self.set_reg_at(
-                                    iter_reg + 1,
-                                    Value::Numeric(crate::value::Number::I64(idx + 1)),
-                                );
+                                self.set_reg_at(iter_reg + 1, Value::Numeric(Number::I64(idx + 1)));
                             } else {
                                 self.ip = jump_offset;
                             }
@@ -627,10 +642,21 @@ impl Fiber {
                         Value::Set(items) => {
                             if let Some(val) = items.get_index(idx as usize) {
                                 self.set_reg_at(dest, val.clone());
-                                self.set_reg_at(
-                                    iter_reg + 1,
-                                    Value::Numeric(crate::value::Number::I64(idx + 1)),
-                                );
+                                self.set_reg_at(iter_reg + 1, Value::Numeric(Number::I64(idx + 1)));
+                            } else {
+                                self.ip = jump_offset;
+                            }
+                        }
+                        Value::Range(range) => {
+                            let end = range.end;
+                            let in_range = if range.inclusive {
+                                idx <= end
+                            } else {
+                                idx < end
+                            };
+                            if in_range {
+                                self.set_reg_at(dest, Value::Numeric(Number::I64(idx)));
+                                self.set_reg_at(iter_reg + 1, Value::Numeric(Number::I64(idx + 1)));
                             } else {
                                 self.ip = jump_offset;
                             }
@@ -726,6 +752,41 @@ impl Fiber {
                     arr.push(self.get_reg_at(start + i as u16));
                 }
                 self.set_reg_at(dest, Value::Array(arr));
+            }
+            OpCode::CreateRange(dest, start_reg, end_reg, inclusive) => {
+                let start_val = self.get_reg_at(start_reg);
+                let end_val = self.get_reg_at(end_reg);
+                let start = self.expect_integer_value(&start_val);
+                let end = self.expect_integer_value(&end_val);
+                self.set_reg_at(
+                    dest,
+                    Value::Range(Box::new(RangeData {
+                        start,
+                        end,
+                        inclusive,
+                    })),
+                );
+            }
+            OpCode::RangeToArray(dest, range_reg) => {
+                let range_val = self.get_reg_at(range_reg);
+                let Value::Range(range) = range_val else {
+                    panic!("Runtime Error: RangeToArray expects a range");
+                };
+                let mut out = Vec::new();
+                let mut current = range.start;
+                let end = range.end;
+                if range.inclusive {
+                    while current <= end {
+                        out.push(Value::Numeric(Number::I64(current)));
+                        current += 1;
+                    }
+                } else {
+                    while current < end {
+                        out.push(Value::Numeric(Number::I64(current)));
+                        current += 1;
+                    }
+                }
+                self.set_reg_at(dest, Value::Array(out));
             }
             OpCode::BuildTuple(dest, start, count) => {
                 let mut tup = Vec::new();

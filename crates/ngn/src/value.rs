@@ -645,6 +645,13 @@ impl StreamingResponseData {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RangeData {
+    pub start: i64,
+    pub end: i64,
+    pub inclusive: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[allow(dead_code)]
 pub enum Value {
     Bool(bool),
@@ -663,6 +670,7 @@ pub enum Value {
     Object(Box<ObjectData>),
     Map(std::collections::HashMap<Value, Value>),
     Set(indexmap::IndexSet<Value>),
+    Range(Box<RangeData>),
     Response(Box<ResponseData>),
     StreamingResponse(Box<StreamingResponseData>),
     SseResponse(Box<SseResponseData>),
@@ -873,6 +881,9 @@ impl Value {
                 }
                 true
             }
+            (Value::Range(r1), Value::Range(r2)) => {
+                r1.start == r2.start && r1.end == r2.end && r1.inclusive == r2.inclusive
+            }
             (Value::Void, Value::Void) => true,
             (Value::Regex(a), Value::Regex(b)) => a == b,
             _ => false,
@@ -904,6 +915,7 @@ impl Value {
             Value::Enum(e) => &e.enum_name,
             Value::Map(_) => "map",
             Value::Set(_) => "set",
+            Value::Range(_) => "range",
             Value::Function(_) | Value::Closure(_) | Value::NativeFunction(_) => "function",
             Value::Response(_) => "Response",
             Value::StreamingResponse(_) => "StreamingResponse",
@@ -999,6 +1011,13 @@ impl fmt::Display for Value {
                     first = false;
                 }
                 write!(f, "}}")
+            }
+            Value::Range(r) => {
+                if r.inclusive {
+                    write!(f, "{}..{}", r.start, r.end)
+                } else {
+                    write!(f, "{}..<{}", r.start, r.end)
+                }
             }
             Value::Void => write!(f, "void"),
             Value::Regex(r) => write!(f, "/{}/", r),
@@ -1115,6 +1134,9 @@ impl std::hash::Hash for Value {
             }
             Value::Map(_) => panic!("Runtime Error: Maps cannot be used as map keys or set values"),
             Value::Set(_) => panic!("Runtime Error: Sets cannot be used as map keys or set values"),
+            Value::Range(_) => {
+                panic!("Runtime Error: Ranges cannot be used as map keys or set values")
+            }
             Value::Reference(_, _) => {
                 panic!("Runtime Error: References cannot be used as map keys or set values")
             }

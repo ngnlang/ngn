@@ -703,6 +703,7 @@ fn print_bytecode_stats(
             Value::Object(_) => "Object",
             Value::Map(_) => "Map",
             Value::Set(_) => "Set",
+            Value::Range(_) => "Range",
             Value::Response(_) => "Response",
             Value::StreamingResponse(_) => "StreamingResponse",
             Value::SseResponse(_) => "SseResponse",

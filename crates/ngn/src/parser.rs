@@ -33,7 +33,8 @@ pub enum Type {
     Map(Box<Type>, Box<Type>),
     Set(Box<Type>),
     Regex,
-    Number,            // Generic number type for extends
+    Number, // Generic number type for extends
+    Range(Box<Type>),
     Json,              // Built-in json module type
     Spawn,             // Built-in spawn module type
     Env,               // Built-in env module type for environment variables
@@ -62,6 +63,7 @@ impl std::fmt::Display for Type {
             Type::Any => write!(f, "any"),
             Type::Regex => write!(f, "regex"),
             Type::Number => write!(f, "number"),
+            Type::Range(inner) => write!(f, "range<{}>", inner),
             Type::Json => write!(f, "json"),
             Type::Spawn => write!(f, "spawn"),
             Type::Env => write!(f, "env"),
@@ -130,6 +132,11 @@ pub enum Pattern {
         enum_name: Option<String>,
         variant_name: String,
         binding: Option<String>,
+    },
+    Range {
+        start: Expr,
+        end: Expr,
+        inclusive: bool,
     },
     Wildcard,
 }
@@ -315,6 +322,11 @@ pub enum ExprKind {
         enum_name: Option<String>,
         variant_name: String,
         args: Vec<Expr>,
+    },
+    Range {
+        start: Box<Expr>,
+        end: Box<Expr>,
+        inclusive: bool,
     },
     Closure {
         params: Vec<Parameter>,
@@ -875,9 +887,20 @@ impl Parser {
         let name = self.expect_identifier();
 
         let mut declared_type = None;
-        if self.current_token == Token::Colon {
+        if self.current_token == Token::LessThan {
             self.advance();
-            declared_type = Some(self.parse_type());
+            let inner_type = self.parse_type();
+            self.expect(Token::GreaterThan);
+            declared_type = Some(Type::Array(Box::new(inner_type)));
+        }
+        if self.current_token == Token::Colon {
+            if declared_type.is_some() {
+                let msg = "Syntax Error: Cannot combine '<T>' and ':' type annotations".to_string();
+                self.record_error(msg, self.current_span);
+            } else {
+                self.advance();
+                declared_type = Some(self.parse_type());
+            }
         }
 
         self.expect(Token::Equal);
@@ -1576,7 +1599,7 @@ impl Parser {
     }
 
     fn parse_comparison(&mut self) -> Expr {
-        let mut left = self.parse_addition();
+        let mut left = self.parse_range();
 
         loop {
             if self.paren_depth > 0 {
@@ -1590,7 +1613,7 @@ impl Parser {
                 let start = left.span.start;
                 let op = self.current_token.clone();
                 self.advance();
-                let right = self.parse_addition();
+                let right = self.parse_range();
                 let end = right.span.end;
                 left = Expr {
                     kind: ExprKind::Binary {
@@ -1604,6 +1627,37 @@ impl Parser {
                 break;
             }
         }
+        left
+    }
+
+    fn parse_range(&mut self) -> Expr {
+        let left = self.parse_addition();
+
+        if self.paren_depth > 0 {
+            self.consume_newlines();
+        }
+
+        let inclusive = match self.current_token {
+            Token::DotDot => Some(true),
+            Token::DotDotLessThan => Some(false),
+            _ => None,
+        };
+
+        if let Some(is_inclusive) = inclusive {
+            let start = left.span.start;
+            self.advance();
+            let right = self.parse_addition();
+            let end = right.span.end;
+            return Expr {
+                kind: ExprKind::Range {
+                    start: Box::new(left),
+                    end: Box::new(right),
+                    inclusive: is_inclusive,
+                },
+                span: Span::new(start, end),
+            };
+        }
+
         left
     }
 
@@ -2403,6 +2457,14 @@ impl Parser {
 
         self.expect(Token::RBracket);
         let end = self.previous_span.end;
+        if elements.len() > 1
+            && elements
+                .iter()
+                .any(|expr| matches!(expr.kind, ExprKind::Range { .. }))
+        {
+            let msg = "Syntax Error: Array range literal must be a single range".to_string();
+            self.record_error(msg, Span::new(start, end));
+        }
         Expr {
             kind: ExprKind::Array(elements),
             span: Span::new(start, end),
@@ -3018,7 +3080,23 @@ impl Parser {
                     binding: None,
                 }
             }
-            _ => Pattern::Literal(self.parse_expression()),
+            _ => {
+                let expr = self.parse_expression();
+                if let ExprKind::Range {
+                    start,
+                    end,
+                    inclusive,
+                } = expr.kind
+                {
+                    Pattern::Range {
+                        start: *start,
+                        end: *end,
+                        inclusive,
+                    }
+                } else {
+                    Pattern::Literal(expr)
+                }
+            }
         }
     }
 

@@ -1543,6 +1543,7 @@ impl Analyzer {
                     Type::Enum(ref name) if name == "Maybe" => Type::Any,
                     Type::Channel(inner) => *inner,
                     Type::Set(inner) => *inner,
+                    Type::Range(inner) => *inner,
                     Type::Any => Type::Any,
                     _ => {
                         self.add_error(
@@ -2438,6 +2439,9 @@ impl Analyzer {
             ExprKind::Array(elements) => {
                 if elements.is_empty() {
                     Type::Array(Box::new(Type::Any))
+                } else if elements.len() == 1 && matches!(elements[0].kind, ExprKind::Range { .. })
+                {
+                    Type::Array(Box::new(Type::I64))
                 } else {
                     let first_ty = self.check_expression(&elements[0]);
                     for el in elements.iter().skip(1) {
@@ -2454,6 +2458,24 @@ impl Analyzer {
                     }
                     Type::Array(Box::new(first_ty))
                 }
+            }
+            ExprKind::Range {
+                start,
+                end,
+                inclusive: _,
+            } => {
+                let start_ty = self.check_expression(start);
+                let end_ty = self.check_expression(end);
+                if !self.is_numeric(&start_ty) || !self.is_numeric(&end_ty) {
+                    self.add_error(
+                        format!(
+                            "Type Error: Range bounds must be integers, got {:?} and {:?}",
+                            start_ty, end_ty
+                        ),
+                        expr.span,
+                    );
+                }
+                Type::Range(Box::new(Type::I64))
             }
             ExprKind::Tuple(elements) => {
                 let types = elements.iter().map(|e| self.check_expression(e)).collect();
@@ -4419,6 +4441,7 @@ impl Analyzer {
             Type::Array(_) => Type::Array(Box::new(Type::Any)), // All arrays map to array<any>
             Type::Map(_, _) => Type::Map(Box::new(Type::Any), Box::new(Type::Any)), // All maps map to map<any, any>
             Type::Set(_) => Type::Set(Box::new(Type::Any)), // All sets map to set<any>
+            Type::Range(_) => Type::Range(Box::new(Type::Any)),
             Type::Union(members) => {
                 Type::Union(members.iter().map(|m| self.generic_type(m)).collect())
             }
@@ -4480,6 +4503,12 @@ impl Analyzer {
                 }
                 self.types_compatible(e_inner.as_ref(), a_inner.as_ref())
             }
+            (Type::Range(e_inner), Type::Range(a_inner)) => {
+                if matches!(a_inner.as_ref(), Type::Any) {
+                    return true;
+                }
+                self.types_compatible(e_inner.as_ref(), a_inner.as_ref())
+            }
             (Type::Tuple(e_els), Type::Tuple(a_els)) => {
                 if e_els.len() != a_els.len() {
                     return false;
@@ -4536,6 +4565,32 @@ impl Analyzer {
                         format!(
                             "Type Error: Match pattern type {:?} doesn't match condition type {:?}",
                             ty, matched_type
+                        ),
+                        span,
+                    );
+                }
+            }
+            Pattern::Range {
+                start,
+                end,
+                inclusive: _,
+            } => {
+                let start_ty = self.check_expression(start);
+                let end_ty = self.check_expression(end);
+                if !self.is_numeric(matched_type) {
+                    self.add_error(
+                        format!(
+                            "Type Error: Range pattern requires integer match, got {:?}",
+                            matched_type
+                        ),
+                        span,
+                    );
+                }
+                if !self.is_numeric(&start_ty) || !self.is_numeric(&end_ty) {
+                    self.add_error(
+                        format!(
+                            "Type Error: Range bounds must be integers, got {:?} and {:?}",
+                            start_ty, end_ty
                         ),
                         span,
                     );

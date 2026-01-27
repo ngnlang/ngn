@@ -93,7 +93,9 @@ pub enum Token {
     QuestionQuestion,
     QuestionDot,
     Period,
-    DotDotDot, // ... (rest/spread operator)
+    DotDot,         // ..
+    DotDotLessThan, // ..<
+    DotDotDot,      // ... (rest/spread operator)
 
     // Formatting
     Newline,
@@ -482,6 +484,12 @@ impl Lexer {
                 if self.peek_current() == '.' && self.peek() == '.' {
                     self.cursor += 2; // consume the other two dots
                     Token::DotDotDot
+                } else if self.peek_current() == '.' && self.peek() == '<' {
+                    self.cursor += 2; // consume '.' and '<'
+                    Token::DotDotLessThan
+                } else if self.peek_current() == '.' {
+                    self.cursor += 1; // consume second '.'
+                    Token::DotDot
                 } else {
                     Token::Period
                 }
@@ -573,6 +581,9 @@ impl Lexer {
                 num_str.push(ch);
                 self.cursor += 1;
             } else if ch == '.' {
+                if self.peek() == '.' {
+                    break;
+                }
                 if is_float {
                     break;
                 }

@@ -714,18 +714,40 @@ impl Compiler {
                 dest
             }
             ExprKind::Array(elements) => {
-                let start_reg = self.compile_args(elements);
-                let dest = self.alloc_reg();
-                self.instructions
-                    .push(OpCode::BuildArray(dest, start_reg, elements.len()));
-                self.reg_top = dest + 1;
-                dest
+                if elements.len() == 1 && matches!(elements[0].kind, ExprKind::Range { .. }) {
+                    let range_reg = self.compile_expr(&elements[0]);
+                    let dest = self.alloc_reg();
+                    self.instructions
+                        .push(OpCode::RangeToArray(dest, range_reg));
+                    self.reg_top = dest + 1;
+                    dest
+                } else {
+                    let start_reg = self.compile_args(elements);
+                    let dest = self.alloc_reg();
+                    self.instructions
+                        .push(OpCode::BuildArray(dest, start_reg, elements.len()));
+                    self.reg_top = dest + 1;
+                    dest
+                }
             }
             ExprKind::Tuple(elements) => {
                 let start_reg = self.compile_args(elements);
                 let dest = self.alloc_reg();
                 self.instructions
                     .push(OpCode::BuildTuple(dest, start_reg, elements.len()));
+                self.reg_top = dest + 1;
+                dest
+            }
+            ExprKind::Range {
+                start,
+                end,
+                inclusive,
+            } => {
+                let start_reg = self.compile_expr(start);
+                let end_reg = self.compile_expr(end);
+                let dest = self.alloc_reg();
+                self.instructions
+                    .push(OpCode::CreateRange(dest, start_reg, end_reg, *inclusive));
                 self.reg_top = dest + 1;
                 dest
             }
@@ -2448,6 +2470,34 @@ impl Compiler {
 
                 patch_indices.push(self.emit(OpCode::Jump(0))); // Success path
                 self.patch_jump(skip_arm);
+            }
+            Pattern::Range {
+                start,
+                end,
+                inclusive,
+            } => {
+                let start_reg = self.compile_expr(start);
+                let end_reg = self.compile_expr(end);
+
+                let lower_ok = self.alloc_reg();
+                self.instructions
+                    .push(OpCode::GreaterThanEqual(lower_ok, match_reg, start_reg));
+                let fail_lower = self.emit(OpCode::JumpIfFalse(lower_ok, 0));
+
+                let upper_ok = self.alloc_reg();
+                if *inclusive {
+                    self.instructions
+                        .push(OpCode::LessThanEqual(upper_ok, match_reg, end_reg));
+                } else {
+                    self.instructions
+                        .push(OpCode::LessThan(upper_ok, match_reg, end_reg));
+                }
+                let fail_upper = self.emit(OpCode::JumpIfFalse(upper_ok, 0));
+
+                patch_indices.push(self.emit(OpCode::Jump(0)));
+                self.patch_jump(fail_lower);
+                self.patch_jump(fail_upper);
+                self.reg_top = self.temp_start;
             }
             Pattern::Wildcard => {
                 patch_indices.push(self.emit(OpCode::Jump(0)));
