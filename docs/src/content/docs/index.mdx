@@ -1,0 +1,41 @@
+---
+title: ngn
+description: Expressive, pragmatic language for APIs and AI.
+template: splash
+hero:
+  tagline: Build APIs and AI tooling without async ceremony.
+  actions:
+    - text: Get started
+      link: /getting-started/
+      icon: right-arrow
+    - text: Language tour
+      link: /guides/language-tour/
+      icon: open-book
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+ngn (pronounced "engine") is a high-level language that focuses on clean concurrency,
+fast API development, and a tight standard library.
+
+<CardGrid stagger>
+  <Card title="Install" icon="add-document">
+    Get the CLI and verify your setup in a few commands.
+  </Card>
+  <Card title="Hello World" icon="document">
+    Write your first ngn program with a single `main()` function.
+  </Card>
+  <Card title="Concurrency" icon="open-book">
+    Learn channels, threads, and the `<-` await syntax.
+  </Card>
+  <Card title="HTTP Servers" icon="document">
+    Build APIs with `serve(handler)` or `export default { fetch }`.
+  </Card>
+  <Card title="Types" icon="pencil">
+    Explore union types, `Maybe`, and `Result`.
+  </Card>
+  <Card title="Standard Library" icon="setting">
+    See the toolbox modules for math, HTTP, LLMs, and more.
+  </Card>
+</CardGrid>

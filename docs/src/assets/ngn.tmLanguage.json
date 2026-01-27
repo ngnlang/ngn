@@ -1,0 +1,133 @@
+{
+  "scopeName": "source.ngn",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#regexp"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#interpolation"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#builtins"
+    },
+    {
+      "include": "#booleans"
+    },
+    {
+      "include": "#operators"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "match": "//.*$",
+          "name": "comment.line.double-slash.ngn"
+        },
+        {
+          "begin": "/\\*",
+          "end": "\\*/",
+          "name": "comment.block.ngn"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.ngn",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "include": "#interpolation"
+        },
+        {
+          "match": "\\\\.",
+          "name": "constant.character.escape.ngn"
+        }
+      ]
+    },
+    "interpolation": {
+      "name": "meta.embedded.line.ngn",
+      "begin": "\\{",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.section.embedded.begin.ngn"
+        }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.embedded.end.ngn"
+        }
+      },
+      "patterns": [
+        {
+          "include": "source.ngn"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "match": "\\b(var|const|global|fn|return|if|while|loop|for|in|match|next|break|once|import|from|as|export|default|enum|model|role|extend|with|this|check|null)\\b",
+          "name": "keyword.control.ngn"
+        }
+      ]
+    },
+    "builtins": {
+      "patterns": [
+        {
+          "match": "\\b(print|echo|sleep|thread|state|channel|bytes|json|spawn|map|set|fetch|panic|env|time)\\b",
+          "name": "support.function.builtin.ngn"
+        }
+      ]
+    },
+    "booleans": {
+      "patterns": [
+        {
+          "match": "\\b(true|false)\\b",
+          "name": "constant.language.boolean.ngn"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "match": "\\b[0-9]+\\.[0-9]+\\b",
+          "name": "constant.numeric.float.ngn"
+        },
+        {
+          "match": "\\b[0-9]+\\b",
+          "name": "constant.numeric.integer.ngn"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "match": "(=>|<-|==|!=|<=|>=|\\+\\+|--|\\+=|-=|\\*=|/=|%=|&&|\\|\\|)",
+          "name": "keyword.operator.ngn"
+        }
+      ]
+    },
+    "regexp": {
+      "patterns": [
+        {
+          "match": "/(\\\\\\/|[^/\\n])+/([gims]+)?",
+          "name": "string.regexp.ngn"
+        }
+      ]
+    }
+  }
+}
