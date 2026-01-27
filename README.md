@@ -1246,6 +1246,28 @@ for (item in items) {
 }
 ```
 
+## Ranges
+Ranges are integer sequences. Use `..` for inclusive ranges and `..<` for exclusive upper bounds.
+
+```ngn
+const arr<i32> = [1..5]
+print(arr) // [1, 2, 3, 4, 5]
+
+for (i in 1..5) {
+  print(i)
+}
+
+match (score) {
+  94..99 => print("great"),
+  90..<94 => print("good"),
+  _ => print("keep striving")
+}
+```
+
+- Range bounds must be integers (no floats).
+- Ranges are empty when the start is greater than the end.
+- Array range literals only allow a single range (e.g. `[1..5]`).
+
 ## `if`
 Run a statement based on if a condition is true.
 
