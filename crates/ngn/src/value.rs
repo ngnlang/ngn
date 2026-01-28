@@ -1,6 +1,7 @@
 use std::fmt;
 
 use crate::bytecode::OpCode;
+use crate::lexer::Span;
 
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)]
@@ -476,6 +477,12 @@ impl<'de> serde::Deserialize<'de> for ExternalValue {
 pub struct Function {
     pub name: String,
     pub instructions: Arc<Vec<OpCode>>,
+    #[serde(default = "default_instruction_spans")]
+    pub instruction_spans: Arc<Vec<Span>>,
+    #[serde(default = "default_source")]
+    pub source: Arc<String>,
+    #[serde(default = "default_filename")]
+    pub filename: Arc<String>,
     pub constants: Arc<Vec<Value>>,
     pub home_globals: Option<Arc<Vec<Value>>>, // Reference to module's globals (None for main module functions)
     pub param_count: usize,
@@ -488,6 +495,18 @@ pub struct Function {
     pub return_type: crate::parser::Type,  // Return type of the function
     pub reg_count: usize,
     pub upvalues: Vec<crate::compiler::Upvalue>,
+}
+
+fn default_instruction_spans() -> Arc<Vec<Span>> {
+    Arc::new(Vec::new())
+}
+
+fn default_source() -> Arc<String> {
+    Arc::new(String::new())
+}
+
+fn default_filename() -> Arc<String> {
+    Arc::new(String::new())
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

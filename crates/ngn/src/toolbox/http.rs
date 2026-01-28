@@ -72,9 +72,18 @@ async fn call_handler_async(
 
                     loop {
                         // Run in smaller batches for better interleaving
-                        let (status, _) =
-                            bg_fiber.run_steps(&mut bg_globals_mut, &mut bg_meta_mut, &bg_methods, 50);
-                        match status {
+                        let step_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            crate::vm::with_panic_suppressed(|| {
+                                bg_fiber.run_steps(
+                                    &mut bg_globals_mut,
+                                    &mut bg_meta_mut,
+                                    &bg_methods,
+                                    50,
+                                )
+                            })
+                        }));
+                        match step_result {
+                            Ok((status, _)) => match status {
                             FiberStatus::Finished => break,
                             FiberStatus::Running | FiberStatus::Suspended => {
                                 tokio::task::yield_now().await;
@@ -90,15 +99,43 @@ async fn call_handler_async(
                                 tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
                                 continue;
                             }
-                            FiberStatus::Panicked(msg) => {
-                                eprintln!("[ngn] Background thread panicked: {}", msg);
+                            FiberStatus::Panicked(msg, location) => {
+                                let full_msg = if let Some(location) = location {
+                                    format!("{}\n{}", msg, location)
+                                } else {
+                                    msg
+                                };
+                                eprintln!("[ngn] Background thread panicked: {}", full_msg);
                                 if let Some(chan) = &bg_fiber.completion_channel {
                                     let error = crate::value::EnumData::into_value(
                                         "Result".to_string(),
                                         "Error".to_string(),
                                         Some(Box::new(Value::String(format!(
                                             "Thread panicked: {}",
-                                            msg
+                                            full_msg
+                                        )))),
+                                    );
+                                    chan.buffer.lock().unwrap().push_back(error);
+                                }
+                                break;
+                            }
+                            },
+                            Err(panic_info) => {
+                                let msg = crate::vm::panic_message(&panic_info);
+                                let location = bg_fiber.current_location();
+                                let full_msg = if let Some(location) = location {
+                                    format!("{}\n{}", msg, location)
+                                } else {
+                                    msg
+                                };
+                                eprintln!("[ngn] Background thread panicked: {}", full_msg);
+                                if let Some(chan) = &bg_fiber.completion_channel {
+                                    let error = crate::value::EnumData::into_value(
+                                        "Result".to_string(),
+                                        "Error".to_string(),
+                                        Some(Box::new(Value::String(format!(
+                                            "Thread panicked: {}",
+                                            full_msg
                                         )))),
                                     );
                                     chan.buffer.lock().unwrap().push_back(error);
@@ -117,9 +154,14 @@ async fn call_handler_async(
 
                 continue;
             }
-            FiberStatus::Panicked(msg) => {
+            FiberStatus::Panicked(msg, location) => {
                 // Handler panicked - log and return 500 error
-                eprintln!("[ngn] HTTP handler panicked: {}", msg);
+                let full_msg = if let Some(location) = location {
+                    format!("{}\n{}", msg, location)
+                } else {
+                    msg
+                };
+                eprintln!("[ngn] HTTP handler panicked: {}", full_msg);
                 break;
             }
         }

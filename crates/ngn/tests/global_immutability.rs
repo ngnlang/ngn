@@ -22,7 +22,14 @@ fn immutable_global_panics_on_reassign() {
     // NOTE: we intentionally run the Fiber directly here.
     // VM::run() wraps execution in catch_unwind, which would swallow the panic
     // and convert it into a recoverable "internal error".
-    let mut vm = VM::new(instructions, constants, 2);
+    let mut vm = VM::new(
+        instructions,
+        Vec::new(),
+        constants,
+        2,
+        std::sync::Arc::new(String::new()),
+        std::sync::Arc::new(String::new()),
+    );
     let mut fiber = vm
         .current_fiber
         .take()
@@ -37,10 +44,21 @@ fn immutable_global_panics_on_reassign() {
 #[should_panic(expected = "Cannot assign to undefined global")]
 fn assigning_undefined_global_panics() {
     // Assigning a global slot without a prior DefGlobal should always error.
-    let instructions = vec![OpCode::LoadConst(0, 0), OpCode::AssignGlobal(42, 0), OpCode::Halt];
+    let instructions = vec![
+        OpCode::LoadConst(0, 0),
+        OpCode::AssignGlobal(42, 0),
+        OpCode::Halt,
+    ];
     let constants = vec![Value::Numeric(ngn::value::Number::I64(1))];
 
-    let mut vm = VM::new(instructions, constants, 1);
+    let mut vm = VM::new(
+        instructions,
+        Vec::new(),
+        constants,
+        1,
+        std::sync::Arc::new(String::new()),
+        std::sync::Arc::new(String::new()),
+    );
     let mut fiber = vm
         .current_fiber
         .take()

@@ -2,10 +2,55 @@ use crate::blocking_pool::{global_blocking_pool, global_cpu_pool};
 use crate::bytecode::OpCode;
 use crate::value::{Channel, Closure, EnumData, Function, Number, ObjectData, RangeData, Value};
 use regex::Regex as RegexLib;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::io::Write;
+use std::sync::Once;
 use std::sync::{Arc, Mutex};
+
+static INSTALL_PANIC_HOOK: Once = Once::new();
+
+thread_local! {
+    static SUPPRESS_PANIC: Cell<bool> = Cell::new(false);
+}
+
+fn install_panic_hook() {
+    INSTALL_PANIC_HOOK.call_once(|| {
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let suppress = SUPPRESS_PANIC.with(|flag| flag.get());
+            if suppress {
+                return;
+            }
+            default_hook(info);
+        }));
+    });
+}
+
+pub(crate) fn with_panic_suppressed<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    install_panic_hook();
+    SUPPRESS_PANIC.with(|flag| {
+        let prev = flag.get();
+        flag.set(true);
+        let result = f();
+        flag.set(prev);
+        result
+    })
+}
+
+pub(crate) fn panic_message(panic_info: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = panic_info.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = panic_info.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "Unknown error".to_string()
+    }
+}
 
 /// Stores the globals for a single module
 pub struct ModuleContext {
@@ -62,6 +107,9 @@ impl ModuleRegistry {
 
 pub struct CallFrame {
     pub instructions: Arc<Vec<OpCode>>,
+    pub instruction_spans: Arc<Vec<crate::lexer::Span>>,
+    pub source: Arc<String>,
+    pub filename: Arc<String>,
     pub constants: Arc<Vec<Value>>,
     pub ip: usize,
     pub fp: usize,
@@ -85,8 +133,8 @@ pub enum FiberStatus {
     Suspended,
     Finished,
     Spawning(Box<Fiber>),
-    Sleeping(u64),    // Fiber wants to sleep for N milliseconds
-    Panicked(String), // User-level panic from ngn code
+    Sleeping(u64),                    // Fiber wants to sleep for N milliseconds
+    Panicked(String, Option<String>), // User-level panic from ngn code
 }
 
 pub struct Fiber {
@@ -95,6 +143,9 @@ pub struct Fiber {
     pub ip: usize,
     pub fp: usize,
     pub instructions: Arc<Vec<OpCode>>,
+    pub instruction_spans: Arc<Vec<crate::lexer::Span>>,
+    pub source: Arc<String>,
+    pub filename: Arc<String>,
     pub constants: Arc<Vec<Value>>,
     pub current_closure: Option<Box<Closure>>,
     pub status: FiberStatus,
@@ -115,6 +166,9 @@ impl Fiber {
             ip: 0,
             fp: 0,
             instructions: func.instructions.clone(),
+            instruction_spans: func.instruction_spans.clone(),
+            source: func.source.clone(),
+            filename: func.filename.clone(),
             constants: func.constants.clone(),
             current_closure: Some(closure),
             status: FiberStatus::Running,
@@ -134,6 +188,9 @@ impl Fiber {
             ip: 0,
             fp: 0,
             instructions: func.instructions.clone(),
+            instruction_spans: func.instruction_spans.clone(),
+            source: func.source.clone(),
+            filename: func.filename.clone(),
             constants: func.constants.clone(),
             current_closure: None,
             status: FiberStatus::Running,
@@ -145,6 +202,18 @@ impl Fiber {
 
     pub fn get_reg_at(&self, idx: u16) -> Value {
         self.stack[self.fp + idx as usize].clone()
+    }
+
+    pub fn current_location(&self) -> Option<String> {
+        if self.instruction_spans.is_empty() {
+            return None;
+        }
+        if self.source.is_empty() || self.filename.is_empty() {
+            return None;
+        }
+        let idx = self.ip.saturating_sub(1);
+        let span = self.instruction_spans.get(idx)?;
+        Some(span.format_location(self.source.as_str(), self.filename.as_str()))
     }
 
     /// Get a reference to a register value without cloning.
@@ -534,7 +603,10 @@ impl Fiber {
                 // store dummy values and avoid Arc::clone overhead
                 let frame = CallFrame {
                     instructions: self.instructions.clone(), // Same Arc, just reference count bump
-                    constants: self.constants.clone(),       // Same Arc, just reference count bump
+                    instruction_spans: self.instruction_spans.clone(),
+                    source: self.source.clone(),
+                    filename: self.filename.clone(),
+                    constants: self.constants.clone(), // Same Arc, just reference count bump
                     ip: self.ip,
                     fp: self.fp,
                     closure: None, // Self-calls don't need to save/restore closure
@@ -573,10 +645,14 @@ impl Fiber {
                     return FiberStatus::Sleeping(ms as u64);
                 }
             }
-            OpCode::Panic(src) => {
+            OpCode::Panic(src, location_idx) => {
                 let val = self.get_reg_at(src);
+                let location = match self.constants.get(location_idx) {
+                    Some(Value::String(s)) => Some(s.clone()),
+                    _ => None,
+                };
                 // Return Panicked status - VM run loop handles it gracefully
-                return FiberStatus::Panicked(format!("{}", val));
+                return FiberStatus::Panicked(format!("{}", val), location);
             }
             OpCode::Jump(target) => {
                 self.ip = target;
@@ -680,6 +756,9 @@ impl Fiber {
                         self.stack.truncate(self.fp.max(256));
                     }
                     self.instructions = frame.instructions;
+                    self.instruction_spans = frame.instruction_spans;
+                    self.source = frame.source;
+                    self.filename = frame.filename;
                     self.constants = frame.constants;
                     self.ip = frame.ip;
                     self.fp = frame.fp;
@@ -718,6 +797,9 @@ impl Fiber {
                         self.stack.truncate(self.fp.max(256));
                     }
                     self.instructions = frame.instructions;
+                    self.instruction_spans = frame.instruction_spans;
+                    self.source = frame.source;
+                    self.filename = frame.filename;
                     self.constants = frame.constants;
                     self.ip = frame.ip;
                     self.fp = frame.fp;
@@ -968,51 +1050,66 @@ impl Fiber {
                 let custom_methods_clone = custom_methods.clone();
 
                 let submit = global_cpu_pool().try_submit(Box::new(move || {
-                    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        let mut fiber = Fiber::new(closure);
-                        let mut thread_globals = globals_clone;
-                        let mut thread_meta =
-                            vec![GlobalSlotMeta::frozen_initialized(); thread_globals.len()];
+                    let mut fiber = Fiber::new(closure);
+                    let mut thread_globals = globals_clone;
+                    let mut thread_meta =
+                        vec![GlobalSlotMeta::frozen_initialized(); thread_globals.len()];
+                    let mut panic_msg: Option<String> = None;
+                    let mut result_val: Option<Value> = None;
 
-                        loop {
-                            let status = fiber.run_step(
-                                &mut thread_globals,
-                                &mut thread_meta,
-                                &custom_methods_clone,
-                            );
-                            match status {
+                    loop {
+                        let step_result =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                with_panic_suppressed(|| {
+                                    fiber.run_step(
+                                        &mut thread_globals,
+                                        &mut thread_meta,
+                                        &custom_methods_clone,
+                                    )
+                                })
+                            }));
+
+                        match step_result {
+                            Ok(status) => match status {
                                 FiberStatus::Finished => {
-                                    return fiber.return_value.unwrap_or(Value::Void);
+                                    result_val = Some(fiber.return_value.unwrap_or(Value::Void));
+                                    break;
                                 }
                                 FiberStatus::Running => continue,
-                                _ => break,
+                                _ => {
+                                    result_val = Some(Value::Void);
+                                    break;
+                                }
+                            },
+                            Err(panic_info) => {
+                                let msg = panic_message(&panic_info);
+                                let location = fiber.current_location();
+                                let full_msg = if let Some(location) = location {
+                                    format!("{}\n{}", msg, location)
+                                } else {
+                                    msg
+                                };
+                                panic_msg = Some(full_msg);
+                                break;
                             }
                         }
-                        Value::Void
-                    }));
+                    }
 
-                    let val = match out {
-                        Ok(v) => match &v {
+                    let val = if let Some(msg) = panic_msg {
+                        EnumData::into_value(
+                            "Result".to_string(),
+                            "Error".to_string(),
+                            Some(Box::new(Value::String(format!("Thread panicked: {}", msg)))),
+                        )
+                    } else {
+                        let v = result_val.unwrap_or(Value::Void);
+                        match &v {
                             Value::Enum(e) if e.enum_name == "Result" => v,
                             _ => EnumData::into_value(
                                 "Result".to_string(),
                                 "Ok".to_string(),
                                 Some(Box::new(v)),
                             ),
-                        },
-                        Err(panic_info) => {
-                            let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
-                                s.to_string()
-                            } else if let Some(s) = panic_info.downcast_ref::<String>() {
-                                s.clone()
-                            } else {
-                                "Unknown panic".to_string()
-                            };
-                            EnumData::into_value(
-                                "Result".to_string(),
-                                "Error".to_string(),
-                                Some(Box::new(Value::String(format!("Thread panicked: {}", msg)))),
-                            )
                         }
                     };
 
@@ -1068,51 +1165,66 @@ impl Fiber {
                 let custom_methods_clone = custom_methods.clone();
 
                 let submit = global_blocking_pool().try_submit(Box::new(move || {
-                    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        let mut fiber = Fiber::new(closure);
-                        let mut thread_globals = globals_clone;
-                        let mut thread_meta =
-                            vec![GlobalSlotMeta::frozen_initialized(); thread_globals.len()];
+                    let mut fiber = Fiber::new(closure);
+                    let mut thread_globals = globals_clone;
+                    let mut thread_meta =
+                        vec![GlobalSlotMeta::frozen_initialized(); thread_globals.len()];
+                    let mut panic_msg: Option<String> = None;
+                    let mut result_val: Option<Value> = None;
 
-                        loop {
-                            let status = fiber.run_step(
-                                &mut thread_globals,
-                                &mut thread_meta,
-                                &custom_methods_clone,
-                            );
-                            match status {
+                    loop {
+                        let step_result =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                with_panic_suppressed(|| {
+                                    fiber.run_step(
+                                        &mut thread_globals,
+                                        &mut thread_meta,
+                                        &custom_methods_clone,
+                                    )
+                                })
+                            }));
+
+                        match step_result {
+                            Ok(status) => match status {
                                 FiberStatus::Finished => {
-                                    return fiber.return_value.unwrap_or(Value::Void);
+                                    result_val = Some(fiber.return_value.unwrap_or(Value::Void));
+                                    break;
                                 }
                                 FiberStatus::Running => continue,
-                                _ => break,
+                                _ => {
+                                    result_val = Some(Value::Void);
+                                    break;
+                                }
+                            },
+                            Err(panic_info) => {
+                                let msg = panic_message(&panic_info);
+                                let location = fiber.current_location();
+                                let full_msg = if let Some(location) = location {
+                                    format!("{}\n{}", msg, location)
+                                } else {
+                                    msg
+                                };
+                                panic_msg = Some(full_msg);
+                                break;
                             }
                         }
-                        Value::Void
-                    }));
+                    }
 
-                    let val = match out {
-                        Ok(v) => match &v {
+                    let val = if let Some(msg) = panic_msg {
+                        EnumData::into_value(
+                            "Result".to_string(),
+                            "Error".to_string(),
+                            Some(Box::new(Value::String(format!("Thread panicked: {}", msg)))),
+                        )
+                    } else {
+                        let v = result_val.unwrap_or(Value::Void);
+                        match &v {
                             Value::Enum(e) if e.enum_name == "Result" => v,
                             _ => EnumData::into_value(
                                 "Result".to_string(),
                                 "Ok".to_string(),
                                 Some(Box::new(v)),
                             ),
-                        },
-                        Err(panic_info) => {
-                            let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
-                                s.to_string()
-                            } else if let Some(s) = panic_info.downcast_ref::<String>() {
-                                s.clone()
-                            } else {
-                                "Unknown panic".to_string()
-                            };
-                            EnumData::into_value(
-                                "Result".to_string(),
-                                "Error".to_string(),
-                                Some(Box::new(Value::String(format!("Thread panicked: {}", msg)))),
-                            )
                         }
                     };
 
@@ -2623,6 +2735,9 @@ impl Fiber {
     ) {
         let frame = CallFrame {
             instructions: self.instructions.clone(),
+            instruction_spans: self.instruction_spans.clone(),
+            source: self.source.clone(),
+            filename: self.filename.clone(),
             constants: self.constants.clone(),
             ip: self.ip,
             fp: self.fp,
@@ -2669,6 +2784,9 @@ impl Fiber {
         }
 
         self.instructions = func.instructions.clone();
+        self.instruction_spans = func.instruction_spans.clone();
+        self.source = func.source.clone();
+        self.filename = func.filename.clone();
         self.constants = func.constants.clone();
         self.ip = 0;
         self.current_closure = closure;
@@ -4084,10 +4202,20 @@ pub struct VM {
 }
 
 impl VM {
-    pub fn new(instructions: Vec<OpCode>, constants: Vec<Value>, reg_count: usize) -> Self {
+    pub fn new(
+        instructions: Vec<OpCode>,
+        instruction_spans: Vec<crate::lexer::Span>,
+        constants: Vec<Value>,
+        reg_count: usize,
+        source: Arc<String>,
+        filename: Arc<String>,
+    ) -> Self {
         let main_func = Function {
             name: "main_wrapper".to_string(),
             instructions: Arc::new(instructions),
+            instruction_spans: Arc::new(instruction_spans),
+            source,
+            filename,
             constants: Arc::new(constants),
             home_globals: None, // Main module uses VM.globals directly
             param_count: 0,
@@ -4125,14 +4253,17 @@ impl VM {
     }
 
     pub fn run(&mut self) {
+        install_panic_hook();
         while let Some(mut fiber) = self.current_fiber.take() {
             // Wrap fiber execution in catch_unwind to handle unexpected Rust panics
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                fiber.run_step(
-                    &mut self.globals,
-                    &mut self.global_meta,
-                    &self.custom_methods,
-                )
+                with_panic_suppressed(|| {
+                    fiber.run_step(
+                        &mut self.globals,
+                        &mut self.global_meta,
+                        &self.custom_methods,
+                    )
+                })
             }));
 
             match result {
@@ -4157,16 +4288,24 @@ impl VM {
                         std::thread::sleep(std::time::Duration::from_millis(ms));
                         self.current_fiber = Some(fiber);
                     }
-                    FiberStatus::Panicked(msg) => {
+                    FiberStatus::Panicked(msg, location) => {
                         // User-level panic from ngn code
-                        eprintln!("[ngn] Thread panicked: {}", msg);
+                        let full_msg = if let Some(location) = location {
+                            format!("{}\n{}", msg, location)
+                        } else {
+                            msg
+                        };
+                        eprintln!("[ngn] Thread panicked: {}", full_msg);
 
                         // Send Error to completion channel if it exists
                         if let Some(chan) = &fiber.completion_channel {
                             let error = crate::value::EnumData::into_value(
                                 "Result".to_string(),
                                 "Error".to_string(),
-                                Some(Box::new(Value::String(format!("Thread panicked: {}", msg)))),
+                                Some(Box::new(Value::String(format!(
+                                    "Thread panicked: {}",
+                                    full_msg
+                                )))),
                             );
                             chan.buffer.lock().unwrap().push_back(error);
                         }
@@ -4176,25 +4315,43 @@ impl VM {
                     }
                 },
                 Err(panic_info) => {
-                    // Internal Rust panic (VM bug) - extract message and continue
-                    let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
-                        s.to_string()
-                    } else if let Some(s) = panic_info.downcast_ref::<String>() {
-                        s.clone()
+                    let msg = panic_message(&panic_info);
+                    let location = fiber.current_location();
+                    if msg.starts_with("Runtime Error:") {
+                        let full_msg = if let Some(location) = location {
+                            format!("{}\n{}", msg, location)
+                        } else {
+                            msg
+                        };
+                        eprintln!("[ngn] {}", full_msg);
+
+                        if let Some(chan) = &fiber.completion_channel {
+                            let error = crate::value::EnumData::into_value(
+                                "Result".to_string(),
+                                "Error".to_string(),
+                                Some(Box::new(Value::String(full_msg.clone()))),
+                            );
+                            chan.buffer.lock().unwrap().push_back(error);
+                        }
                     } else {
-                        "Unknown internal error".to_string()
-                    };
+                        let full_msg = if let Some(location) = location {
+                            format!("{}\n{}", msg, location)
+                        } else {
+                            msg
+                        };
+                        eprintln!("[ngn] Internal error: {}", full_msg);
 
-                    eprintln!("[ngn] Internal error: {}", msg);
-
-                    // Send Error to completion channel if it exists
-                    if let Some(chan) = &fiber.completion_channel {
-                        let error = crate::value::EnumData::into_value(
-                            "Result".to_string(),
-                            "Error".to_string(),
-                            Some(Box::new(Value::String(format!("Internal error: {}", msg)))),
-                        );
-                        chan.buffer.lock().unwrap().push_back(error);
+                        if let Some(chan) = &fiber.completion_channel {
+                            let error = crate::value::EnumData::into_value(
+                                "Result".to_string(),
+                                "Error".to_string(),
+                                Some(Box::new(Value::String(format!(
+                                    "Internal error: {}",
+                                    full_msg
+                                )))),
+                            );
+                            chan.buffer.lock().unwrap().push_back(error);
+                        }
                     }
 
                     // Move to next fiber

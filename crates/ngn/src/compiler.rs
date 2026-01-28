@@ -1,5 +1,5 @@
 use crate::bytecode::OpCode;
-use crate::lexer::Token;
+use crate::lexer::{Span, Token};
 use crate::parser::{EnumDef, Expr, ExprKind, Pattern, Statement, StatementKind};
 use crate::value::{Function, Number, Value};
 use std::collections::{HashMap, HashSet};
@@ -14,6 +14,8 @@ pub struct Upvalue {
 
 pub struct Compiler {
     pub enclosing: Option<Rc<EnclosingInfo>>,
+    pub source: Arc<String>,
+    pub filename: Arc<String>,
     pub module_id: usize, // Which module this compiler is for
     pub symbol_table: HashMap<String, usize>,
     pub global_table: HashMap<String, usize>,
@@ -22,7 +24,7 @@ pub struct Compiler {
     pub reg_top: u16,    // Current top of register "stack"
     pub max_reg: u16,    // Peak register usage
     pub temp_start: u16, // Where temporaries start (after locals)
-    pub instructions: Vec<OpCode>,
+    pub instructions: InstructionList,
     pub constants: Vec<Value>,
     pub break_patches: Vec<Vec<usize>>,
     pub is_loop_break: Vec<bool>,
@@ -37,6 +39,72 @@ pub struct Compiler {
     pub current_function_name: Option<String>, // For detecting self-recursion
 }
 
+#[derive(Debug, Clone)]
+pub struct InstructionList {
+    ops: Vec<OpCode>,
+    spans: Vec<Span>,
+    current_span: Span,
+}
+
+impl InstructionList {
+    pub fn new() -> Self {
+        Self {
+            ops: Vec::new(),
+            spans: Vec::new(),
+            current_span: Span::default(),
+        }
+    }
+
+    pub fn set_span(&mut self, span: Span) {
+        self.current_span = span;
+    }
+
+    pub fn current_span(&self) -> Span {
+        self.current_span
+    }
+
+    pub fn push(&mut self, opcode: OpCode) {
+        self.ops.push(opcode);
+        self.spans.push(self.current_span);
+    }
+
+    pub fn len(&self) -> usize {
+        self.ops.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ops.is_empty()
+    }
+
+    pub fn into_parts(self) -> (Vec<OpCode>, Vec<Span>) {
+        (self.ops, self.spans)
+    }
+
+    pub fn clone_parts(&self) -> (Vec<OpCode>, Vec<Span>) {
+        (self.ops.clone(), self.spans.clone())
+    }
+}
+
+impl Default for InstructionList {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::ops::Index<usize> for InstructionList {
+    type Output = OpCode;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.ops[index]
+    }
+}
+
+impl std::ops::IndexMut<usize> for InstructionList {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.ops[index]
+    }
+}
+
 #[derive(Clone)]
 pub struct EnclosingInfo {
     pub symbols: HashMap<String, usize>,
@@ -46,9 +114,15 @@ pub struct EnclosingInfo {
 }
 
 impl Compiler {
-    pub fn new(enclosing: Option<Rc<EnclosingInfo>>) -> Self {
+    pub fn new(
+        enclosing: Option<Rc<EnclosingInfo>>,
+        source: Arc<String>,
+        filename: Arc<String>,
+    ) -> Self {
         Self {
             enclosing,
+            source,
+            filename,
             module_id: 0, // Will be set by caller for non-main modules
             symbol_table: HashMap::new(),
             global_table: HashMap::new(),
@@ -57,7 +131,7 @@ impl Compiler {
             reg_top: 0,
             max_reg: 0,
             temp_start: 0,
-            instructions: Vec::new(),
+            instructions: InstructionList::new(),
             constants: Vec::new(),
             break_patches: Vec::new(),
             is_loop_break: Vec::new(),
@@ -259,7 +333,9 @@ impl Compiler {
     }
 
     pub fn compile_expr(&mut self, expr: &Expr) -> u16 {
-        match &expr.kind {
+        let prev_span = self.instructions.current_span();
+        self.instructions.set_span(expr.span);
+        let result = match &expr.kind {
             ExprKind::Assign { name, value } => {
                 if matches!(value.kind, ExprKind::State(_)) {
                     self.state_vars.insert(name.clone());
@@ -318,7 +394,11 @@ impl Compiler {
                     }
                     "panic" => {
                         let reg = self.compile_expr(&args[0]);
-                        self.instructions.push(OpCode::Panic(reg));
+                        let location = expr
+                            .span
+                            .format_location(self.source.as_str(), self.filename.as_str());
+                        let location_idx = self.add_constant(Value::String(location));
+                        self.instructions.push(OpCode::Panic(reg, location_idx));
                         return reg;
                     }
                     "fetch" => {
@@ -505,7 +585,8 @@ impl Compiler {
                     upvalues: self.upvalues.clone(),
                     enclosing: self.enclosing.clone(),
                 });
-                let mut sub_compiler = Compiler::new(Some(enclosing));
+                let mut sub_compiler =
+                    Compiler::new(Some(enclosing), self.source.clone(), self.filename.clone());
                 let (func, upvalues) = {
                     let global_table = self.global_table.clone();
                     let static_values = self.static_values.clone();
@@ -554,12 +635,16 @@ impl Compiler {
                     sub_compiler.instructions.push(OpCode::ReturnVoid);
 
                     let captured_upvalues = sub_compiler.upvalues.borrow().clone();
-                    let instructions = std::mem::take(&mut sub_compiler.instructions);
+                    let (instructions, instruction_spans) =
+                        std::mem::take(&mut sub_compiler.instructions).into_parts();
                     let constants = std::mem::take(&mut sub_compiler.constants);
 
                     let func = Function {
                         name: "closure".to_string(),
                         instructions: Arc::new(instructions),
+                        instruction_spans: Arc::new(instruction_spans),
+                        source: sub_compiler.source.clone(),
+                        filename: sub_compiler.filename.clone(),
                         constants: Arc::new(constants),
                         home_globals: None, // Set by VM at load time
                         param_count: params.len(),
@@ -1303,7 +1388,9 @@ impl Compiler {
             ExprKind::Error(msg) => {
                 panic!("Compiler received invalid AST: {}", msg);
             }
-        }
+        };
+        self.instructions.set_span(prev_span);
+        result
     }
 
     /// Extract a constant literal with size limits (for static declaration inlining)
@@ -1388,6 +1475,8 @@ impl Compiler {
     }
 
     pub fn compile_statement(&mut self, stmt: Statement) {
+        let prev_span = self.instructions.current_span();
+        self.instructions.set_span(stmt.span);
         match stmt.kind {
             StatementKind::TypeAlias { .. } => {}
             StatementKind::Enum(enum_def) => {
@@ -1875,6 +1964,7 @@ impl Compiler {
             | StatementKind::ImportModule { .. }
             | StatementKind::ExportDefault(_) => {}
         }
+        self.instructions.set_span(prev_span);
     }
 
     fn compile_if(
@@ -2519,7 +2609,8 @@ impl Compiler {
             upvalues: self.upvalues.clone(),
             enclosing: self.enclosing.clone(),
         });
-        let mut sub_compiler = Compiler::new(Some(enclosing));
+        let mut sub_compiler =
+            Compiler::new(Some(enclosing), self.source.clone(), self.filename.clone());
         sub_compiler.is_global = false;
 
         // Only inherit actual globals, NOT local symbols from parent scope.
@@ -2574,13 +2665,17 @@ impl Compiler {
         self.signatures
             .insert(name.clone(), param_ownership.clone());
 
-        let instructions = std::mem::take(&mut sub_compiler.instructions);
+        let (instructions, instruction_spans) =
+            std::mem::take(&mut sub_compiler.instructions).into_parts();
         let constants = std::mem::take(&mut sub_compiler.constants);
         let upvalues = sub_compiler.upvalues.borrow().clone();
 
         Function {
             name,
             instructions: Arc::new(instructions),
+            instruction_spans: Arc::new(instruction_spans),
+            source: sub_compiler.source.clone(),
+            filename: sub_compiler.filename.clone(),
             constants: Arc::new(constants),
             home_globals: None, // Set by VM at load time
             param_count: param_ownership.len(),

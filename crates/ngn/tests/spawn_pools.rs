@@ -3,11 +3,7 @@ use ngn::value::{EnumData, Function, Number, Value};
 use ngn::vm::{FiberStatus, VM};
 
 fn result_ok(v: Value) -> Value {
-    EnumData::into_value(
-        "Result".to_string(),
-        "Ok".to_string(),
-        Some(Box::new(v)),
-    )
+    EnumData::into_value("Result".to_string(), "Ok".to_string(), Some(Box::new(v)))
 }
 
 fn result_err(msg: &str) -> Value {
@@ -43,6 +39,12 @@ fn spawn_cpu_accepts_function_and_returns_ok() {
     let task_fn = Function {
         name: "task".to_string(),
         instructions: std::sync::Arc::new(vec![OpCode::LoadConst(0, 0), OpCode::Return(0)]),
+        instruction_spans: std::sync::Arc::new(vec![
+            ngn::lexer::Span::default(),
+            ngn::lexer::Span::default(),
+        ]),
+        source: std::sync::Arc::new(String::new()),
+        filename: std::sync::Arc::new(String::new()),
         constants: std::sync::Arc::new(vec![Value::Numeric(Number::I64(7))]),
         home_globals: None,
         param_count: 0,
@@ -67,10 +69,20 @@ fn spawn_cpu_accepts_function_and_returns_ok() {
     ];
     let constants = vec![Value::Function(Box::new(task_fn))];
 
-    let vm = VM::new(instructions, constants, 3);
+    let vm = VM::new(
+        instructions,
+        Vec::new(),
+        constants,
+        3,
+        std::sync::Arc::new(String::new()),
+        std::sync::Arc::new(String::new()),
+    );
     let fiber = run_main_fiber(vm);
 
-    assert_eq!(fiber.get_reg_at(2), result_ok(Value::Numeric(Number::I64(7))));
+    assert_eq!(
+        fiber.get_reg_at(2),
+        result_ok(Value::Numeric(Number::I64(7)))
+    );
 }
 
 #[test]
@@ -87,7 +99,14 @@ fn spawn_block_rejects_non_callable() {
     ];
     let constants = vec![Value::Numeric(Number::I64(123))];
 
-    let vm = VM::new(instructions, constants, 3);
+    let vm = VM::new(
+        instructions,
+        Vec::new(),
+        constants,
+        3,
+        std::sync::Arc::new(String::new()),
+        std::sync::Arc::new(String::new()),
+    );
     let fiber = run_main_fiber(vm);
 
     assert_eq!(

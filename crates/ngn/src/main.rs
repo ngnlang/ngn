@@ -19,6 +19,7 @@ type ModuleExports = HashMap<String, Value>;
 type ModuleGlobals = Arc<Vec<Value>>;
 type ModuleCacheEntry = (ModuleExports, ModuleGlobals);
 type ModuleCache = HashMap<PathBuf, (ModuleCacheEntry, SystemTime)>;
+type BytecodePayload = (Vec<OpCode>, Vec<Span>, Vec<Value>, String, String);
 
 fn runtime_binary_name() -> &'static str {
     if cfg!(windows) {
@@ -108,10 +109,19 @@ fn run_payload_with_runtime(payload: &[u8], working_dir: &Path) {
 
 fn main() {
     // Check for "Self-Running" mode
-    if let Some((instructions, constants)) = check_for_embedded_bytecode() {
+    if let Some((instructions, instruction_spans, constants, source, filename)) =
+        check_for_embedded_bytecode()
+    {
         // Initialize env from current working directory
         ngn::env::init(std::path::Path::new("."));
-        let mut vm = VM::new(instructions, constants, 0);
+        let mut vm = VM::new(
+            instructions,
+            instruction_spans,
+            constants,
+            0,
+            Arc::new(source),
+            Arc::new(filename),
+        );
         vm.run();
         return;
     }
@@ -194,7 +204,9 @@ fn main() {
 
     let lexer = Lexer::new(&source);
     let mut parser = Parser::new(lexer);
-    let mut compiler = Compiler::new(None);
+    let source_ref = std::sync::Arc::new(source.clone());
+    let filename_ref = std::sync::Arc::new(filename.to_string());
+    let mut compiler = Compiler::new(None, source_ref.clone(), filename_ref.clone());
     compiler.inject_builtins();
 
     // 1. Collect all statements into a list
@@ -566,24 +578,35 @@ fn main() {
                 .unwrap_or(std::path::Path::new("."));
             ngn::env::init(working_dir);
 
-            let mut final_instructions = compiler.instructions.clone();
+            let (mut final_instructions, mut instruction_spans) =
+                compiler.instructions.clone_parts();
 
             if is_http_server {
                 // HTTP server mode: emit ServeHttp with __default__ handler
                 if let Some(&default_idx) = compiler.global_table.get("__default__") {
                     final_instructions.push(OpCode::ServeHttp(default_idx));
+                    instruction_spans.push(Span::default());
                     final_instructions.push(OpCode::Halt);
+                    instruction_spans.push(Span::default());
                 } else {
                     panic!("ngn Error: export default not compiled correctly");
                 }
             } else if let Some(&main_idx) = compiler.global_table.get("main") {
                 final_instructions.push(OpCode::CallGlobal(0, main_idx, 0, 0));
+                instruction_spans.push(Span::default());
                 final_instructions.push(OpCode::Halt);
+                instruction_spans.push(Span::default());
             } else {
                 panic!("ngn Error: No main() function or HTTP handler defined!");
             }
 
-            let payload = (final_instructions, compiler.constants.clone());
+            let payload = (
+                final_instructions,
+                instruction_spans,
+                compiler.constants.clone(),
+                source_ref.as_ref().clone(),
+                filename_ref.as_ref().clone(),
+            );
             let bytecode_bytes = bincode::serialize(&payload).unwrap();
             run_payload_with_runtime(&bytecode_bytes, working_dir);
         }
@@ -594,21 +617,32 @@ fn main() {
             } else {
                 format!("{}.mod", base_name)
             };
-            let mut final_instructions = compiler.instructions.clone();
+            let (mut final_instructions, mut instruction_spans) =
+                compiler.instructions.clone_parts();
 
             // Add the bootstrap call (main or ServeHttp)
             if is_http_server {
                 if let Some(&default_idx) = compiler.global_table.get("__default__") {
                     final_instructions.push(OpCode::ServeHttp(default_idx));
+                    instruction_spans.push(Span::default());
                     final_instructions.push(OpCode::Halt);
+                    instruction_spans.push(Span::default());
                 }
             } else if let Some(&main_idx) = compiler.global_table.get("main") {
                 final_instructions.push(OpCode::CallGlobal(0, main_idx, 0, 0));
+                instruction_spans.push(Span::default());
                 final_instructions.push(OpCode::Halt);
+                instruction_spans.push(Span::default());
             }
 
             // Serialize bytecode
-            let payload = (final_instructions, compiler.constants.clone());
+            let payload = (
+                final_instructions,
+                instruction_spans,
+                compiler.constants.clone(),
+                source_ref.as_ref().clone(),
+                filename_ref.as_ref().clone(),
+            );
             let bytecode_bytes = bincode::serialize(&payload).unwrap();
             if bundle {
                 let payload_len = bytecode_bytes.len() as u64;
@@ -622,7 +656,7 @@ fn main() {
                     let final_len = runtime_len + payload_len as usize + 16;
                     print_bytecode_stats(
                         &payload.0,
-                        &payload.1,
+                        &payload.2,
                         bytecode_bytes.len(),
                         runtime_len,
                         final_len,
@@ -652,7 +686,7 @@ fn main() {
                     let final_len = bytecode_bytes.len();
                     print_bytecode_stats(
                         &payload.0,
-                        &payload.1,
+                        &payload.2,
                         bytecode_bytes.len(),
                         0,
                         final_len,
@@ -747,7 +781,7 @@ fn print_bytecode_stats(
     }
 }
 
-fn check_for_embedded_bytecode() -> Option<(Vec<OpCode>, Vec<Value>)> {
+fn check_for_embedded_bytecode() -> Option<BytecodePayload> {
     let path = std::env::current_exe().ok()?;
     let mut file = std::fs::File::open(path).ok()?;
     let file_len = file.metadata().ok()?.len();
@@ -775,7 +809,21 @@ fn check_for_embedded_bytecode() -> Option<(Vec<OpCode>, Vec<Value>)> {
     let mut buffer = vec![0u8; size as usize];
     file.read_exact(&mut buffer).ok()?;
 
-    bincode::deserialize(&buffer).ok()
+    if let Ok(payload) = bincode::deserialize::<BytecodePayload>(&buffer) {
+        return Some(payload);
+    }
+    if let Ok((instructions, constants)) =
+        bincode::deserialize::<(Vec<OpCode>, Vec<Value>)>(&buffer)
+    {
+        return Some((
+            instructions,
+            Vec::new(),
+            constants,
+            String::new(),
+            String::new(),
+        ));
+    }
+    None
 }
 
 /// Load and compile a module, returning its exported functions (with home_globals injected)
@@ -850,7 +898,9 @@ fn load_module(module_path: &str, base_path: &PathBuf, cache: &mut ModuleCache) 
     }
 
     // 3. Compile at global scope (like main entrypoint)
-    let mut module_compiler = Compiler::new(None);
+    let source_ref = std::sync::Arc::new(source.clone());
+    let filename_ref = std::sync::Arc::new(resolved_path.to_string_lossy().to_string());
+    let mut module_compiler = Compiler::new(None, source_ref.clone(), filename_ref.clone());
     module_compiler.inject_builtins();
 
     for stmt in processed_statements {
@@ -861,10 +911,14 @@ fn load_module(module_path: &str, base_path: &PathBuf, cache: &mut ModuleCache) 
     module_compiler.instructions.push(OpCode::Halt);
 
     // 4. Execute module in isolated VM
+    let (instructions, instruction_spans) = module_compiler.instructions.clone_parts();
     let mut vm = VM::new(
-        module_compiler.instructions.clone(),
+        instructions,
+        instruction_spans,
         module_compiler.constants.clone(),
         module_compiler.max_reg as usize,
+        source_ref.clone(),
+        filename_ref.clone(),
     );
     vm.run();
 

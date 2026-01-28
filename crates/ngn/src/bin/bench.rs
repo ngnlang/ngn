@@ -60,7 +60,9 @@ fn run_benchmark(path: &Path) {
 
     // 3. Compile
     let start_compile = Instant::now();
-    let mut compiler = Compiler::new(None);
+    let source_ref = std::sync::Arc::new(source.clone());
+    let filename_ref = std::sync::Arc::new(filename.to_string());
+    let mut compiler = Compiler::new(None, source_ref, filename_ref);
     compiler.inject_builtins();
 
     // Register globals
@@ -78,17 +80,22 @@ fn run_benchmark(path: &Path) {
     let compile_time = start_compile.elapsed();
 
     // 4. Execute
-    let mut final_instructions = compiler.instructions.clone();
+    let (mut final_instructions, mut instruction_spans) = compiler.instructions.clone_parts();
     if let Some(&main_idx) = compiler.global_table.get("main") {
         final_instructions.push(OpCode::CallGlobal(0, main_idx, 0, 0));
+        instruction_spans.push(ngn::lexer::Span::default());
         final_instructions.push(OpCode::Halt);
+        instruction_spans.push(ngn::lexer::Span::default());
     }
 
     let start_execute = Instant::now();
     let mut vm = VM::new(
         final_instructions,
+        instruction_spans,
         compiler.constants.clone(),
         compiler.next_index,
+        std::sync::Arc::new(source.clone()),
+        std::sync::Arc::new(filename.to_string()),
     );
     vm.run();
     let execute_time = start_execute.elapsed();

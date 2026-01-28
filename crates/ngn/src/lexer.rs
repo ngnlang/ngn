@@ -111,7 +111,9 @@ pub enum LexMode {
 }
 
 /// Represents a span of source code with byte offsets
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
 pub struct Span {
     pub start: usize, // byte offset (inclusive)
     pub end: usize,   // byte offset (exclusive)
@@ -150,8 +152,8 @@ impl Span {
         &source[line_start..line_end]
     }
 
-    /// Format a diagnostic message with source context
-    pub fn format_diagnostic(&self, source: &str, filename: &str, message: &str) -> String {
+    /// Format a diagnostic location (file, line, caret) without a message
+    pub fn format_location(&self, source: &str, filename: &str) -> String {
         // Adjust start to skip any leading whitespace in the span
         let mut adjusted_start = self.start;
         while adjusted_start < self.end && adjusted_start < source.len() {
@@ -174,8 +176,7 @@ impl Span {
         let line_num_width = format!("{}", line).len().max(3);
 
         format!(
-            "{}\n --> {}:{}:{}\n{:width$} |\n{:width$} | {}\n{:width$} | {}{}",
-            message,
+            " --> {}:{}:{}\n{:width$} |\n{:width$} | {}\n{:width$} | {}{}",
             filename,
             line,
             col,
@@ -187,6 +188,12 @@ impl Span {
             carets,
             width = line_num_width
         )
+    }
+
+    /// Format a diagnostic message with source context
+    pub fn format_diagnostic(&self, source: &str, filename: &str, message: &str) -> String {
+        let location = self.format_location(source, filename);
+        format!("{}\n{}", message, location)
     }
 }
 

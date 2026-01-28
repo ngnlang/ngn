@@ -3,6 +3,7 @@
 // It's embedded into the ngn compiler and extracted during `ngn build`
 
 use ngn::bytecode::OpCode;
+use ngn::lexer::Span;
 use ngn::value::Value;
 use ngn::vm::VM;
 use std::io::{Read, Seek, SeekFrom};
@@ -27,27 +28,61 @@ fn main() {
     if let Some(mod_arg) = mod_arg {
         let path = std::path::Path::new(mod_arg);
         let bytes = std::fs::read(path).expect("Could not read bytecode file");
-        let (instructions, constants): (Vec<OpCode>, Vec<Value>) =
-            bincode::deserialize(&bytes).expect("Failed to deserialize bytecode");
+        let (instructions, instruction_spans, constants, source, filename): (
+            Vec<OpCode>,
+            Vec<Span>,
+            Vec<Value>,
+            String,
+            String,
+        ) = match bincode::deserialize(&bytes) {
+            Ok(payload) => payload,
+            Err(_) => {
+                let (instructions, constants): (Vec<OpCode>, Vec<Value>) =
+                    bincode::deserialize(&bytes).expect("Failed to deserialize bytecode");
+                (
+                    instructions,
+                    Vec::new(),
+                    constants,
+                    String::new(),
+                    String::new(),
+                )
+            }
+        };
         let working_dir = std::env::var("NGN_WORKDIR")
             .ok()
             .map(std::path::PathBuf::from)
             .or_else(|| path.parent().map(|p| p.to_path_buf()))
             .unwrap_or_else(|| std::path::PathBuf::from("."));
         ngn::env::init(&working_dir);
-        let mut vm = VM::new(instructions, constants, 0);
+        let mut vm = VM::new(
+            instructions,
+            instruction_spans,
+            constants,
+            0,
+            std::sync::Arc::new(source),
+            std::sync::Arc::new(filename),
+        );
         vm.run();
         return;
     }
 
     // Check for embedded bytecode (same logic as main ngn binary)
-    if let Some((instructions, constants)) = check_for_embedded_bytecode() {
+    if let Some((instructions, instruction_spans, constants, source, filename)) =
+        check_for_embedded_bytecode()
+    {
         let working_dir = std::env::var("NGN_WORKDIR")
             .ok()
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("."));
         ngn::env::init(&working_dir);
-        let mut vm = VM::new(instructions, constants, 0);
+        let mut vm = VM::new(
+            instructions,
+            instruction_spans,
+            constants,
+            0,
+            std::sync::Arc::new(source),
+            std::sync::Arc::new(filename),
+        );
         vm.run();
     } else {
         eprintln!("Error: This binary has no embedded bytecode.");
@@ -55,7 +90,7 @@ fn main() {
     }
 }
 
-fn check_for_embedded_bytecode() -> Option<(Vec<OpCode>, Vec<Value>)> {
+fn check_for_embedded_bytecode() -> Option<(Vec<OpCode>, Vec<Span>, Vec<Value>, String, String)> {
     let path = std::env::current_exe().ok()?;
     let mut file = std::fs::File::open(path).ok()?;
     let file_len = file.metadata().ok()?.len();
@@ -83,5 +118,21 @@ fn check_for_embedded_bytecode() -> Option<(Vec<OpCode>, Vec<Value>)> {
     let mut buffer = vec![0u8; size as usize];
     file.read_exact(&mut buffer).ok()?;
 
-    bincode::deserialize(&buffer).ok()
+    if let Ok(payload) =
+        bincode::deserialize::<(Vec<OpCode>, Vec<Span>, Vec<Value>, String, String)>(&buffer)
+    {
+        return Some(payload);
+    }
+    if let Ok((instructions, constants)) =
+        bincode::deserialize::<(Vec<OpCode>, Vec<Value>)>(&buffer)
+    {
+        return Some((
+            instructions,
+            Vec::new(),
+            constants,
+            String::new(),
+            String::new(),
+        ));
+    }
+    None
 }
