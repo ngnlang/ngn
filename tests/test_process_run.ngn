@@ -1,0 +1,13 @@
+import { assert } from "tbx::test"
+import { run } from "tbx::process"
+
+fn main() {
+  const r = <- run("printf 'hi'")
+  match (r) {
+    Ok(out) => {
+      assert(out.code == 0)
+      assert(out.stdout == "hi")
+    },
+    Error(e) => assert(false, e)
+  }
+}

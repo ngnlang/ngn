@@ -41,16 +41,45 @@ jobs:
         run: make release
 
       - name: Run ngn test suite
-        run: ./target/release/ngn run main.ngn
+        run: ./target/release/ngn run tests/main.ngn
 
       - name: Run Rust tests
         run: cargo test -q -p ngn
 
       - name: Smoke toolbox tests
         run: |
-          ./target/release/ngn run test_process_run.ngn
-          ./target/release/ngn run test_process_stream.ngn
-          ./target/release/ngn run test_process_stream_raw.ngn
-          ./target/release/ngn run test_llm_fake.ngn
-          ./target/release/ngn run test_thread_capture_snapshot.ngn
-          ./target/release/ngn run test_thread_state_shared.ngn
+          ./target/release/ngn run tests/test_process_run.ngn
+          ./target/release/ngn run tests/test_process_stream.ngn
+          ./target/release/ngn run tests/test_process_stream_raw.ngn
+          ./target/release/ngn run tests/test_llm_fake.ngn
+          ./target/release/ngn run tests/test_thread_capture_snapshot.ngn
+          ./target/release/ngn run tests/test_thread_state_shared.ngn
+
+  linux-aarch64-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ngn-linux-aarch64
+
+      - name: Install aarch64 toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Add aarch64 target
+        run: rustup target add aarch64-unknown-linux-gnu
+
+      - name: Build (aarch64)
+        run: |
+          cargo build --release -p ngn --bin runtime --target aarch64-unknown-linux-gnu
+          cargo build --release -p ngn --bin ngn --target aarch64-unknown-linux-gnu

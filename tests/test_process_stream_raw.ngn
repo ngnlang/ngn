@@ -1,0 +1,24 @@
+import { assert } from "tbx::test"
+import { assert } from "tbx::test"
+import { streamRaw } from "tbx::process"
+
+fn main() {
+  const r = streamRaw("printf 'xyz'")
+  match (r) {
+    Ok(p) => {
+      const chunk = <- p.stdout
+      assert(chunk.toStringStrict() == "xyz")
+
+      // Allow the process to exit naturally.
+      p.stdout.close()
+      p.stderr.close()
+
+      const done = <- p.done
+      match (done) {
+        Ok(out) => assert(out.code == 0)
+        Error(e) => assert(false, e)
+      }
+    },
+    Error(e) => assert(false, e)
+  }
+}

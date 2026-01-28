@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE_URL="https://ngnlang.com/releases"
+BASE_URL="https://github.com/ngnlang/ngn/releases"
 VERSION="${NGN_VERSION:-latest}"
 INSTALL_DIR="${NGN_INSTALL_DIR:-$HOME/.local/bin}"
 
@@ -10,7 +10,6 @@ ARCH_NAME="$(uname -m)"
 
 case "${OS_NAME}" in
   Linux) OS="linux" ;;
-  Darwin) OS="darwin" ;;
   *)
     echo "Unsupported OS: ${OS_NAME}" >&2
     exit 1

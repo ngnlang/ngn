@@ -1,0 +1,17 @@
+import { assert } from "tbx::test"
+
+fn main() {
+  var s = state(0)
+
+  const ch = thread(|| {
+    // Mutate shared state from the spawned fiber
+    s.write(42)
+    return s.read()
+  })
+
+  const v = <- ch
+  assert(v == 42)
+
+  // Parent observes the mutation too
+  assert(s.read() == 42)
+}

@@ -1,0 +1,15 @@
+import { assert } from "tbx::test"
+import { load } from "tbx::llm"
+
+fn main() {
+  // We don't ship a GGUF in-repo. Ensure load errors cleanly.
+  const r = load("./missing.gguf")
+  match (r) {
+    Ok(v) => {
+      // Should not happen in this test
+      assert(false, "expected load failure")
+      print(v)
+    },
+    Error(e) => assert(e != "")
+  }
+}

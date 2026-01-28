@@ -1,0 +1,25 @@
+import { assert } from "tbx::test"
+import { stream } from "tbx::process"
+
+fn main() {
+  const r = stream("printf 'a\nb\n'")
+  match (r) {
+    Ok(p) => {
+      const a = <- p.stdout
+      const b = <- p.stdout
+      assert(a == "a")
+      assert(b == "b")
+
+      // Stop reading; allow the process to exit naturally.
+      p.stdout.close()
+      p.stderr.close()
+
+      const done = <- p.done
+      match (done) {
+        Ok(out) => assert(out.code == 0)
+        Error(e) => assert(false, e)
+      }
+    },
+    Error(e) => assert(false, e)
+  }
+}

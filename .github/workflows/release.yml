@@ -1,0 +1,52 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ngn-release
+
+      - name: Install aarch64 toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+
+      - name: Add aarch64 target
+        run: rustup target add aarch64-unknown-linux-gnu
+
+      - name: Build and package
+        env:
+          NGN_LLAMA_BACKEND: cpu
+        run: |
+          make release
+          make dist VERSION=${GITHUB_REF_NAME}
+          cp dist/ngn-${GITHUB_REF_NAME}-linux-x86_64.tar.gz dist/ngn-latest-linux-x86_64.tar.gz
+          cp dist/ngn-${GITHUB_REF_NAME}-linux-arm64.tar.gz dist/ngn-latest-linux-arm64.tar.gz
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/ngn-${{ github.ref_name }}-linux-x86_64.tar.gz
+            dist/ngn-${{ github.ref_name }}-linux-arm64.tar.gz
+            dist/ngn-latest-linux-x86_64.tar.gz
+            dist/ngn-latest-linux-arm64.tar.gz

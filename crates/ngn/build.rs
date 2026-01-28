@@ -16,10 +16,6 @@ fn main() {
 }
 
 fn should_copy_runtime_binaries() -> bool {
-    if env::var("NGN_SKIP_RUNTIME_COPY").is_ok() {
-        return false;
-    }
-
     env::var("CARGO_BIN_NAME")
         .map(|name| name != "runtime")
         .unwrap_or(true)
@@ -335,6 +331,7 @@ fn collect_sources_shallow(dir: &Path, c_files: &mut Vec<PathBuf>, cpp_files: &m
 fn copy_runtime_binaries() {
     let out_dir = env::var("OUT_DIR").unwrap();
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    let target = env::var("TARGET").ok();
     let out_dir = PathBuf::from(&out_dir);
 
     // Look for pre-built runtime in workspace target/embed/
@@ -346,11 +343,26 @@ fn copy_runtime_binaries() {
         .join("target")
         .join("embed");
 
-    let src_path = embed_dir.join("ngnr");
+    let mut candidates = Vec::new();
+    candidates.push(embed_dir.join("ngnr"));
+    if let Some(t) = &target {
+        let target_dir = PathBuf::from(&manifest_dir)
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("target")
+            .join(t)
+            .join("release");
+        candidates.push(target_dir.join("ngnr"));
+        candidates.push(target_dir.join("runtime"));
+    }
+
+    let src_path = candidates.iter().find(|p| p.exists()).cloned();
     let dest_path = out_dir.join("runtime_binary");
 
-    if src_path.exists() {
-        fs::copy(&src_path, &dest_path).expect("Failed to copy ngnr to OUT_DIR");
+    if let Some(src_path) = src_path {
+        fs::copy(&src_path, &dest_path).expect("Failed to copy runtime to OUT_DIR");
     } else {
         fs::write(
             &dest_path,
@@ -363,5 +375,9 @@ fn copy_runtime_binaries() {
 
     // Tell cargo to rerun if runtime changes
     println!("cargo:rerun-if-changed=target/embed/ngnr");
+    if let Some(t) = target {
+        println!("cargo:rerun-if-changed=target/{}/release/ngnr", t);
+        println!("cargo:rerun-if-changed=target/{}/release/runtime", t);
+    }
     println!("cargo:rerun-if-changed=src/bin/runtime.rs");
 }

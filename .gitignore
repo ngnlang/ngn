@@ -1,5 +1,7 @@
 target
+dist
 *.ngn
+!tests/**/*.ngn
 *.mod
 node_modules/
 editors/vscode/out/

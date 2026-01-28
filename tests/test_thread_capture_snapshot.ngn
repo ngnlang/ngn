@@ -1,0 +1,14 @@
+import { assert } from "tbx::test"
+
+fn main() {
+  var x = 1
+  const ch = thread(|| {
+    return x
+  })
+
+  // Mutate after spawn; spawned closure should have captured the old value.
+  x = 2
+
+  const v = <- ch
+  assert(v == 1)
+}
