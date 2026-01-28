@@ -56,6 +56,27 @@ Here are some highlights:
 
 Your entrypoint file must define a `main()` function. It's found and run automatically. Most of your code will live inside of this function, but not everything.
 
+## Error reporting
+
+Runtime errors include source locations with file, line, and a caret.
+
+```ngn
+fn main() {
+  const items = [1, 2]
+  print(items[5])
+}
+```
+
+Output:
+
+```
+[ngn] Runtime Error: Array index out of bounds: 5
+ --> main.ngn:3:9
+    |
+  3 |   print(items[5])
+    |         ^^^^^^^^
+```
+
 ## Declaring identifiers
 
 | example | scope | value |

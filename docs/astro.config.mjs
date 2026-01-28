@@ -30,7 +30,7 @@ export default defineConfig({
 					label: 'Getting Started',
 					items: [
 						{ label: 'Overview', slug: 'getting-started' },
-						{ label: 'Install', slug: 'getting-started/install' },
+						{ label: 'Let\'s Go', slug: 'getting-started/install' },
 						{ label: 'Hello World', slug: 'getting-started/hello-world' },
 						{ label: 'Next Steps', slug: 'getting-started/next-steps' },
 					],

@@ -73,3 +73,24 @@ fn main() {
   print(person.name)
 }
 ```
+
+## Errors and diagnostics
+
+Runtime errors include source locations with file, line, and a caret.
+
+```ngn
+fn main() {
+  const items = [1, 2]
+  print(items[5])
+}
+```
+
+Example output:
+
+```
+[ngn] Runtime Error: Array index out of bounds: 5
+ --> main.ngn:3:9
+    |
+  3 |   print(items[5])
+    |         ^^^^^^^^
+```
