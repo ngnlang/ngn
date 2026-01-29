@@ -1,11 +1,13 @@
 ---
-title: Standard Library
-description: Toolbox modules for common tasks.
+title: Toolbox
+description: ngn's "standard library".
 ---
 
-ngn ships a toolbox module namespace (`tbx::`) for common tasks.
+ngn ships a "standard library" called the toolbox. It has module namespace of `tbx::`.
 
 ## Imports
+
+Non-exhaustive list. See API reference for more.
 
 ```ngn
 import { abs, floor, ceil } from "tbx::math"

@@ -3,7 +3,7 @@ title: Hello World
 description: Write and run your first ngn program.
 ---
 
-Every ngn program starts with a `main()` function. You can keep everything in a single file while you are learning.
+Every ngn program starts with a `main()` function in the entrypoint file.
 
 ## Create a project folder
 

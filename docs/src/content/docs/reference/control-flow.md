@@ -3,12 +3,23 @@ title: Control Flow
 description: Conditionals, loops, and pattern matching.
 ---
 
-ngn combines classic control flow with compact inline forms.
-
 ## Inline if
 
+Inspired by ternaries, so we avoid the tendency for braces and "else/if" to become verbose. Each statement block can only have one statement.
+
 ```ngn
-const label = if (x > 10) "high" : (x > 5) "medium" : "low"
+if (x > 10) print("high") : (x > 5) print("medium") : print("low")
+```
+
+You can go multiline if that's better for readability.
+
+```ngn
+if (x > 10)
+  print("high")
+: (x > 5)
+  print("medium")
+:
+  print("low")
 ```
 
 ## Block if
@@ -30,20 +41,26 @@ if {
 ## Loops
 
 ```ngn
+// infinite loop; manual break needed
 loop {
   print("running")
   break
 }
 
-while (count < 3) count = count + 1
+while (count < 3) count += 1
+
+for (i in items) {
+  print(i)
+}
 ```
 
 ## Match
 
 ```ngn
 match (value) {
-  1 => print("one"),
-  2 | 3 => print("two or three"),
-  _ => print("other")
+  0 => print("invalid"),
+  1 | 2 => print("low"),
+  3..10 => print("in range")
+  _ => print("high")
 }
 ```

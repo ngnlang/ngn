@@ -9,11 +9,11 @@ Concurrency in ngn is explicit, readable, and composable.
 
 ```ngn
 const ch = channel<string>()
-ch <- "hello"
-const msg = <- ch
+ch <- "hello" // send a message to the channel
+const msg = <- ch // wait for a single message and assign it
 ```
 
-The `<-` operator can wait for multiple messages:
+The `<-` operator can also wait for multiple messages:
 
 ```ngn
 <-2 ch
@@ -22,6 +22,7 @@ The `<-` operator can wait for multiple messages:
 ```
 
 ## Threads
+Creating a thread also returns a channel to you; then simply return data from the thread closure in order to send to the channel.
 
 ```ngn
 const done = thread(|| {
@@ -29,12 +30,17 @@ const done = thread(|| {
   return "finished"
 })
 
-const result = <- done
+const result = <- done // finished
 ```
 
 ## Shared state
 
+Used for mutable, atomic state; most useful when mutating data from multiple places, like threads.
+
 ```ngn
 var counter = state(0)
+
+// "n" is a snapshot of the current value of "counter",
+// then we write back the result
 counter.update(|n| n + 1)
 ```

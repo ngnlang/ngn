@@ -38,7 +38,6 @@ export default defineConfig({
 				{
 					label: 'Guides',
 					items: [
-						// Each item here is one entry in the navigation menu.
 						{ label: 'Language Tour', slug: 'guides/language-tour' },
 						{ label: 'Concurrency Basics', slug: 'guides/concurrency-basics' },
 						{ label: 'HTTP Servers', slug: 'guides/http-servers' },
