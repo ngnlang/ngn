@@ -35,12 +35,4 @@ const result = <- done // finished
 
 ## Shared state
 
-Used for mutable, atomic state; most useful when mutating data from multiple places, like threads.
 
-```ngn
-var counter = state(0)
-
-// "n" is a snapshot of the current value of "counter",
-// then we write back the result
-counter.update(|n| n + 1)
-```

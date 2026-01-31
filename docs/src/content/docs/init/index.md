@@ -1,9 +1,9 @@
 ---
-title: Getting Started
+title: init
 description: What is ngn?
 ---
 
-Prounounced "engine", ngn is a high-level programming language designed to create APIs, MCP servers, and other AI capabilities like LLM inference. It's intended to be easily learned, dearly loved, and draws inspiration from many other languages - with some unique modifications here and there.
+Pronounced "engine", ngn is a high-level programming language designed to create APIs, MCP servers, and serve AI purposes like LLM inference. It's intended to be easily learned and dearly loved. It draws inspiration from many other languages, with some unique modifications here and there.
 
 ## What you can expect
 

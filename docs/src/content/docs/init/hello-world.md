@@ -8,8 +8,7 @@ Every ngn program starts with a `main()` function in the entrypoint file.
 ## Create a project folder
 
 ```bash
-mkdir ngn
-cd ngn
+mkdir ngn && cd ngn
 ```
 
 ## Create an entrypoint

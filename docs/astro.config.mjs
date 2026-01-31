@@ -27,20 +27,21 @@ export default defineConfig({
 			},
 			sidebar: [
 				{
-					label: 'Getting Started',
+					label: 'init',
 					items: [
-						{ label: 'Overview', slug: 'getting-started' },
-						{ label: 'Let\'s Go', slug: 'getting-started/install' },
-						{ label: 'Hello World', slug: 'getting-started/hello-world' },
-						{ label: 'Next Steps', slug: 'getting-started/next-steps' },
+						{ label: 'Overview', slug: 'init' },
+						{ label: 'Let\'s Go', slug: 'init/install' },
+						{ label: 'Hello World', slug: 'init/hello-world' },
 					],
 				},
 				{
-					label: 'Guides',
+					label: 'learn',
 					items: [
-						{ label: 'Language Tour', slug: 'guides/language-tour' },
-						{ label: 'Concurrency Basics', slug: 'guides/concurrency-basics' },
-						{ label: 'HTTP Servers', slug: 'guides/http-servers' },
+						{ label: 'wtf?', slug: 'learn/wtf' },
+						{ label: 'Sick Picks', slug: 'learn/sick-picks' },
+						{ label: 'Basics', slug: 'learn/basics' },
+						{ label: 'Language Tour', slug: 'learn/language-tour' },
+						{ label: 'HTTP Servers', slug: 'learn/http-servers' },
 					],
 				},
 				{
