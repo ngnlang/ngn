@@ -1,5 +1,5 @@
 use crate::bytecode::OpCode;
-use crate::lexer::{Span, Token};
+use crate::lexer::{is_emoji_identifier, Span, Token};
 use crate::parser::{EnumDef, Expr, ExprKind, Pattern, Statement, StatementKind};
 use crate::value::{Function, Number, Value};
 use std::collections::{HashMap, HashSet};
@@ -556,6 +556,11 @@ impl Compiler {
                 } else if let Some(&idx) = self.global_table.get(name) {
                     let dest = self.alloc_reg();
                     self.instructions.push(OpCode::GetGlobal(dest, idx));
+                    dest
+                } else if is_emoji_identifier(name) {
+                    let dest = self.alloc_reg();
+                    let idx = self.add_constant(Value::String(name.clone()));
+                    self.instructions.push(OpCode::LoadConst(dest, idx));
                     dest
                 } else {
                     panic!("Compiler Error: Undefined variable '{}'", name);

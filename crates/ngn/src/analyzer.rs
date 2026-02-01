@@ -1,4 +1,4 @@
-use crate::lexer::{Span, Token};
+use crate::lexer::{is_emoji_identifier, Span, Token};
 use crate::parser::{
     EnumDef, EnumVariantDef, Expr, ExprKind, ModelDef, Pattern, RoleDef, Statement, StatementKind,
     Type,
@@ -2001,6 +2001,8 @@ impl Analyzer {
                     ty
                 } else if let Some(sym) = self.lookup(name) {
                     sym.ty.clone()
+                } else if is_emoji_identifier(name) {
+                    Type::String
                 } else {
                     self.add_error(format!("Error: Undefined variable '{}'", name), expr.span);
                     Type::Void

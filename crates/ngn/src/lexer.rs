@@ -294,7 +294,7 @@ impl Lexer {
             return self.read_number();
         }
 
-        if ch.is_alphabetic() {
+        if is_identifier_start(ch) {
             return self.read_identifier();
         }
 
@@ -527,9 +527,7 @@ impl Lexer {
 
     fn read_identifier(&mut self) -> Token {
         let mut ident = String::new();
-        while self.cursor < self.source.len()
-            && (self.source[self.cursor].is_alphanumeric() || self.source[self.cursor] == '_')
-        {
+        while self.cursor < self.source.len() && is_identifier_continue(self.source[self.cursor]) {
             ident.push(self.source[self.cursor]);
             self.cursor += 1;
         }
@@ -739,4 +737,62 @@ impl Lexer {
         }
         Token::Error("Unterminated regex literal".to_string())
     }
+}
+
+/// Check if a character can start an identifier
+/// This includes alphabetic characters and emoji characters
+fn is_identifier_start(ch: char) -> bool {
+    ch.is_alphabetic() || is_emoji_start(ch)
+}
+
+/// Check if a character can continue an identifier
+/// This includes alphanumeric characters, underscore, and emoji characters
+fn is_identifier_continue(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_' || is_emoji_continue(ch)
+}
+
+fn is_emoji_start(ch: char) -> bool {
+    let code = ch as u32;
+    matches!(
+        code,
+        0x1F000..=0x1F02F
+            | 0x1F0A0..=0x1F0FF
+            | 0x1F1E6..=0x1F1FF
+            | 0x1F300..=0x1F5FF
+            | 0x1F600..=0x1F64F
+            | 0x1F680..=0x1F6FF
+            | 0x1F700..=0x1F77F
+            | 0x1F780..=0x1F7FF
+            | 0x1F800..=0x1F8FF
+            | 0x1F900..=0x1F9FF
+            | 0x1FA00..=0x1FAFF
+            | 0x2300..=0x23FF
+            | 0x2600..=0x26FF
+            | 0x2700..=0x27BF
+            | 0x2B00..=0x2BFF
+    )
+}
+
+fn is_emoji_modifier(ch: char) -> bool {
+    matches!(ch, '\u{FE0F}' | '\u{FE0E}' | '\u{200D}' | '\u{20E3}')
+}
+
+fn is_emoji_continue(ch: char) -> bool {
+    is_emoji_start(ch) || is_emoji_modifier(ch)
+}
+
+pub fn is_emoji_identifier(value: &str) -> bool {
+    let mut has_emoji = false;
+    for ch in value.chars() {
+        if is_emoji_start(ch) {
+            has_emoji = true;
+        } else if is_emoji_modifier(ch) {
+            if !has_emoji {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+    has_emoji
 }
