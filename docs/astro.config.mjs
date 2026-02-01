@@ -27,17 +27,17 @@ export default defineConfig({
 			},
 			sidebar: [
 				{
-					label: 'init',
+					label: 'Start',
 					items: [
-						{ label: 'Overview', slug: 'init' },
-						{ label: 'Let\'s Go', slug: 'init/install' },
-						{ label: 'Hello World', slug: 'init/hello-world' },
+						{ label: 'Overview', slug: 'start' },
+						{ label: 'Install', slug: 'start/install' },
+						{ label: 'Hello World', slug: 'start/hello-world' },
 					],
 				},
 				{
-					label: 'learn',
+					label: 'Learn',
 					items: [
-						{ label: 'wtf?', slug: 'learn/wtf' },
+						{ label: 'WTF?', slug: 'learn/wtf' },
 						{ label: 'Sick Picks', slug: 'learn/sick-picks' },
 						{ label: 'Basics', slug: 'learn/basics' },
 						{ label: 'Language Tour', slug: 'learn/language-tour' },

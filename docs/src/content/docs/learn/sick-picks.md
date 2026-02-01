@@ -7,17 +7,27 @@ Here are some features you should know about.
 
 ## State
 
-Used for mutable, atomic state; most useful when mutating data from multiple places, like threads.
+Create mutable, atomic state; most useful when mutating data from multiple places, like threads.
 
 ```ngn
-var counter = state(0)
+const counter = state(0)
 
+counter.update(|n| n + 1) // we pass a closure
 // "n" is a snapshot of the current value of "counter",
 // internally, we write back the new value
-counter.update(|n| n + 1) // we pass a closure
 ```
 
-You can also call `.read()` and `.write()`. Writing sets the state variable's value, and should not be used in combination with `.update()` unless you can guarantee order of operations - otherwise, you may get unexpected results.
+You can also call `.read()`; as well as `.write()`, which is an overwrite of the current value and should not be used in combination with `.update()` unless you can guarantee order of operations - otherwise, you may get unexpected results.
+
+:::note
+Yep, you saw that right: you can use `const` to declare state variables. You just can't do something like `counter = ...` after that.
+
+However, you could do the below; although the same could be achieved with the `.write()` method.
+```ngn
+var counter = state(0)
+counter = state(100)
+```
+:::
 
 ## Closures
 

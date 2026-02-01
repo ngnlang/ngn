@@ -1,5 +1,5 @@
 ---
-title: wtf?
+title: WTF?
 description: Things to know about ngn
 ---
 
@@ -26,7 +26,7 @@ if (y == 10) print("perfect!") : (y <= 6) print("danger zone") : print("not bad!
 
 Damn that's beautiful.
 
-However, there's a catch. The parser expects only one statement per block. If any of them have more than one, we just wrap things two braces:
+However, there's a catch. The parser expects only one statement per block. If any of them have more, we just wrap everything with braces. So, at most, you'll only need two.
 
 ```ngn
 if {
@@ -41,7 +41,7 @@ if {
 ```
 This is necessary so the parser knows where the `if` statement ends and where the next statement begins. Otherwise, is `print("so be it")` part of the "else" block or just the next statement after `if`? Indentation has no meaning in ngn.
 
-So, we sacrifice a little weirdness for concise, powerful inline syntax.
+So, we sacrifice occassional weirdness for concise, powerful inline syntax.
 
 ## `slice` behavior
 
@@ -49,19 +49,23 @@ The `slice()` method on strings and arrays mutates the original. Why? Because ng
 
 If you don't want to mutate the original, use `copy()` - it has the same API as `slice()`.
 
+## Functions
+
+Functions are isolated data environments; i.e. you can't reference outside `var` or `const` data, only pass them in. However, you can reference/call sibling functions and globals - literally data defined with `global` and other top-level things (imports, enums, models, functions, etc).
+
 ## Function params
 
-You know how in Rust you would do `(name: &str)` to borrow data for a function, otherwise you transfer ownership of the data to the function? ngn essentially does the opposite - function params are borrowed by default, so they get a non-mutable copy.
+You know how in Rust you use `&`, as in `(name: &str)`, to borrow data for a function, otherwise you transfer ownership of the data to the function? ngn essentially does the opposite - function params are borrowed by default, so they get a non-mutable copy.
 
-This means that if you want to mutate a `var` inside of a function, you need to mark the param as "owned". Optionally, you could also do this if you're not going to use the data after it's passed in - for a smidge of early memory cleanup.
+This means that if you want to mutate a passed-in `var` within a function, you need to mark the param as "owned". Optionally, you could also do this if you're not going to use the data after the function - for a smidge of early memory cleanup.
 ```ngn
 var x = "hello"
 
 // the `<` in front of the type assumes ownership
 // and enables mutation inside the function
 fn doSomething(stuff: <string) {
-  // read and/or mutate "stuff",
-  // then cleanup the memory
+  // read and/or mutate "stuff".
+  // memory is automatically cleaned up
 }
 
 doSomething(x) ✅ // moves ownership of `x` to the function
@@ -74,8 +78,8 @@ In contrast, you can continue using passed borrowed data, but it can't be mutate
 var x = "hello"
 
 fn readThing(thing: string) {
-  // can read "thing", but not mutate;
-  // then cleanup the memory
+  // can read "thing", but not mutate.
+  // the copy's memory is automatically cleaned up
 }
 
 readThing(x) ✅ // does not move ownership of `x` to the function
@@ -96,5 +100,5 @@ Yeah, it's not called that in ngn, but you can use the phrase if you'd like. We 
 import { ceil } from "tbx::math"
 ```
 
-idk, there's just something about having `std` in code that's a bit cringe.
+idk, there's just something about having `std` in code that's a bit cringe for me. Perhaps I'm just nitpicking.
 
