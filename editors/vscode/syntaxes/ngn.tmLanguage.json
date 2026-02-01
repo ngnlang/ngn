@@ -26,6 +26,9 @@
       "include": "#booleans"
     },
     {
+      "include": "#pipePlaceholders"
+    },
+    {
       "include": "#operators"
     }
   ],
@@ -116,8 +119,20 @@
     "operators": {
       "patterns": [
         {
-          "match": "(=>|<-|==|!=|<=|>=|\\+\\+|--|\\+=|-=|\\*=|/=|%=|&&|\\|\\|)",
+          "match": "(\\|>|=>|<-|==|!=|<=|>=|\\+\\+|--|\\+=|-=|\\*=|/=|%=|&&|\\|\\|)",
           "name": "keyword.operator.ngn"
+        }
+      ]
+    },
+    "pipePlaceholders": {
+      "patterns": [
+        {
+          "match": "\\$[0-9]+",
+          "name": "variable.language.ngn"
+        },
+        {
+          "match": "\\$",
+          "name": "variable.language.ngn"
         }
       ]
     },

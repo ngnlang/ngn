@@ -1369,12 +1369,14 @@ fn get_semantic_type(
         | Token::FatArrow
         | Token::LArrow
         | Token::Pipe
+        | Token::PipeForward
         | Token::Bang
         | Token::AndAnd
         | Token::OrOr => 5,
 
         Token::Regex(_) => 10,
         Token::InterpolationStart | Token::InterpolationEnd => 3, // variable-like for braces
+        Token::Placeholder(_) | Token::PlaceholderSelf => 3,
         _ => 3,
     };
 
