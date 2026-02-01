@@ -1663,8 +1663,10 @@ impl Analyzer {
                 self.exit_scope();
                 Type::Void
             }
-            StatementKind::Print(expr) => {
-                self.check_expression(expr);
+            StatementKind::Print(expr_opt) => {
+                if let Some(expr) = expr_opt {
+                    self.check_expression(expr);
+                }
                 Type::Void
             }
             StatementKind::Return(expr_opt) => {

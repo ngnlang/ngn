@@ -218,7 +218,7 @@ pub enum StatementKind {
         source: String,
     },
     ExportDefault(Expr),
-    Print(Expr),
+    Print(Option<Expr>),
     Echo(Expr),
     Sleep(Expr),
     Block(Vec<Statement>),
@@ -763,7 +763,11 @@ impl Parser {
             Token::Print => {
                 self.advance();
                 self.expect(Token::LParen);
-                let expr = self.parse_expression();
+                let expr = if self.current_token == Token::RParen {
+                    None
+                } else {
+                    Some(self.parse_expression())
+                };
                 self.expect(Token::RParen);
                 let end = self.previous_span.end;
                 Statement {

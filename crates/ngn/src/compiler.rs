@@ -1918,9 +1918,13 @@ impl Compiler {
                     }
                 }
             }
-            StatementKind::Print(expression) => {
-                let reg = self.compile_expr(&expression);
-                self.instructions.push(OpCode::Print(reg));
+            StatementKind::Print(expression_opt) => {
+                if let Some(expression) = expression_opt {
+                    let reg = self.compile_expr(&expression);
+                    self.instructions.push(OpCode::Print(reg));
+                } else {
+                    self.instructions.push(OpCode::PrintNewline);
+                }
                 self.reg_top = self.temp_start;
             }
             StatementKind::Echo(expression) => {

@@ -633,6 +633,9 @@ impl Fiber {
                 let val = self.get_reg_at(src);
                 println!("{}", val);
             }
+            OpCode::PrintNewline => {
+                println!();
+            }
             OpCode::Echo(src) => {
                 let val = self.get_reg_at(src);
                 print!("{}", val);

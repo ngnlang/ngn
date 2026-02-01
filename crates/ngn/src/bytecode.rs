@@ -94,6 +94,7 @@ pub enum OpCode {
 
     // Builtins/Misc
     Print(u16),
+    PrintNewline,
     Echo(u16),
     Sleep(u16),
     Panic(u16, usize), // (MessageReg, LocationConstIdx)
