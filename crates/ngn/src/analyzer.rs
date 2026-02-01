@@ -1925,6 +1925,159 @@ impl Analyzer {
         ty
     }
 
+    fn check_call_by_name(
+        &mut self,
+        name: &str,
+        arg_types: Vec<Type>,
+        arg_spans: Vec<Span>,
+        span: Span,
+    ) -> Type {
+        // Check if it's an enum variant constructor
+        let enum_info = self
+            .enums
+            .values()
+            .find(|e| e.variants.iter().any(|v| v.name == name))
+            .map(|e| {
+                let variant = e.variants.iter().find(|v| v.name == name).unwrap();
+                (e.name.clone(), variant.clone())
+            });
+
+        if let Some((enum_name, variant)) = enum_info {
+            // Get the full enum definition for type params
+            let enum_def = self.enums.get(&enum_name).cloned();
+
+            if let Some(expected_ty) = &variant.data_type {
+                if arg_types.len() != 1 {
+                    self.add_error(
+                        format!(
+                            "Error: Enum variant '{}' expects 1 argument, got {}",
+                            name,
+                            arg_types.len()
+                        ),
+                        span,
+                    );
+                } else {
+                    // For TypeParam, infer the concrete type from the argument
+                    // This allows Some(42) to work with enum Option<T> { Some(T), None }
+                    if !matches!(expected_ty, Type::TypeParam(_)) {
+                        // Non-generic: check compatibility normally
+                        if !self.types_compatible(expected_ty, &arg_types[0]) {
+                            self.add_error(
+                                format!(
+                                    "Type Error: Enum variant '{}' expected {:?}, got {:?}",
+                                    name, expected_ty, arg_types[0]
+                                ),
+                                span,
+                            );
+                        }
+                    }
+                }
+            } else if !arg_types.is_empty() {
+                self.add_error(
+                    format!("Error: Enum variant '{}' does not take any arguments", name),
+                    span,
+                );
+            }
+
+            // Return Generic type for generic enums, Enum type otherwise
+            if let Some(ed) = enum_def {
+                if !ed.type_params.is_empty() {
+                    // Infer type arguments from the variant's data
+                    let mut inferred_args: Vec<Type> = vec![Type::Any; ed.type_params.len()];
+
+                    if let Some(data_ty) = &variant.data_type {
+                        if let Type::TypeParam(param_name) = data_ty {
+                            if let Some(idx) = ed.type_params.iter().position(|p| p == param_name) {
+                                if !arg_types.is_empty() {
+                                    inferred_args[idx] = arg_types[0].clone();
+                                }
+                            }
+                        }
+                    }
+
+                    return Type::Generic(enum_name, inferred_args);
+                }
+            }
+
+            return Type::Enum(enum_name);
+        }
+
+        let sym_info = self.lookup(name).cloned();
+
+        if let Some(sym) = sym_info {
+            match sym.ty {
+                Type::Function {
+                    params,
+                    optional_count,
+                    return_type,
+                } => {
+                    let required_count = params.len() - optional_count;
+                    let args_provided = arg_types.len();
+
+                    if args_provided < required_count || args_provided > params.len() {
+                        let msg = if optional_count > 0 {
+                            format!(
+                                "Error: '{}' expects {}-{} arguments, got {}",
+                                name,
+                                required_count,
+                                params.len(),
+                                args_provided
+                            )
+                        } else {
+                            format!(
+                                "Error: '{}' expects {} arguments, got {}",
+                                name,
+                                params.len(),
+                                args_provided
+                            )
+                        };
+                        self.add_error(msg, span);
+                    } else {
+                        // Type-check only the args that were provided
+                        for (i, (expected, actual)) in
+                            params.iter().zip(arg_types.iter()).enumerate()
+                        {
+                            if !self.types_compatible(expected, actual) {
+                                self.add_error(
+                                    format!(
+                                        "Type Error: Argument {} mismatch. Expected {:?}, got {:?}",
+                                        i + 1,
+                                        expected,
+                                        actual
+                                    ),
+                                    span,
+                                );
+                            }
+                        }
+                    }
+                    self.record_call_site(CallSiteInfo {
+                        span,
+                        callee: name.to_string(),
+                        arg_spans,
+                        signature: Some(SignatureInfo {
+                            params: params.clone(),
+                            optional_count,
+                            return_type: *return_type.clone(),
+                        }),
+                    });
+                    return *return_type;
+                }
+                Type::Any => {
+                    // Support calling Any (e.g. imported functions)
+                    return Type::Any;
+                }
+                _ => {
+                    self.add_error(format!("Error: '{}' is not a function", name), span);
+                    // Return Any to prevent cascading errors
+                    return Type::Any;
+                }
+            }
+        } else {
+            self.add_error(format!("Error: Undefined function '{}'", name), span);
+        }
+        Type::Void
+    }
+
     fn check_expression_inner(&mut self, expr: &Expr) -> Type {
         match &expr.kind {
             ExprKind::Number(_) => Type::I64,
@@ -2239,149 +2392,86 @@ impl Analyzer {
             ExprKind::Call { name, args } => {
                 let arg_types: Vec<Type> = args.iter().map(|a| self.check_expression(a)).collect();
                 let arg_spans: Vec<Span> = args.iter().map(|a| a.span).collect();
+                self.check_call_by_name(name, arg_types, arg_spans, expr.span)
+            }
+            ExprKind::PipeCall {
+                input,
+                name,
+                args,
+                uses_placeholders,
+            } => {
+                let input_type = self.check_expression(input);
 
-                // Check if it's an enum variant constructor
-                let enum_info = self
-                    .enums
-                    .values()
-                    .find(|e| e.variants.iter().any(|v| &v.name == name))
-                    .map(|e| {
-                        let variant = e.variants.iter().find(|v| &v.name == name).unwrap();
-                        (e.name.clone(), variant.clone())
-                    });
+                let mut arg_types = Vec::new();
+                let mut arg_spans = Vec::new();
 
-                if let Some((enum_name, variant)) = enum_info {
-                    // Get the full enum definition for type params
-                    let enum_def = self.enums.get(&enum_name).cloned();
+                if !*uses_placeholders {
+                    arg_types.push(input_type.clone());
+                    arg_spans.push(input.span);
+                }
 
-                    if let Some(expected_ty) = &variant.data_type {
-                        if args.len() != 1 {
-                            self.add_error(
-                                format!(
-                                    "Error: Enum variant '{}' expects 1 argument, got {}",
-                                    name,
-                                    args.len()
-                                ),
-                                expr.span,
-                            );
-                        } else {
-                            // For TypeParam, infer the concrete type from the argument
-                            // This allows Some(42) to work with enum Option<T> { Some(T), None }
-                            if !matches!(expected_ty, Type::TypeParam(_)) {
-                                // Non-generic: check compatibility normally
-                                if !self.types_compatible(expected_ty, &arg_types[0]) {
-                                    self.add_error(
-                                        format!(
-                                            "Type Error: Enum variant '{}' expected {:?}, got {:?}",
-                                            name, expected_ty, arg_types[0]
-                                        ),
-                                        expr.span,
-                                    );
-                                }
-                            }
-                        }
-                    } else if !args.is_empty() {
-                        self.add_error(
-                            format!("Error: Enum variant '{}' does not take any arguments", name),
-                            expr.span,
-                        );
-                    }
-
-                    // Return Generic type for generic enums, Enum type otherwise
-                    if let Some(ed) = enum_def {
-                        if !ed.type_params.is_empty() {
-                            // Infer type arguments from the variant's data
-                            let mut inferred_args: Vec<Type> =
-                                vec![Type::Any; ed.type_params.len()];
-
-                            if let Some(data_ty) = &variant.data_type {
-                                if let Type::TypeParam(param_name) = data_ty {
-                                    if let Some(idx) =
-                                        ed.type_params.iter().position(|p| p == param_name)
-                                    {
-                                        if !args.is_empty() {
-                                            inferred_args[idx] = arg_types[0].clone();
+                for arg in args {
+                    match &arg.kind {
+                        ExprKind::PipePlaceholder(index) => {
+                            if *uses_placeholders {
+                                let arg_type = match &input_type {
+                                    Type::Tuple(elements) => {
+                                        if *index == 0 {
+                                            self.add_error(
+                                                "Pipe placeholder indices start at 1".to_string(),
+                                                arg.span,
+                                            );
+                                            Type::Any
+                                        } else if *index - 1 >= elements.len() {
+                                            self.add_error(
+                                                format!(
+                                                    "Pipe placeholder ${} out of range for tuple of size {}",
+                                                    index,
+                                                    elements.len()
+                                                ),
+                                                arg.span,
+                                            );
+                                            Type::Any
+                                        } else {
+                                            elements[*index - 1].clone()
                                         }
                                     }
-                                }
-                            }
-
-                            return Type::Generic(enum_name, inferred_args);
-                        }
-                    }
-
-                    return Type::Enum(enum_name);
-                }
-
-                let sym_info = self.lookup(name).cloned();
-
-                if let Some(sym) = sym_info {
-                    match sym.ty {
-                        Type::Function {
-                            params,
-                            optional_count,
-                            return_type,
-                        } => {
-                            let required_count = params.len() - optional_count;
-                            let args_provided = arg_types.len();
-
-                            if args_provided < required_count || args_provided > params.len() {
-                                let msg = if optional_count > 0 {
-                                    format!(
-                                        "Error: '{}' expects {}-{} arguments, got {}",
-                                        name,
-                                        required_count,
-                                        params.len(),
-                                        args_provided
-                                    )
-                                } else {
-                                    format!(
-                                        "Error: '{}' expects {} arguments, got {}",
-                                        name,
-                                        params.len(),
-                                        args_provided
-                                    )
-                                };
-                                self.add_error(msg, expr.span);
-                            } else {
-                                // Type-check only the args that were provided
-                                for (i, (expected, actual)) in
-                                    params.iter().zip(arg_types.iter()).enumerate()
-                                {
-                                    if !self.types_compatible(expected, actual) {
-                                        self.add_error(format!("Type Error: Argument {} mismatch. Expected {:?}, got {:?}", i + 1, expected, actual), expr.span);
+                                    Type::Any => Type::Any,
+                                    _ => {
+                                        self.add_error(
+                                            "Pipe placeholders require tuple input".to_string(),
+                                            arg.span,
+                                        );
+                                        Type::Any
                                     }
-                                }
+                                };
+                                arg_types.push(arg_type);
+                                arg_spans.push(arg.span);
+                            } else {
+                                self.add_error(
+                                    "Pipe placeholders can only be used with pipe calls"
+                                        .to_string(),
+                                    arg.span,
+                                );
+                                arg_types.push(Type::Any);
+                                arg_spans.push(arg.span);
                             }
-                            self.record_call_site(CallSiteInfo {
-                                span: expr.span,
-                                callee: name.clone(),
-                                arg_spans: arg_spans.clone(),
-                                signature: Some(SignatureInfo {
-                                    params: params.clone(),
-                                    optional_count,
-                                    return_type: *return_type.clone(),
-                                }),
-                            });
-                            return *return_type;
-                        }
-                        Type::Any => {
-                            // Support calling Any (e.g. imported functions)
-                            return Type::Any;
                         }
                         _ => {
-                            self.add_error(
-                                format!("Error: '{}' is not a function", name),
-                                expr.span,
-                            );
-                            // Return Any to prevent cascading errors
-                            return Type::Any;
+                            arg_types.push(self.check_expression(arg));
+                            arg_spans.push(arg.span);
                         }
                     }
-                } else {
-                    self.add_error(format!("Error: Undefined function '{}'", name), expr.span);
                 }
-                Type::Void
+
+                self.check_call_by_name(name, arg_types, arg_spans, expr.span)
+            }
+            ExprKind::PipePlaceholder(_) => {
+                self.add_error(
+                    "Pipe placeholders can only be used inside pipe call arguments".to_string(),
+                    expr.span,
+                );
+                Type::Any
             }
             ExprKind::EnumVariant {
                 enum_name,

@@ -490,6 +490,173 @@ impl Compiler {
 
                 dest
             }
+            ExprKind::PipeCall {
+                input,
+                name,
+                args,
+                uses_placeholders,
+            } => {
+                let input_reg = self.compile_expr(input);
+                let arg_start = self.reg_top;
+                let mut arg_index: usize = 0;
+
+                if !*uses_placeholders {
+                    let expected_reg = arg_start;
+                    if input_reg != expected_reg {
+                        self.instructions
+                            .push(OpCode::Move(expected_reg, input_reg));
+                    }
+                    if self.reg_top <= expected_reg {
+                        self.reg_top = expected_reg + 1;
+                    }
+                    arg_index += 1;
+                }
+
+                for arg in args {
+                    let expected_reg = arg_start + arg_index as u16;
+                    let result_reg = match &arg.kind {
+                        ExprKind::PipePlaceholder(index) => {
+                            let index_value = if *index == 0 { 0 } else { *index - 1 };
+                            let index_reg = self.alloc_reg();
+                            let idx =
+                                self.add_constant(Value::Numeric(Number::I64(index_value as i64)));
+                            self.instructions.push(OpCode::LoadConst(index_reg, idx));
+                            let dest_reg = self.alloc_reg();
+                            self.instructions
+                                .push(OpCode::GetIndex(dest_reg, input_reg, index_reg));
+                            dest_reg
+                        }
+                        _ => self.compile_expr(arg),
+                    };
+
+                    if result_reg != expected_reg {
+                        self.instructions
+                            .push(OpCode::Move(expected_reg, result_reg));
+                    }
+                    if self.reg_top <= expected_reg {
+                        self.reg_top = expected_reg + 1;
+                    }
+                    arg_index += 1;
+                }
+
+                match name.as_str() {
+                    "print" => {
+                        let reg = arg_start;
+                        self.instructions.push(OpCode::Print(reg));
+                        return reg;
+                    }
+                    "echo" => {
+                        let reg = arg_start;
+                        self.instructions.push(OpCode::Echo(reg));
+                        return reg;
+                    }
+                    "sleep" => {
+                        let reg = arg_start;
+                        self.instructions.push(OpCode::Sleep(reg));
+                        return reg;
+                    }
+                    "panic" => {
+                        let reg = arg_start;
+                        let location = expr
+                            .span
+                            .format_location(self.source.as_str(), self.filename.as_str());
+                        let location_idx = self.add_constant(Value::String(location));
+                        self.instructions.push(OpCode::Panic(reg, location_idx));
+                        return reg;
+                    }
+                    "fetch" => {
+                        let url_reg = arg_start;
+                        let options_reg = if arg_index > 1 {
+                            arg_start + 1
+                        } else {
+                            u16::MAX
+                        };
+                        let dest = self.alloc_reg();
+                        self.instructions
+                            .push(OpCode::Fetch(dest, url_reg, options_reg));
+                        self.reg_top = dest + 1;
+                        return dest;
+                    }
+                    _ => {}
+                }
+
+                let dest = self.alloc_reg();
+
+                if let Some(sig) = self.signatures.get(name) {
+                    for (i, arg_expr) in args.iter().enumerate() {
+                        let param_index = if *uses_placeholders { i } else { i + 1 };
+                        if param_index < sig.len() && sig[param_index] {
+                            if let ExprKind::Variable(var_name) = &arg_expr.kind {
+                                self.moved_locals.insert(var_name.clone());
+                            }
+                        }
+                    }
+                    if !*uses_placeholders {
+                        if sig.get(0) == Some(&true) {
+                            if let ExprKind::Variable(var_name) = &input.kind {
+                                self.moved_locals.insert(var_name.clone());
+                            }
+                        }
+                    }
+                }
+
+                if let Some(&idx) = self.symbol_table.get(name) {
+                    let func_reg = self.alloc_reg();
+                    self.instructions.push(OpCode::Move(func_reg, idx as u16));
+                    self.instructions.push(OpCode::Call(
+                        dest,
+                        func_reg,
+                        arg_start,
+                        arg_index as u8,
+                    ));
+                    self.reg_top = dest + 1;
+                } else if self.current_function_name.as_ref() == Some(name) {
+                    self.instructions
+                        .push(OpCode::CallSelf(dest, arg_start, arg_index as u8));
+                    self.reg_top = dest + 1;
+                } else if let Some(&idx) = self.global_table.get(name) {
+                    self.instructions.push(OpCode::CallGlobal(
+                        dest,
+                        idx,
+                        arg_start,
+                        arg_index as u8,
+                    ));
+                    self.reg_top = dest + 1;
+                } else if let Some(up_idx) = self.resolve_upvalue(name) {
+                    let func_reg = self.alloc_reg();
+                    self.instructions.push(OpCode::GetUpvalue(func_reg, up_idx));
+                    self.instructions.push(OpCode::Call(
+                        dest,
+                        func_reg,
+                        arg_start,
+                        arg_index as u8,
+                    ));
+                    self.reg_top = dest + 1;
+                } else if let Some(e) = self
+                    .enums
+                    .values()
+                    .find(|e| e.variants.iter().any(|v| &v.name == name))
+                {
+                    let names_idx = self.add_constant(Value::Tuple(vec![
+                        Value::String(e.name.clone()),
+                        Value::String(name.clone()),
+                    ]));
+                    self.instructions.push(OpCode::CreateEnum(
+                        dest,
+                        names_idx,
+                        arg_start,
+                        arg_index as u8,
+                    ));
+                    self.reg_top = dest + 1;
+                } else {
+                    panic!("Compiler Error: Undefined function '{}'", name);
+                }
+
+                dest
+            }
+            ExprKind::PipePlaceholder(_) => {
+                panic!("Compiler Error: Pipe placeholder used outside of pipe call");
+            }
             ExprKind::Number(n) => {
                 let dest = self.alloc_reg();
                 let idx = self.add_constant(Value::Numeric(Number::I64(*n)));

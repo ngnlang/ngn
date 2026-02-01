@@ -306,6 +306,13 @@ pub enum ExprKind {
         name: String,
         args: Vec<Expr>,
     },
+    PipeCall {
+        input: Box<Expr>,
+        name: String,
+        args: Vec<Expr>,
+        uses_placeholders: bool,
+    },
+    PipePlaceholder(usize),
     Number(i64),
     Float(f64),
     String(String),
@@ -1411,7 +1418,7 @@ impl Parser {
     }
 
     fn parse_assignment(&mut self) -> Expr {
-        let expr = self.parse_null_coalesce();
+        let expr = self.parse_pipe();
 
         let compound_op = match self.current_token {
             Token::PlusEqual => Some(Token::Plus),
@@ -1492,6 +1499,47 @@ impl Parser {
             }
         }
         expr
+    }
+
+    fn parse_pipe(&mut self) -> Expr {
+        let mut left = self.parse_null_coalesce();
+
+        while self.current_token == Token::PipeForward {
+            let start = left.span.start;
+            self.advance();
+            let stage = self.parse_unary();
+            let end = stage.span.end;
+
+            let (name, args, uses_placeholders) = match stage.kind {
+                ExprKind::Variable(name) => (name, Vec::new(), false),
+                ExprKind::Call { name, args } => {
+                    let uses_placeholders = args
+                        .iter()
+                        .any(|arg| matches!(&arg.kind, ExprKind::PipePlaceholder(_)));
+                    (name, args, uses_placeholders)
+                }
+                _ => {
+                    let msg =
+                        "Syntax Error: Pipe target must be a function or function call".to_string();
+                    return Expr {
+                        kind: ExprKind::Error(msg),
+                        span: Span::new(start, end),
+                    };
+                }
+            };
+
+            left = Expr {
+                kind: ExprKind::PipeCall {
+                    input: Box::new(left),
+                    name,
+                    args,
+                    uses_placeholders,
+                },
+                span: Span::new(start, end),
+            };
+        }
+
+        left
     }
 
     /// Parse null-coalescing operator (??) with right-to-left associativity
@@ -1866,6 +1914,20 @@ impl Parser {
                 }
             }
             Token::StringStart => self.parse_interpolated_string(),
+            Token::Print | Token::Echo | Token::Sleep => {
+                let start = self.current_span.start;
+                let name = match self.current_token.clone() {
+                    Token::Print => "print".to_string(),
+                    Token::Echo => "echo".to_string(),
+                    Token::Sleep => "sleep".to_string(),
+                    _ => unreachable!(),
+                };
+                self.advance();
+                Expr {
+                    kind: ExprKind::Variable(name),
+                    span: Span::new(start, self.previous_span.end),
+                }
+            }
             Token::Identifier(name) => {
                 let start = self.current_span.start;
                 self.advance();
@@ -1888,6 +1950,14 @@ impl Parser {
                 }
             }
             Token::LBracket => self.parse_array_literal(),
+            Token::Placeholder(value) => {
+                let start = self.current_span.start;
+                self.advance();
+                Expr {
+                    kind: ExprKind::PipePlaceholder(value),
+                    span: Span::new(start, self.previous_span.end),
+                }
+            }
             Token::LBrace => {
                 // Anonymous object literal: { key: value, ... }
                 let start = self.current_span.start;
@@ -2364,6 +2434,7 @@ impl Parser {
                 | Token::Underscore
                 | Token::Pipe
                 | Token::OrOr
+                | Token::Placeholder(_)
         )
     }
 

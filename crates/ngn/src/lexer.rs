@@ -52,6 +52,7 @@ pub enum Token {
     InterpolationEnd,
     Regex(String),
     Bool(bool),
+    Placeholder(usize),
 
     // Symbols
     Equal,
@@ -87,6 +88,7 @@ pub enum Token {
     FatArrow,
     LArrow,
     Pipe,
+    PipeForward,
     AndAnd,
     OrOr,
     Question,
@@ -434,6 +436,9 @@ impl Lexer {
                 if self.peek_current() == '|' {
                     self.cursor += 1;
                     Token::OrOr
+                } else if self.peek_current() == '>' {
+                    self.cursor += 1;
+                    Token::PipeForward
                 } else {
                     Token::Pipe
                 }
@@ -502,6 +507,23 @@ impl Lexer {
                 }
             }
             '_' => Token::Underscore,
+            '$' => {
+                if self.peek_current().is_ascii_digit() {
+                    let mut digits = String::new();
+                    while self.cursor < self.source.len()
+                        && self.source[self.cursor].is_ascii_digit()
+                    {
+                        digits.push(self.source[self.cursor]);
+                        self.cursor += 1;
+                    }
+                    match digits.parse::<usize>() {
+                        Ok(value) => Token::Placeholder(value),
+                        Err(_) => Token::Error("Invalid placeholder index".to_string()),
+                    }
+                } else {
+                    Token::Error("Unexpected character: '$'".to_string())
+                }
+            }
             _ => Token::Error(format!("Unknown character: {}", ch)),
         };
 
