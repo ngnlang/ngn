@@ -5,6 +5,44 @@ description: You gotta try these!
 
 Here are some features you should know about.
 
+## Piping
+
+Pipe data through functions and expressions.
+
+You don't need to call the functions, but you can if you really want to. ngn automatically takes the previous output and calls the functions for you, passing the data as the first argument.
+
+```ngn
+var x = -10
+
+// these do the same thing
+const piped = x |> abs |> sqrt
+const nested = sqrt(abs(x))
+
+const res = 5 |> add(7) // 12
+```
+
+You can destructure arrays and tuples with the `$n` syntax. Notice that `$1` would be the 0 index.
+
+```ngn
+const pair = (2, 3)
+const res = pair |> add($1, $2) // 5
+
+// however, `$1` is not the same as what we do below
+// with index-based access
+const key = 1
+const picked = ["a", "b", "c"] |> $[key] // grabs second element, at index 1
+assert(picked == "b") ✅
+```
+
+If you need to reference the entire output, use `$`.
+```ngn
+const tuple_joined = ("b", "a") |> $.join(",")
+
+// use expressions too
+const price = 100 |> $ * 1.05 |> round() // explicit call syntax
+```
+
+
 ## State
 
 Create mutable, atomic state; most useful when mutating data from multiple places, like threads.
