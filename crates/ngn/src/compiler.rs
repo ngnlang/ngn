@@ -288,6 +288,279 @@ impl Compiler {
         start_reg
     }
 
+    fn replace_pipe_placeholders(&self, expr: &Expr, placeholder_name: &str) -> Expr {
+        let span = expr.span;
+        match &expr.kind {
+            ExprKind::PipePlaceholderSelf => Expr {
+                kind: ExprKind::Variable(placeholder_name.to_string()),
+                span,
+            },
+            ExprKind::PipePlaceholder(index) => {
+                let base = Expr {
+                    kind: ExprKind::Variable(placeholder_name.to_string()),
+                    span,
+                };
+                let idx = if *index == 0 { 0 } else { *index - 1 };
+                let index_expr = Expr {
+                    kind: ExprKind::Number(idx as i64),
+                    span,
+                };
+                Expr {
+                    kind: ExprKind::Index(Box::new(base), Box::new(index_expr)),
+                    span,
+                }
+            }
+            ExprKind::Assign { name, value } => Expr {
+                kind: ExprKind::Assign {
+                    name: name.clone(),
+                    value: Box::new(self.replace_pipe_placeholders(value, placeholder_name)),
+                },
+                span,
+            },
+            ExprKind::FieldAssign {
+                object,
+                field,
+                value,
+            } => Expr {
+                kind: ExprKind::FieldAssign {
+                    object: Box::new(self.replace_pipe_placeholders(object, placeholder_name)),
+                    field: field.clone(),
+                    value: Box::new(self.replace_pipe_placeholders(value, placeholder_name)),
+                },
+                span,
+            },
+            ExprKind::Call { name, args } => Expr {
+                kind: ExprKind::Call {
+                    name: name.clone(),
+                    args: args
+                        .iter()
+                        .map(|arg| self.replace_pipe_placeholders(arg, placeholder_name))
+                        .collect(),
+                },
+                span,
+            },
+            ExprKind::PipeCall {
+                input,
+                name,
+                args,
+                uses_placeholders,
+            } => Expr {
+                kind: ExprKind::PipeCall {
+                    input: Box::new(self.replace_pipe_placeholders(input, placeholder_name)),
+                    name: name.clone(),
+                    args: args
+                        .iter()
+                        .map(|arg| self.replace_pipe_placeholders(arg, placeholder_name))
+                        .collect(),
+                    uses_placeholders: *uses_placeholders,
+                },
+                span,
+            },
+            ExprKind::PipeExpr { input, expr } => Expr {
+                kind: ExprKind::PipeExpr {
+                    input: Box::new(self.replace_pipe_placeholders(input, placeholder_name)),
+                    expr: Box::new(self.replace_pipe_placeholders(expr, placeholder_name)),
+                },
+                span,
+            },
+            ExprKind::Binary { left, op, right } => Expr {
+                kind: ExprKind::Binary {
+                    left: Box::new(self.replace_pipe_placeholders(left, placeholder_name)),
+                    op: op.clone(),
+                    right: Box::new(self.replace_pipe_placeholders(right, placeholder_name)),
+                },
+                span,
+            },
+            ExprKind::Array(elements) => Expr {
+                kind: ExprKind::Array(
+                    elements
+                        .iter()
+                        .map(|expr| self.replace_pipe_placeholders(expr, placeholder_name))
+                        .collect(),
+                ),
+                span,
+            },
+            ExprKind::Tuple(elements) => Expr {
+                kind: ExprKind::Tuple(
+                    elements
+                        .iter()
+                        .map(|expr| self.replace_pipe_placeholders(expr, placeholder_name))
+                        .collect(),
+                ),
+                span,
+            },
+            ExprKind::InterpolatedString(parts) => Expr {
+                kind: ExprKind::InterpolatedString(
+                    parts
+                        .iter()
+                        .map(|expr| self.replace_pipe_placeholders(expr, placeholder_name))
+                        .collect(),
+                ),
+                span,
+            },
+            ExprKind::EnumVariant {
+                enum_name,
+                variant_name,
+                args,
+            } => Expr {
+                kind: ExprKind::EnumVariant {
+                    enum_name: enum_name.clone(),
+                    variant_name: variant_name.clone(),
+                    args: args
+                        .iter()
+                        .map(|expr| self.replace_pipe_placeholders(expr, placeholder_name))
+                        .collect(),
+                },
+                span,
+            },
+            ExprKind::Range {
+                start,
+                end,
+                inclusive,
+            } => Expr {
+                kind: ExprKind::Range {
+                    start: Box::new(self.replace_pipe_placeholders(start, placeholder_name)),
+                    end: Box::new(self.replace_pipe_placeholders(end, placeholder_name)),
+                    inclusive: *inclusive,
+                },
+                span,
+            },
+            ExprKind::Thread(expr) => Expr {
+                kind: ExprKind::Thread(Box::new(
+                    self.replace_pipe_placeholders(expr, placeholder_name),
+                )),
+                span,
+            },
+            ExprKind::Send(left, right) => Expr {
+                kind: ExprKind::Send(
+                    Box::new(self.replace_pipe_placeholders(left, placeholder_name)),
+                    Box::new(self.replace_pipe_placeholders(right, placeholder_name)),
+                ),
+                span,
+            },
+            ExprKind::Receive(expr) => Expr {
+                kind: ExprKind::Receive(Box::new(
+                    self.replace_pipe_placeholders(expr, placeholder_name),
+                )),
+                span,
+            },
+            ExprKind::ReceiveCount(chan, count) => Expr {
+                kind: ExprKind::ReceiveCount(
+                    Box::new(self.replace_pipe_placeholders(chan, placeholder_name)),
+                    Box::new(self.replace_pipe_placeholders(count, placeholder_name)),
+                ),
+                span,
+            },
+            ExprKind::ReceiveMaybe(expr) => Expr {
+                kind: ExprKind::ReceiveMaybe(Box::new(
+                    self.replace_pipe_placeholders(expr, placeholder_name),
+                )),
+                span,
+            },
+            ExprKind::State(expr) => Expr {
+                kind: ExprKind::State(Box::new(
+                    self.replace_pipe_placeholders(expr, placeholder_name),
+                )),
+                span,
+            },
+            ExprKind::Bytes(expr) => Expr {
+                kind: ExprKind::Bytes(expr.as_ref().map(|value| {
+                    Box::new(self.replace_pipe_placeholders(value, placeholder_name))
+                })),
+                span,
+            },
+            ExprKind::MethodCall(obj, method, args) => Expr {
+                kind: ExprKind::MethodCall(
+                    Box::new(self.replace_pipe_placeholders(obj, placeholder_name)),
+                    method.clone(),
+                    args.iter()
+                        .map(|expr| self.replace_pipe_placeholders(expr, placeholder_name))
+                        .collect(),
+                ),
+                span,
+            },
+            ExprKind::Index(obj, index) => Expr {
+                kind: ExprKind::Index(
+                    Box::new(self.replace_pipe_placeholders(obj, placeholder_name)),
+                    Box::new(self.replace_pipe_placeholders(index, placeholder_name)),
+                ),
+                span,
+            },
+            ExprKind::Unary { op, right } => Expr {
+                kind: ExprKind::Unary {
+                    op: op.clone(),
+                    right: Box::new(self.replace_pipe_placeholders(right, placeholder_name)),
+                },
+                span,
+            },
+            ExprKind::ModelInstance { name, fields } => Expr {
+                kind: ExprKind::ModelInstance {
+                    name: name.clone(),
+                    fields: fields
+                        .iter()
+                        .map(|(field, value)| {
+                            (
+                                field.clone(),
+                                self.replace_pipe_placeholders(value, placeholder_name),
+                            )
+                        })
+                        .collect(),
+                },
+                span,
+            },
+            ExprKind::FieldAccess { object, field } => Expr {
+                kind: ExprKind::FieldAccess {
+                    object: Box::new(self.replace_pipe_placeholders(object, placeholder_name)),
+                    field: field.clone(),
+                },
+                span,
+            },
+            ExprKind::OptionalFieldAccess { object, field } => Expr {
+                kind: ExprKind::OptionalFieldAccess {
+                    object: Box::new(self.replace_pipe_placeholders(object, placeholder_name)),
+                    field: field.clone(),
+                },
+                span,
+            },
+            ExprKind::OptionalMethodCall(obj, method, args) => Expr {
+                kind: ExprKind::OptionalMethodCall(
+                    Box::new(self.replace_pipe_placeholders(obj, placeholder_name)),
+                    method.clone(),
+                    args.iter()
+                        .map(|expr| self.replace_pipe_placeholders(expr, placeholder_name))
+                        .collect(),
+                ),
+                span,
+            },
+            ExprKind::Object(fields) => Expr {
+                kind: ExprKind::Object(
+                    fields
+                        .iter()
+                        .map(|(field, value)| {
+                            (
+                                field.clone(),
+                                self.replace_pipe_placeholders(value, placeholder_name),
+                            )
+                        })
+                        .collect(),
+                ),
+                span,
+            },
+            ExprKind::Channel(_) | ExprKind::Map(_, _) | ExprKind::Set(_) => expr.clone(),
+            ExprKind::Bool(_)
+            | ExprKind::Regex(_)
+            | ExprKind::Number(_)
+            | ExprKind::Float(_)
+            | ExprKind::String(_)
+            | ExprKind::Variable(_)
+            | ExprKind::Closure { .. }
+            | ExprKind::UnwrapGuard(_)
+            | ExprKind::This
+            | ExprKind::Null
+            | ExprKind::Error(_) => expr.clone(),
+        }
+    }
+
     /// Compile a field assignment, handling nested paths by recursively writing back
     /// For simple: `obj.field = val` -> SetField(obj_reg, field, val_reg)
     /// For nested: `obj.a.b = val` -> Get obj.a, SetField(a_reg, b, val_reg), SetField(obj_reg, a, a_reg)
@@ -654,8 +927,26 @@ impl Compiler {
 
                 dest
             }
+            ExprKind::PipeExpr { input, expr } => {
+                let input_reg = self.compile_expr(input);
+                let placeholder_name = "__pipe_value__";
+                let previous = self
+                    .symbol_table
+                    .insert(placeholder_name.to_string(), input_reg as usize);
+                let replaced = self.replace_pipe_placeholders(expr, placeholder_name);
+                let result_reg = self.compile_expr(&replaced);
+                if let Some(prev) = previous {
+                    self.symbol_table.insert(placeholder_name.to_string(), prev);
+                } else {
+                    self.symbol_table.remove(placeholder_name);
+                }
+                result_reg
+            }
             ExprKind::PipePlaceholder(_) => {
                 panic!("Compiler Error: Pipe placeholder used outside of pipe call");
+            }
+            ExprKind::PipePlaceholderSelf => {
+                panic!("Compiler Error: Pipe placeholder '$' used outside of pipe expression");
             }
             ExprKind::Number(n) => {
                 let dest = self.alloc_reg();

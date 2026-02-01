@@ -1925,6 +1925,282 @@ impl Analyzer {
         ty
     }
 
+    fn replace_pipe_placeholders(&mut self, expr: &Expr, placeholder_name: &str) -> Expr {
+        let span = expr.span;
+        match &expr.kind {
+            ExprKind::PipePlaceholderSelf => Expr {
+                kind: ExprKind::Variable(placeholder_name.to_string()),
+                span,
+            },
+            ExprKind::PipePlaceholder(index) => {
+                if *index == 0 {
+                    self.add_error("Pipe placeholder indices start at 1".to_string(), expr.span);
+                }
+                let base = Expr {
+                    kind: ExprKind::Variable(placeholder_name.to_string()),
+                    span,
+                };
+                let idx = if *index == 0 { 0 } else { index - 1 };
+                let index_expr = Expr {
+                    kind: ExprKind::Number(idx as i64),
+                    span,
+                };
+                Expr {
+                    kind: ExprKind::Index(Box::new(base), Box::new(index_expr)),
+                    span,
+                }
+            }
+            ExprKind::Assign { name, value } => Expr {
+                kind: ExprKind::Assign {
+                    name: name.clone(),
+                    value: Box::new(self.replace_pipe_placeholders(value, placeholder_name)),
+                },
+                span,
+            },
+            ExprKind::FieldAssign {
+                object,
+                field,
+                value,
+            } => Expr {
+                kind: ExprKind::FieldAssign {
+                    object: Box::new(self.replace_pipe_placeholders(object, placeholder_name)),
+                    field: field.clone(),
+                    value: Box::new(self.replace_pipe_placeholders(value, placeholder_name)),
+                },
+                span,
+            },
+            ExprKind::Call { name, args } => Expr {
+                kind: ExprKind::Call {
+                    name: name.clone(),
+                    args: args
+                        .iter()
+                        .map(|arg| self.replace_pipe_placeholders(arg, placeholder_name))
+                        .collect(),
+                },
+                span,
+            },
+            ExprKind::PipeCall {
+                input,
+                name,
+                args,
+                uses_placeholders,
+            } => Expr {
+                kind: ExprKind::PipeCall {
+                    input: Box::new(self.replace_pipe_placeholders(input, placeholder_name)),
+                    name: name.clone(),
+                    args: args
+                        .iter()
+                        .map(|arg| self.replace_pipe_placeholders(arg, placeholder_name))
+                        .collect(),
+                    uses_placeholders: *uses_placeholders,
+                },
+                span,
+            },
+            ExprKind::PipeExpr { input, expr } => Expr {
+                kind: ExprKind::PipeExpr {
+                    input: Box::new(self.replace_pipe_placeholders(input, placeholder_name)),
+                    expr: Box::new(self.replace_pipe_placeholders(expr, placeholder_name)),
+                },
+                span,
+            },
+            ExprKind::Binary { left, op, right } => Expr {
+                kind: ExprKind::Binary {
+                    left: Box::new(self.replace_pipe_placeholders(left, placeholder_name)),
+                    op: op.clone(),
+                    right: Box::new(self.replace_pipe_placeholders(right, placeholder_name)),
+                },
+                span,
+            },
+            ExprKind::Array(elements) => Expr {
+                kind: ExprKind::Array(
+                    elements
+                        .iter()
+                        .map(|expr| self.replace_pipe_placeholders(expr, placeholder_name))
+                        .collect(),
+                ),
+                span,
+            },
+            ExprKind::Tuple(elements) => Expr {
+                kind: ExprKind::Tuple(
+                    elements
+                        .iter()
+                        .map(|expr| self.replace_pipe_placeholders(expr, placeholder_name))
+                        .collect(),
+                ),
+                span,
+            },
+            ExprKind::InterpolatedString(parts) => Expr {
+                kind: ExprKind::InterpolatedString(
+                    parts
+                        .iter()
+                        .map(|expr| self.replace_pipe_placeholders(expr, placeholder_name))
+                        .collect(),
+                ),
+                span,
+            },
+            ExprKind::EnumVariant {
+                enum_name,
+                variant_name,
+                args,
+            } => Expr {
+                kind: ExprKind::EnumVariant {
+                    enum_name: enum_name.clone(),
+                    variant_name: variant_name.clone(),
+                    args: args
+                        .iter()
+                        .map(|expr| self.replace_pipe_placeholders(expr, placeholder_name))
+                        .collect(),
+                },
+                span,
+            },
+            ExprKind::Range {
+                start,
+                end,
+                inclusive,
+            } => Expr {
+                kind: ExprKind::Range {
+                    start: Box::new(self.replace_pipe_placeholders(start, placeholder_name)),
+                    end: Box::new(self.replace_pipe_placeholders(end, placeholder_name)),
+                    inclusive: *inclusive,
+                },
+                span,
+            },
+            ExprKind::Thread(expr) => Expr {
+                kind: ExprKind::Thread(Box::new(
+                    self.replace_pipe_placeholders(expr, placeholder_name),
+                )),
+                span,
+            },
+            ExprKind::Send(left, right) => Expr {
+                kind: ExprKind::Send(
+                    Box::new(self.replace_pipe_placeholders(left, placeholder_name)),
+                    Box::new(self.replace_pipe_placeholders(right, placeholder_name)),
+                ),
+                span,
+            },
+            ExprKind::Receive(expr) => Expr {
+                kind: ExprKind::Receive(Box::new(
+                    self.replace_pipe_placeholders(expr, placeholder_name),
+                )),
+                span,
+            },
+            ExprKind::ReceiveCount(chan, count) => Expr {
+                kind: ExprKind::ReceiveCount(
+                    Box::new(self.replace_pipe_placeholders(chan, placeholder_name)),
+                    Box::new(self.replace_pipe_placeholders(count, placeholder_name)),
+                ),
+                span,
+            },
+            ExprKind::ReceiveMaybe(expr) => Expr {
+                kind: ExprKind::ReceiveMaybe(Box::new(
+                    self.replace_pipe_placeholders(expr, placeholder_name),
+                )),
+                span,
+            },
+            ExprKind::State(expr) => Expr {
+                kind: ExprKind::State(Box::new(
+                    self.replace_pipe_placeholders(expr, placeholder_name),
+                )),
+                span,
+            },
+            ExprKind::Bytes(expr) => Expr {
+                kind: ExprKind::Bytes(expr.as_ref().map(|value| {
+                    Box::new(self.replace_pipe_placeholders(value, placeholder_name))
+                })),
+                span,
+            },
+            ExprKind::MethodCall(obj, method, args) => Expr {
+                kind: ExprKind::MethodCall(
+                    Box::new(self.replace_pipe_placeholders(obj, placeholder_name)),
+                    method.clone(),
+                    args.iter()
+                        .map(|expr| self.replace_pipe_placeholders(expr, placeholder_name))
+                        .collect(),
+                ),
+                span,
+            },
+            ExprKind::Index(obj, index) => Expr {
+                kind: ExprKind::Index(
+                    Box::new(self.replace_pipe_placeholders(obj, placeholder_name)),
+                    Box::new(self.replace_pipe_placeholders(index, placeholder_name)),
+                ),
+                span,
+            },
+            ExprKind::Unary { op, right } => Expr {
+                kind: ExprKind::Unary {
+                    op: op.clone(),
+                    right: Box::new(self.replace_pipe_placeholders(right, placeholder_name)),
+                },
+                span,
+            },
+            ExprKind::ModelInstance { name, fields } => Expr {
+                kind: ExprKind::ModelInstance {
+                    name: name.clone(),
+                    fields: fields
+                        .iter()
+                        .map(|(field, value)| {
+                            (
+                                field.clone(),
+                                self.replace_pipe_placeholders(value, placeholder_name),
+                            )
+                        })
+                        .collect(),
+                },
+                span,
+            },
+            ExprKind::FieldAccess { object, field } => Expr {
+                kind: ExprKind::FieldAccess {
+                    object: Box::new(self.replace_pipe_placeholders(object, placeholder_name)),
+                    field: field.clone(),
+                },
+                span,
+            },
+            ExprKind::OptionalFieldAccess { object, field } => Expr {
+                kind: ExprKind::OptionalFieldAccess {
+                    object: Box::new(self.replace_pipe_placeholders(object, placeholder_name)),
+                    field: field.clone(),
+                },
+                span,
+            },
+            ExprKind::OptionalMethodCall(obj, method, args) => Expr {
+                kind: ExprKind::OptionalMethodCall(
+                    Box::new(self.replace_pipe_placeholders(obj, placeholder_name)),
+                    method.clone(),
+                    args.iter()
+                        .map(|expr| self.replace_pipe_placeholders(expr, placeholder_name))
+                        .collect(),
+                ),
+                span,
+            },
+            ExprKind::Object(fields) => Expr {
+                kind: ExprKind::Object(
+                    fields
+                        .iter()
+                        .map(|(field, value)| {
+                            (
+                                field.clone(),
+                                self.replace_pipe_placeholders(value, placeholder_name),
+                            )
+                        })
+                        .collect(),
+                ),
+                span,
+            },
+            ExprKind::Channel(_) | ExprKind::Map(_, _) | ExprKind::Set(_) => expr.clone(),
+            ExprKind::Bool(_)
+            | ExprKind::Regex(_)
+            | ExprKind::Number(_)
+            | ExprKind::Float(_)
+            | ExprKind::String(_)
+            | ExprKind::Variable(_)
+            | ExprKind::Closure { .. }
+            | ExprKind::UnwrapGuard(_)
+            | ExprKind::This
+            | ExprKind::Null
+            | ExprKind::Error(_) => expr.clone(),
+        }
+    }
+
     fn check_call_by_name(
         &mut self,
         name: &str,
@@ -2436,10 +2712,20 @@ impl Analyzer {
                                             elements[*index - 1].clone()
                                         }
                                     }
+                                    Type::Array(inner) => {
+                                        if *index == 0 {
+                                            self.add_error(
+                                                "Pipe placeholder indices start at 1".to_string(),
+                                                arg.span,
+                                            );
+                                        }
+                                        *inner.clone()
+                                    }
                                     Type::Any => Type::Any,
                                     _ => {
                                         self.add_error(
-                                            "Pipe placeholders require tuple input".to_string(),
+                                            "Pipe placeholders require tuple or array input"
+                                                .to_string(),
                                             arg.span,
                                         );
                                         Type::Any
@@ -2466,9 +2752,180 @@ impl Analyzer {
 
                 self.check_call_by_name(name, arg_types, arg_spans, expr.span)
             }
+            ExprKind::PipeExpr { input, expr: stage } => {
+                let input_type = self.check_expression(input);
+
+                fn validate_placeholders(analyzer: &mut Analyzer, expr: &Expr, input_type: &Type) {
+                    match &expr.kind {
+                        ExprKind::PipePlaceholder(index) => match input_type {
+                            Type::Tuple(elements) => {
+                                if *index == 0 {
+                                    analyzer.add_error(
+                                        "Pipe placeholder indices start at 1".to_string(),
+                                        expr.span,
+                                    );
+                                } else if *index - 1 >= elements.len() {
+                                    analyzer.add_error(
+                                        format!(
+                                            "Pipe placeholder ${} out of range for tuple of size {}",
+                                            index,
+                                            elements.len()
+                                        ),
+                                        expr.span,
+                                    );
+                                }
+                            }
+                            Type::Array(_) => {
+                                if *index == 0 {
+                                    analyzer.add_error(
+                                        "Pipe placeholder indices start at 1".to_string(),
+                                        expr.span,
+                                    );
+                                }
+                            }
+                            Type::Any => {}
+                            _ => {
+                                analyzer.add_error(
+                                    "Pipe placeholders require tuple or array input".to_string(),
+                                    expr.span,
+                                );
+                            }
+                        },
+                        ExprKind::PipePlaceholderSelf => {}
+                        ExprKind::Assign { value, .. } => {
+                            validate_placeholders(analyzer, value, input_type);
+                        }
+                        ExprKind::FieldAssign { object, value, .. } => {
+                            validate_placeholders(analyzer, object, input_type);
+                            validate_placeholders(analyzer, value, input_type);
+                        }
+                        ExprKind::Call { args, .. } => {
+                            for arg in args {
+                                validate_placeholders(analyzer, arg, input_type);
+                            }
+                        }
+                        ExprKind::PipeCall { input, args, .. } => {
+                            validate_placeholders(analyzer, input, input_type);
+                            for arg in args {
+                                validate_placeholders(analyzer, arg, input_type);
+                            }
+                        }
+                        ExprKind::PipeExpr { input, expr } => {
+                            validate_placeholders(analyzer, input, input_type);
+                            validate_placeholders(analyzer, expr, input_type);
+                        }
+                        ExprKind::Binary { left, right, .. } => {
+                            validate_placeholders(analyzer, left, input_type);
+                            validate_placeholders(analyzer, right, input_type);
+                        }
+                        ExprKind::Array(elements) | ExprKind::Tuple(elements) => {
+                            for element in elements {
+                                validate_placeholders(analyzer, element, input_type);
+                            }
+                        }
+                        ExprKind::InterpolatedString(parts) => {
+                            for part in parts {
+                                validate_placeholders(analyzer, part, input_type);
+                            }
+                        }
+                        ExprKind::EnumVariant { args, .. } => {
+                            for arg in args {
+                                validate_placeholders(analyzer, arg, input_type);
+                            }
+                        }
+                        ExprKind::Range { start, end, .. } => {
+                            validate_placeholders(analyzer, start, input_type);
+                            validate_placeholders(analyzer, end, input_type);
+                        }
+                        ExprKind::Thread(expr)
+                        | ExprKind::Receive(expr)
+                        | ExprKind::ReceiveMaybe(expr)
+                        | ExprKind::State(expr) => {
+                            validate_placeholders(analyzer, expr, input_type);
+                        }
+                        ExprKind::ReceiveCount(expr, count) => {
+                            validate_placeholders(analyzer, expr, input_type);
+                            validate_placeholders(analyzer, count, input_type);
+                        }
+                        ExprKind::Send(left, right) => {
+                            validate_placeholders(analyzer, left, input_type);
+                            validate_placeholders(analyzer, right, input_type);
+                        }
+                        ExprKind::Bytes(expr) => {
+                            if let Some(value) = expr.as_ref() {
+                                validate_placeholders(analyzer, value, input_type);
+                            }
+                        }
+                        ExprKind::MethodCall(obj, _, args)
+                        | ExprKind::OptionalMethodCall(obj, _, args) => {
+                            validate_placeholders(analyzer, obj, input_type);
+                            for arg in args {
+                                validate_placeholders(analyzer, arg, input_type);
+                            }
+                        }
+                        ExprKind::Index(obj, index) => {
+                            validate_placeholders(analyzer, obj, input_type);
+                            validate_placeholders(analyzer, index, input_type);
+                        }
+                        ExprKind::Unary { right, .. } => {
+                            validate_placeholders(analyzer, right, input_type);
+                        }
+                        ExprKind::ModelInstance { fields, .. } => {
+                            for (_, value) in fields {
+                                validate_placeholders(analyzer, value, input_type);
+                            }
+                        }
+                        ExprKind::FieldAccess { object, .. }
+                        | ExprKind::OptionalFieldAccess { object, .. } => {
+                            validate_placeholders(analyzer, object, input_type);
+                        }
+                        ExprKind::Object(fields) => {
+                            for (_, value) in fields {
+                                validate_placeholders(analyzer, value, input_type);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                validate_placeholders(self, stage, &input_type);
+                let placeholder_name = "__pipe_value__";
+                let replaced = self.replace_pipe_placeholders(stage, placeholder_name);
+
+                let previous = if let Some(scope) = self.scopes.last_mut() {
+                    scope.insert(
+                        placeholder_name.to_string(),
+                        Symbol {
+                            ty: input_type,
+                            is_mutable: false,
+                        },
+                    )
+                } else {
+                    None
+                };
+
+                let result_type = self.check_expression(&replaced);
+
+                if let Some(scope) = self.scopes.last_mut() {
+                    if let Some(prev) = previous {
+                        scope.insert(placeholder_name.to_string(), prev);
+                    } else {
+                        scope.remove(placeholder_name);
+                    }
+                }
+
+                result_type
+            }
             ExprKind::PipePlaceholder(_) => {
                 self.add_error(
-                    "Pipe placeholders can only be used inside pipe call arguments".to_string(),
+                    "Pipe placeholders can only be used inside pipe expressions".to_string(),
+                    expr.span,
+                );
+                Type::Any
+            }
+            ExprKind::PipePlaceholderSelf => {
+                self.add_error(
+                    "Pipe placeholder '$' can only be used inside pipe expressions".to_string(),
                     expr.span,
                 );
                 Type::Any
@@ -4243,6 +4700,21 @@ impl Analyzer {
                     Type::Array(inner) => *inner,
                     Type::String => Type::String,
                     Type::Bytes => Type::U8,
+                    Type::Tuple(elements) => {
+                        if let ExprKind::Number(idx) = index.kind {
+                            if idx < 0 || idx as usize >= elements.len() {
+                                self.add_error(
+                                    format!("Type Error: Tuple index out of bounds: {}", idx),
+                                    expr.span,
+                                );
+                                Type::Any
+                            } else {
+                                elements[idx as usize].clone()
+                            }
+                        } else {
+                            Type::Any
+                        }
+                    }
                     Type::Any => Type::Any,
                     _ => {
                         self.add_error(

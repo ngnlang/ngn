@@ -53,6 +53,7 @@ pub enum Token {
     Regex(String),
     Bool(bool),
     Placeholder(usize),
+    PlaceholderSelf,
 
     // Symbols
     Equal,
@@ -521,7 +522,7 @@ impl Lexer {
                         Err(_) => Token::Error("Invalid placeholder index".to_string()),
                     }
                 } else {
-                    Token::Error("Unexpected character: '$'".to_string())
+                    Token::PlaceholderSelf
                 }
             }
             _ => Token::Error(format!("Unknown character: {}", ch)),

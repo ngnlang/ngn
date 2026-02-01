@@ -312,7 +312,12 @@ pub enum ExprKind {
         args: Vec<Expr>,
         uses_placeholders: bool,
     },
+    PipeExpr {
+        input: Box<Expr>,
+        expr: Box<Expr>,
+    },
     PipePlaceholder(usize),
+    PipePlaceholderSelf,
     Number(i64),
     Float(f64),
     String(String),
@@ -1507,36 +1512,111 @@ impl Parser {
         while self.current_token == Token::PipeForward {
             let start = left.span.start;
             self.advance();
-            let stage = self.parse_unary();
+            let stage = self.parse_null_coalesce();
             let end = stage.span.end;
 
-            let (name, args, uses_placeholders) = match stage.kind {
-                ExprKind::Variable(name) => (name, Vec::new(), false),
-                ExprKind::Call { name, args } => {
-                    let uses_placeholders = args
-                        .iter()
-                        .any(|arg| matches!(&arg.kind, ExprKind::PipePlaceholder(_)));
-                    (name, args, uses_placeholders)
+            fn has_pipe_placeholder(expr: &Expr) -> bool {
+                match &expr.kind {
+                    ExprKind::PipePlaceholder(_) | ExprKind::PipePlaceholderSelf => true,
+                    ExprKind::Assign { value, .. } => has_pipe_placeholder(value),
+                    ExprKind::FieldAssign { object, value, .. } => {
+                        has_pipe_placeholder(object) || has_pipe_placeholder(value)
+                    }
+                    ExprKind::Call { args, .. } => args.iter().any(has_pipe_placeholder),
+                    ExprKind::PipeCall { input, args, .. } => {
+                        has_pipe_placeholder(input) || args.iter().any(has_pipe_placeholder)
+                    }
+                    ExprKind::PipeExpr { input, expr } => {
+                        has_pipe_placeholder(input) || has_pipe_placeholder(expr)
+                    }
+                    ExprKind::Binary { left, right, .. } => {
+                        has_pipe_placeholder(left) || has_pipe_placeholder(right)
+                    }
+                    ExprKind::Array(elements) | ExprKind::Tuple(elements) => {
+                        elements.iter().any(has_pipe_placeholder)
+                    }
+                    ExprKind::InterpolatedString(parts) => parts.iter().any(has_pipe_placeholder),
+                    ExprKind::EnumVariant { args, .. } => args.iter().any(has_pipe_placeholder),
+                    ExprKind::Range { start, end, .. } => {
+                        has_pipe_placeholder(start) || has_pipe_placeholder(end)
+                    }
+                    ExprKind::Thread(expr)
+                    | ExprKind::Receive(expr)
+                    | ExprKind::ReceiveMaybe(expr)
+                    | ExprKind::State(expr) => has_pipe_placeholder(expr),
+                    ExprKind::ReceiveCount(expr, count) => {
+                        has_pipe_placeholder(expr) || has_pipe_placeholder(count)
+                    }
+                    ExprKind::Send(left, right) => {
+                        has_pipe_placeholder(left) || has_pipe_placeholder(right)
+                    }
+                    ExprKind::Bytes(expr) => expr
+                        .as_ref()
+                        .map(|e| has_pipe_placeholder(e))
+                        .unwrap_or(false),
+                    ExprKind::MethodCall(obj, _, args)
+                    | ExprKind::OptionalMethodCall(obj, _, args) => {
+                        has_pipe_placeholder(obj) || args.iter().any(has_pipe_placeholder)
+                    }
+                    ExprKind::Index(obj, index) => {
+                        has_pipe_placeholder(obj) || has_pipe_placeholder(index)
+                    }
+                    ExprKind::Unary { right, .. } => has_pipe_placeholder(right),
+                    ExprKind::ModelInstance { fields, .. } => {
+                        fields.iter().any(|(_, expr)| has_pipe_placeholder(expr))
+                    }
+                    ExprKind::FieldAccess { object, .. }
+                    | ExprKind::OptionalFieldAccess { object, .. } => has_pipe_placeholder(object),
+                    ExprKind::Object(fields) => {
+                        fields.iter().any(|(_, expr)| has_pipe_placeholder(expr))
+                    }
+                    _ => false,
+                }
+            }
+
+            let has_placeholders = has_pipe_placeholder(&stage);
+
+            match stage.kind {
+                ExprKind::Variable(name) if !has_placeholders => {
+                    left = Expr {
+                        kind: ExprKind::PipeCall {
+                            input: Box::new(left),
+                            name,
+                            args: Vec::new(),
+                            uses_placeholders: false,
+                        },
+                        span: Span::new(start, end),
+                    };
+                }
+                ExprKind::Call { name, args } if !has_placeholders => {
+                    left = Expr {
+                        kind: ExprKind::PipeCall {
+                            input: Box::new(left),
+                            name,
+                            args,
+                            uses_placeholders: false,
+                        },
+                        span: Span::new(start, end),
+                    };
+                }
+                _ if has_placeholders => {
+                    left = Expr {
+                        kind: ExprKind::PipeExpr {
+                            input: Box::new(left),
+                            expr: Box::new(stage),
+                        },
+                        span: Span::new(start, end),
+                    };
                 }
                 _ => {
                     let msg =
-                        "Syntax Error: Pipe target must be a function or function call".to_string();
+                        "Syntax Error: Pipe target must be a function, function call, or expression using '$'".to_string();
                     return Expr {
                         kind: ExprKind::Error(msg),
                         span: Span::new(start, end),
                     };
                 }
-            };
-
-            left = Expr {
-                kind: ExprKind::PipeCall {
-                    input: Box::new(left),
-                    name,
-                    args,
-                    uses_placeholders,
-                },
-                span: Span::new(start, end),
-            };
+            }
         }
 
         left
@@ -1955,6 +2035,14 @@ impl Parser {
                 self.advance();
                 Expr {
                     kind: ExprKind::PipePlaceholder(value),
+                    span: Span::new(start, self.previous_span.end),
+                }
+            }
+            Token::PlaceholderSelf => {
+                let start = self.current_span.start;
+                self.advance();
+                Expr {
+                    kind: ExprKind::PipePlaceholderSelf,
                     span: Span::new(start, self.previous_span.end),
                 }
             }
@@ -2435,6 +2523,7 @@ impl Parser {
                 | Token::Pipe
                 | Token::OrOr
                 | Token::Placeholder(_)
+                | Token::PlaceholderSelf
         )
     }
 
