@@ -1449,46 +1449,54 @@ print(greet("Bob", ",")) // "Hello Bob,"
 ```
 
 ## `map`
-Create a key, value map. Type declartion is required.
+Create a key, value map.
+- You can seed a map with an array of 2-tuples
+- Types are inferred from the seed
+- Empty seeds require explicit type args
 
 ```ngn
-const m = map<i64, string>()
+const m = map([("one", 1), ("two", 2)])
 
 // add an entry
-m.set(1, "one") // returns the map
+m.set("three", 3) // returns the map
 
 // chain set
-m.set(2, "two").set(3, "three")
+m.set("four", 4).set("five", 5)
 
 // checks if an entry exists, based on key
-m.has(1) // returns a bool
+m.has("one") // returns a bool
 
 // get an entry
-m.get(1) // returns the value, or void if not found
+m.get("one") // returns the value, or void if not found
 
 // remove an entry
-m.remove(1) // returns the removed value
+m.remove("one") // returns the removed value
 
 // get the size
 m.size() // returns the number of entries in the map
+
+// empty seed requires explicit types
+const empty = map<string, i64>()
 ```
 
 ## `set`
 Create a set of values.
-- Type declartion is required
+- You can seed a set with an array
+- Types are inferred from the seed
+- Empty seeds require explicit type args
 - Values are deduplicated
 
 ```ngn
-const s = set<string>()
+const s = set(["one", "two", "three"])
 
 // add a value
-s.add("one") // returns the set
+s.add("four") // returns the set
 
 // chain add
-s.add("two").add("three")
+s.add("five").add("six")
 
 // checks if a value exists
-s.has("one') // returns a bool
+s.has("one") // returns a bool
 
 // remove a value
 s.remove("one") // returns a bool of whether the value was removed
@@ -1498,6 +1506,9 @@ s.size() // returns the number of values in the set
 
 // clear all values
 s.clear()
+
+// empty seed requires explicit types
+const empty = set<string>()
 
 // iterate over values
 for (v in s) {
