@@ -377,8 +377,15 @@ pub enum ExprKind {
     ///   (Internally it desugars to a binding in the then-branch.)
     /// - In other expression contexts it evaluates to a bool (is Value/Ok).
     UnwrapGuard(String),
-    Map(Type, Type),
-    Set(Type),
+    MapLiteral {
+        key_type: Option<Type>,
+        value_type: Option<Type>,
+        seed: Option<Box<Expr>>,
+    },
+    SetLiteral {
+        element_type: Option<Type>,
+        seed: Option<Box<Expr>>,
+    },
     This,
     Object(Vec<(String, Expr)>), // Anonymous object literal: { key: value }
     Null,                        // null literal - syntactic sugar for Maybe::Null
@@ -2200,28 +2207,85 @@ impl Parser {
             Token::Map => {
                 let start = self.current_span.start;
                 self.advance(); // consume 'map'
-                self.expect(Token::LessThan);
-                let key_type = self.parse_type();
-                self.expect(Token::Comma);
-                let value_type = self.parse_type();
-                self.expect(Token::GreaterThan);
+                let mut key_type = None;
+                let mut value_type = None;
+
+                if self.current_token == Token::LessThan {
+                    self.advance();
+                    key_type = Some(self.parse_type());
+                    self.expect(Token::Comma);
+                    value_type = Some(self.parse_type());
+                    self.expect(Token::GreaterThan);
+                }
+
                 self.expect(Token::LParen);
+
+                let seed = if self.current_token == Token::RParen {
+                    None
+                } else {
+                    let expr = self.parse_expression();
+                    if self.current_token == Token::Comma {
+                        let msg = "Parse Error: map() takes at most 1 argument".to_string();
+                        while self.current_token != Token::RParen
+                            && self.current_token != Token::EOF
+                        {
+                            self.advance();
+                        }
+                        return Expr {
+                            kind: ExprKind::Error(msg),
+                            span: Span::new(start, self.previous_span.end),
+                        };
+                    }
+                    Some(Box::new(expr))
+                };
+
                 self.expect(Token::RParen);
+
                 Expr {
-                    kind: ExprKind::Map(key_type, value_type),
+                    kind: ExprKind::MapLiteral {
+                        key_type,
+                        value_type,
+                        seed,
+                    },
                     span: Span::new(start, self.previous_span.end),
                 }
             }
             Token::Set => {
                 let start = self.current_span.start;
                 self.advance(); // consume 'set'
-                self.expect(Token::LessThan);
-                let element_type = self.parse_type();
-                self.expect(Token::GreaterThan);
+                let mut element_type = None;
+
+                if self.current_token == Token::LessThan {
+                    self.advance();
+                    element_type = Some(self.parse_type());
+                    self.expect(Token::GreaterThan);
+                }
+
                 self.expect(Token::LParen);
+
+                let seed = if self.current_token == Token::RParen {
+                    None
+                } else {
+                    let expr = self.parse_expression();
+                    if self.current_token == Token::Comma {
+                        let msg = "Parse Error: set() takes at most 1 argument".to_string();
+                        while self.current_token != Token::RParen
+                            && self.current_token != Token::EOF
+                        {
+                            self.advance();
+                        }
+                        return Expr {
+                            kind: ExprKind::Error(msg),
+                            span: Span::new(start, self.previous_span.end),
+                        };
+                    }
+                    Some(Box::new(expr))
+                };
+
                 self.expect(Token::RParen);
+
                 Expr {
-                    kind: ExprKind::Set(element_type),
+                    kind: ExprKind::SetLiteral { element_type, seed },
                     span: Span::new(start, self.previous_span.end),
                 }
             }
@@ -2594,6 +2658,7 @@ impl Parser {
     fn parse_array_literal(&mut self) -> Expr {
         let start = self.current_span.start;
         self.advance(); // consume '['
+        self.consume_newlines();
         let mut elements = Vec::new();
 
         if self.current_token == Token::RBracket {
@@ -2606,10 +2671,13 @@ impl Parser {
         }
 
         while self.current_token != Token::RBracket && self.current_token != Token::EOF {
+            self.consume_newlines();
             elements.push(self.parse_expression());
+            self.consume_newlines();
 
             if self.current_token == Token::Comma {
                 self.advance();
+                self.consume_newlines();
             } else if self.current_token != Token::RBracket {
                 let msg = "Expected ',' or ']' in array literal".to_string();
                 self.record_error(msg, self.current_span);

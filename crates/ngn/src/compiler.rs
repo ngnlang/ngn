@@ -546,7 +546,30 @@ impl Compiler {
                 ),
                 span,
             },
-            ExprKind::Channel(_) | ExprKind::Map(_, _) | ExprKind::Set(_) => expr.clone(),
+            ExprKind::Channel(_) => expr.clone(),
+            ExprKind::MapLiteral {
+                key_type,
+                value_type,
+                seed,
+            } => Expr {
+                kind: ExprKind::MapLiteral {
+                    key_type: key_type.clone(),
+                    value_type: value_type.clone(),
+                    seed: seed.as_ref().map(|expr| {
+                        Box::new(self.replace_pipe_placeholders(expr, placeholder_name))
+                    }),
+                },
+                span,
+            },
+            ExprKind::SetLiteral { element_type, seed } => Expr {
+                kind: ExprKind::SetLiteral {
+                    element_type: element_type.clone(),
+                    seed: seed.as_ref().map(|expr| {
+                        Box::new(self.replace_pipe_placeholders(expr, placeholder_name))
+                    }),
+                },
+                span,
+            },
             ExprKind::Bool(_)
             | ExprKind::Regex(_)
             | ExprKind::Number(_)
@@ -1676,15 +1699,77 @@ impl Compiler {
                 self.reg_top = dest + 1;
                 dest
             }
-            ExprKind::Map(_, _) => {
+            ExprKind::MapLiteral { seed, .. } => {
+                let seed_reg = seed.as_ref().map(|expr| self.compile_expr(expr));
+
                 let dest = self.alloc_reg();
                 self.instructions.push(OpCode::CreateMap(dest));
+
+                if let Some(seed_reg) = seed_reg {
+                    let zero_idx = self.add_constant(Value::Numeric(Number::I64(0)));
+                    let one_idx = self.add_constant(Value::Numeric(Number::I64(1)));
+
+                    let zero_reg = self.alloc_reg();
+                    let one_reg = self.alloc_reg();
+                    self.instructions
+                        .push(OpCode::LoadConst(zero_reg, zero_idx));
+                    self.instructions.push(OpCode::LoadConst(one_reg, one_idx));
+
+                    let iter_reg = self.alloc_reg();
+                    let _idx_temp = self.alloc_reg();
+                    self.instructions
+                        .push(OpCode::IterStart(iter_reg, seed_reg));
+
+                    let loop_start = self.instructions.len();
+                    let tuple_reg = self.alloc_reg();
+                    let exit_jump = self.emit(OpCode::IterNext(tuple_reg, iter_reg, 0));
+
+                    let key_reg = self.alloc_reg();
+                    self.instructions
+                        .push(OpCode::GetIndex(key_reg, tuple_reg, zero_reg));
+                    let value_reg = self.alloc_reg();
+                    self.instructions
+                        .push(OpCode::GetIndex(value_reg, tuple_reg, one_reg));
+
+                    let method_idx = self.add_constant(Value::String("set".to_string()));
+                    let result_reg = self.alloc_reg();
+                    self.instructions.push(OpCode::CallMethodMut(
+                        result_reg, dest, method_idx, key_reg, 2,
+                    ));
+
+                    self.emit(OpCode::Jump(loop_start));
+                    self.patch_jump(exit_jump);
+                }
+
                 self.reg_top = dest + 1;
                 dest
             }
-            ExprKind::Set(_) => {
+            ExprKind::SetLiteral { seed, .. } => {
+                let seed_reg = seed.as_ref().map(|expr| self.compile_expr(expr));
+
                 let dest = self.alloc_reg();
                 self.instructions.push(OpCode::CreateSet(dest));
+
+                if let Some(seed_reg) = seed_reg {
+                    let iter_reg = self.alloc_reg();
+                    let _idx_temp = self.alloc_reg();
+                    self.instructions
+                        .push(OpCode::IterStart(iter_reg, seed_reg));
+
+                    let loop_start = self.instructions.len();
+                    let val_reg = self.alloc_reg();
+                    let exit_jump = self.emit(OpCode::IterNext(val_reg, iter_reg, 0));
+
+                    let method_idx = self.add_constant(Value::String("add".to_string()));
+                    let result_reg = self.alloc_reg();
+                    self.instructions.push(OpCode::CallMethodMut(
+                        result_reg, dest, method_idx, val_reg, 1,
+                    ));
+
+                    self.emit(OpCode::Jump(loop_start));
+                    self.patch_jump(exit_jump);
+                }
+
                 self.reg_top = dest + 1;
                 dest
             }

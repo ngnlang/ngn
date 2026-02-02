@@ -2186,7 +2186,30 @@ impl Analyzer {
                 ),
                 span,
             },
-            ExprKind::Channel(_) | ExprKind::Map(_, _) | ExprKind::Set(_) => expr.clone(),
+            ExprKind::Channel(_) => expr.clone(),
+            ExprKind::MapLiteral {
+                key_type,
+                value_type,
+                seed,
+            } => Expr {
+                kind: ExprKind::MapLiteral {
+                    key_type: key_type.clone(),
+                    value_type: value_type.clone(),
+                    seed: seed.as_ref().map(|expr| {
+                        Box::new(self.replace_pipe_placeholders(expr, placeholder_name))
+                    }),
+                },
+                span,
+            },
+            ExprKind::SetLiteral { element_type, seed } => Expr {
+                kind: ExprKind::SetLiteral {
+                    element_type: element_type.clone(),
+                    seed: seed.as_ref().map(|expr| {
+                        Box::new(self.replace_pipe_placeholders(expr, placeholder_name))
+                    }),
+                },
+                span,
+            },
             ExprKind::Bool(_)
             | ExprKind::Regex(_)
             | ExprKind::Number(_)
@@ -4758,10 +4781,245 @@ impl Analyzer {
                     }
                 }
             }
-            ExprKind::Map(key_type, value_type) => {
-                Type::Map(Box::new(key_type.clone()), Box::new(value_type.clone()))
+            ExprKind::MapLiteral {
+                key_type,
+                value_type,
+                seed,
+            } => {
+                let mut empty_seed = false;
+                let inferred = if let Some(seed_expr) = seed {
+                    if let ExprKind::Array(elements) = &seed_expr.kind {
+                        if elements.is_empty() && (key_type.is_none() || value_type.is_none()) {
+                            empty_seed = true;
+                            self.add_error(
+                                "Type Error: map() seed is empty; provide map<key, value>([])"
+                                    .to_string(),
+                                expr.span,
+                            );
+                            (Type::Any, Type::Any)
+                        } else if elements.is_empty() {
+                            (Type::Any, Type::Any)
+                        } else {
+                            let first_ty = self.check_expression(&elements[0]);
+                            let (first_key, first_value) = match &first_ty {
+                                Type::Tuple(parts) if parts.len() == 2 => {
+                                    (parts[0].clone(), parts[1].clone())
+                                }
+                                Type::Tuple(_) => {
+                                    self.add_error(
+                                        "Type Error: map() seed must be an array of 2-tuples"
+                                            .to_string(),
+                                        expr.span,
+                                    );
+                                    (Type::Any, Type::Any)
+                                }
+                                other => {
+                                    self.add_error(
+                                        format!(
+                                            "Type Error: map() seed must be an array of 2-tuples, got {:?}",
+                                            other
+                                        ),
+                                        expr.span,
+                                    );
+                                    (Type::Any, Type::Any)
+                                }
+                            };
+
+                            for el in elements.iter().skip(1) {
+                                let ty = self.check_expression(el);
+                                if ty != first_ty {
+                                    self.add_error(
+                                        format!(
+                                            "Type Error: map() seed contains mixed tuple types. Expected {:?}, got {:?}",
+                                            first_ty, ty
+                                        ),
+                                        expr.span,
+                                    );
+                                }
+                            }
+
+                            (first_key, first_value)
+                        }
+                    } else {
+                        let seed_ty = self.check_expression(seed_expr);
+                        match seed_ty {
+                            Type::Array(inner) => match *inner {
+                                Type::Tuple(elements) => {
+                                    if elements.len() != 2 {
+                                        self.add_error(
+                                            "Type Error: map() seed must be an array of 2-tuples"
+                                                .to_string(),
+                                            expr.span,
+                                        );
+                                        (Type::Any, Type::Any)
+                                    } else {
+                                        (elements[0].clone(), elements[1].clone())
+                                    }
+                                }
+                                Type::Any => {
+                                    self.add_error(
+                                        "Type Error: map() seed must be an array of 2-tuples"
+                                            .to_string(),
+                                        expr.span,
+                                    );
+                                    (Type::Any, Type::Any)
+                                }
+                                other => {
+                                    self.add_error(
+                                        format!(
+                                            "Type Error: map() seed must be an array of 2-tuples, got {:?}",
+                                            other
+                                        ),
+                                        expr.span,
+                                    );
+                                    (Type::Any, Type::Any)
+                                }
+                            },
+                            other => {
+                                self.add_error(
+                                    format!(
+                                        "Type Error: map() seed must be an array of 2-tuples, got {:?}",
+                                        other
+                                    ),
+                                    expr.span,
+                                );
+                                (Type::Any, Type::Any)
+                            }
+                        }
+                    }
+                } else {
+                    if key_type.is_none() || value_type.is_none() {
+                        self.add_error(
+                            "Type Error: map() requires type arguments or a seed array".to_string(),
+                            expr.span,
+                        );
+                    }
+                    (Type::Any, Type::Any)
+                };
+
+                let (inferred_key, inferred_value) = inferred;
+
+                match (key_type, value_type) {
+                    (Some(key_type), Some(value_type)) => {
+                        if seed.is_some() {
+                            if !self.types_compatible(key_type, &inferred_key) {
+                                self.add_error(
+                                    format!(
+                                        "Type Error: map() seed key type {:?} does not match {:?}",
+                                        inferred_key, key_type
+                                    ),
+                                    expr.span,
+                                );
+                            }
+                            if !self.types_compatible(value_type, &inferred_value) {
+                                self.add_error(
+                                    format!(
+                                        "Type Error: map() seed value type {:?} does not match {:?}",
+                                        inferred_value, value_type
+                                    ),
+                                    expr.span,
+                                );
+                            }
+                        }
+                        Type::Map(Box::new(key_type.clone()), Box::new(value_type.clone()))
+                    }
+                    _ => {
+                        if !empty_seed
+                            && (matches!(inferred_key, Type::Any)
+                                || matches!(inferred_value, Type::Any))
+                        {
+                            self.add_error(
+                                "Type Error: map() cannot infer types from seed; add type arguments"
+                                    .to_string(),
+                                expr.span,
+                            );
+                        }
+                        Type::Map(Box::new(inferred_key), Box::new(inferred_value))
+                    }
+                }
             }
-            ExprKind::Set(element_type) => Type::Set(Box::new(element_type.clone())),
+            ExprKind::SetLiteral { element_type, seed } => {
+                let mut empty_seed = false;
+                let inferred = if let Some(seed_expr) = seed {
+                    if let ExprKind::Array(elements) = &seed_expr.kind {
+                        if elements.is_empty() && element_type.is_none() {
+                            empty_seed = true;
+                            self.add_error(
+                                "Type Error: set() seed is empty; provide set<element>([])"
+                                    .to_string(),
+                                expr.span,
+                            );
+                            Type::Any
+                        } else if elements.is_empty() {
+                            Type::Any
+                        } else {
+                            let first_ty = self.check_expression(&elements[0]);
+                            for el in elements.iter().skip(1) {
+                                let ty = self.check_expression(el);
+                                if ty != first_ty {
+                                    self.add_error(
+                                        format!(
+                                            "Type Error: set() seed contains mixed element types. Expected {:?}, got {:?}",
+                                            first_ty, ty
+                                        ),
+                                        expr.span,
+                                    );
+                                }
+                            }
+                            first_ty
+                        }
+                    } else {
+                        let seed_ty = self.check_expression(seed_expr);
+                        match seed_ty {
+                            Type::Array(inner) => *inner,
+                            other => {
+                                self.add_error(
+                                    format!(
+                                        "Type Error: set() seed must be an array, got {:?}",
+                                        other
+                                    ),
+                                    expr.span,
+                                );
+                                Type::Any
+                            }
+                        }
+                    }
+                } else {
+                    if element_type.is_none() {
+                        self.add_error(
+                            "Type Error: set() requires a type argument or a seed array"
+                                .to_string(),
+                            expr.span,
+                        );
+                    }
+                    Type::Any
+                };
+
+                match element_type {
+                    Some(element_type) => {
+                        if seed.is_some() && !self.types_compatible(element_type, &inferred) {
+                            self.add_error(
+                                format!(
+                                    "Type Error: set() seed element type {:?} does not match {:?}",
+                                    inferred, element_type
+                                ),
+                                expr.span,
+                            );
+                        }
+                        Type::Set(Box::new(element_type.clone()))
+                    }
+                    None => {
+                        if !empty_seed && matches!(inferred, Type::Any) {
+                            self.add_error(
+                                "Type Error: set() cannot infer type from seed; add a type argument"
+                                    .to_string(),
+                                expr.span,
+                            );
+                        }
+                        Type::Set(Box::new(inferred))
+                    }
+                }
+            }
         }
     }
 
