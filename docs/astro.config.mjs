@@ -40,8 +40,12 @@ export default defineConfig({
 						{ label: 'WTF?', slug: 'learn/wtf' },
 						{ label: 'Sick Picks', slug: 'learn/sick-picks' },
 						{ label: 'Basics', slug: 'learn/basics' },
-						{ label: 'Language Tour', slug: 'learn/language-tour' },
-						{ label: 'HTTP Servers', slug: 'learn/http-servers' },
+					],
+				},
+				{
+					label: 'Build',
+					items: [
+						{ label: 'Web Servers', slug: 'build/web-servers' },
 					],
 				},
 				{
