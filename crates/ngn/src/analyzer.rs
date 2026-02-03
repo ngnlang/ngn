@@ -1541,6 +1541,9 @@ impl Analyzer {
                     Type::Array(inner) => *inner,
                     Type::Tuple(_) => Type::Any,
                     Type::Enum(ref name) if name == "Maybe" => Type::Any,
+                    Type::Generic(ref name, ref args) if name == "Maybe" => {
+                        args.get(0).cloned().unwrap_or(Type::Any)
+                    }
                     Type::Channel(inner) => *inner,
                     Type::Set(inner) => *inner,
                     Type::Range(inner) => *inner,
@@ -4314,6 +4317,15 @@ impl Analyzer {
                                 );
                             }
                             Type::Void
+                        }
+                        "isClosed" => {
+                            if !args.is_empty() {
+                                self.add_error(
+                                    "Type Error: .isClosed() takes no arguments".to_string(),
+                                    expr.span,
+                                );
+                            }
+                            Type::Bool
                         }
                         _ => {
                             self.add_error(

@@ -22,7 +22,13 @@ type ModuleCache = HashMap<PathBuf, (ModuleCacheEntry, SystemTime)>;
 type BytecodePayload = (Vec<OpCode>, Vec<Span>, Vec<Value>, String, String);
 
 fn runtime_binary_name() -> &'static str {
-    if cfg!(windows) {
+    if cfg!(feature = "llm") {
+        if cfg!(windows) {
+            "ngnr-llm.exe"
+        } else {
+            "ngnr-llm"
+        }
+    } else if cfg!(windows) {
         "ngnr.exe"
     } else {
         "ngnr"

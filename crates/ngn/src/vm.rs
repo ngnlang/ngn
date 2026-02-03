@@ -4101,6 +4101,13 @@ impl Fiber {
                 *channel.is_closed.lock().unwrap() = true;
                 Value::Void
             }
+            "isClosed" => {
+                if !args.is_empty() {
+                    panic!("Runtime Error: .isClosed() takes no arguments");
+                }
+                let closed = *channel.is_closed.lock().unwrap();
+                Value::Bool(closed)
+            }
             _ => panic!("Runtime Error: Unknown Channel method '{}'", method),
         }
     }
