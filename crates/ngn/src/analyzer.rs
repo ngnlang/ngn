@@ -762,6 +762,9 @@ impl Analyzer {
                         stmt.span,
                         false,
                     );
+                    for (_, ty) in &model_def.fields {
+                        self.validate_type_args(ty, stmt.span);
+                    }
                 }
                 StatementKind::Role(role_def) => {
                     self.roles.insert(role_def.name.clone(), role_def.clone());
@@ -774,6 +777,7 @@ impl Analyzer {
                     );
                 }
                 StatementKind::TypeAlias { name, target } => {
+                    self.validate_type_args(target, stmt.span);
                     let normalized = self.normalize_type(target.clone());
                     self.type_aliases.insert(name.clone(), normalized);
                     self.record_symbol(
@@ -800,6 +804,9 @@ impl Analyzer {
                     let mut param_types = Vec::new();
                     for p in params {
                         let ty = p.ty.clone().unwrap_or(Type::Any);
+                        if let Some(ref p_ty) = p.ty {
+                            self.validate_type_args(p_ty, p.span);
+                        }
                         param_types.push(self.normalize_type(ty));
                     }
                     let optional_count = params
@@ -807,6 +814,9 @@ impl Analyzer {
                         .filter(|p| p.is_optional || p.default_value.is_some())
                         .count();
                     let ret_ty = return_type.clone().unwrap_or(Type::Void);
+                    if let Some(ret_ty) = return_type {
+                        self.validate_type_args(ret_ty, stmt.span);
+                    }
                     let ret_ty = self.normalize_type(ret_ty);
                     self.define(
                         name,
@@ -824,6 +834,7 @@ impl Analyzer {
                     role,
                     methods,
                 } => {
+                    self.validate_type_args(target, stmt.span);
                     let target = self.normalize_type(target.clone());
                     // Use generic type for tuple/array so that extend tuple/array applies to all
                     let target_key = self.generic_type(&target);
@@ -851,9 +862,15 @@ impl Analyzer {
                             let mut param_types = Vec::new();
                             for p in params {
                                 let ty = p.ty.clone().unwrap_or(Type::Any);
+                                if let Some(ref p_ty) = p.ty {
+                                    self.validate_type_args(p_ty, p.span);
+                                }
                                 param_types.push(self.normalize_type(ty));
                             }
                             let ret_ty = return_type.clone().unwrap_or(Type::Void);
+                            if let Some(ret_ty) = return_type {
+                                self.validate_type_args(ret_ty, stmt.span);
+                            }
                             let ret_ty = self.normalize_type(ret_ty);
                             methods_to_add.push((
                                 name.clone(),
@@ -1112,6 +1129,7 @@ impl Analyzer {
                 }
 
                 let ty = if let Some(declared) = declared_type {
+                    self.validate_type_args(declared, stmt.span);
                     if !self.types_compatible(declared, &inferred) {
                         self.add_error(
                             format!(
@@ -1297,6 +1315,7 @@ impl Analyzer {
                 let mut param_types = Vec::new();
                 for p in params {
                     if let Some(ty) = &p.ty {
+                        self.validate_type_args(ty, p.span);
                         param_types.push(ty.clone());
                     } else {
                         param_types.push(Type::Any);
@@ -1307,6 +1326,9 @@ impl Analyzer {
                     .filter(|p| p.is_optional || p.default_value.is_some())
                     .count();
                 let actual_return_type = return_type.clone().unwrap_or(Type::Void);
+                if let Some(ret_ty) = return_type {
+                    self.validate_type_args(ret_ty, stmt.span);
+                }
 
                 // Check if function is already defined (from Pass 1 or previous statement)
                 // If this is a nested function, we still need to define it.
@@ -1376,8 +1398,6 @@ impl Analyzer {
                 if let Some(bind_name) = &binding {
                     // Maybe/Result unwrap binding via `if (x?) { ... }`.
                     // This is an unwrap guard (Maybe::Value / Result::Ok) and `n` is the inner type.
-                    // NOTE: do not call `normalize_type()` here; it currently collapses
-                    // Generic("Maybe", [T]) into Enum("Maybe"), which would discard T.
                     let condition_type = self.resolve_type_aliases(condition_type);
 
                     let unwrapped_type = match condition_type {
@@ -1387,11 +1407,7 @@ impl Analyzer {
                         Type::Generic(name, args) if name == "Result" && !args.is_empty() => {
                             args[0].clone()
                         }
-                        Type::Enum(name) if name == "Maybe" || name == "Result" => {
-                            // We lost generic args (or never had them); fall back to Any.
-                            // This still preserves the runtime guard semantics.
-                            Type::Any
-                        }
+                        Type::Enum(name) if name == "Result" => Type::Any,
                         other => {
                             self.add_error(
                                 format!(
@@ -1540,7 +1556,6 @@ impl Analyzer {
                 let element_ty = match iter_ty {
                     Type::Array(inner) => *inner,
                     Type::Tuple(_) => Type::Any,
-                    Type::Enum(ref name) if name == "Maybe" => Type::Any,
                     Type::Generic(ref name, ref args) if name == "Maybe" => {
                         args.get(0).cloned().unwrap_or(Type::Any)
                     }
@@ -1614,6 +1629,7 @@ impl Analyzer {
                 role,
                 methods,
             } => {
+                self.validate_type_args(target, stmt.span);
                 // If role is provided, verify it exists and methods match
                 if let Some(role_name) = role {
                     self.validate_role_impl(target, role_name, methods, stmt.span);
@@ -1633,6 +1649,9 @@ impl Analyzer {
                     } = method
                     {
                         let actual_return_type = return_type.clone().unwrap_or(Type::Void);
+                        if let Some(ret_ty) = return_type {
+                            self.validate_type_args(ret_ty, *method_span);
+                        }
                         let prev_return = self.current_return_type.clone();
                         self.current_return_type = Some(actual_return_type);
 
@@ -1640,6 +1659,9 @@ impl Analyzer {
                         self.define("this", target.clone(), false, *method_span);
 
                         for param in params {
+                            if let Some(ref ty) = param.ty {
+                                self.validate_type_args(ty, param.span);
+                            }
                             self.define(
                                 &param.name,
                                 param.ty.clone().unwrap_or(Type::Any),
@@ -3486,7 +3508,7 @@ impl Analyzer {
                     Type::Generic(ref n, ref args) if n == "Result" && !args.is_empty() => {
                         Type::Bool
                     }
-                    Type::Enum(ref n) if n == "Maybe" || n == "Result" => Type::Bool,
+                    Type::Enum(ref n) if n == "Result" => Type::Bool,
                     Type::Any => Type::Bool,
                     other => {
                         self.add_error(
@@ -5203,12 +5225,83 @@ impl Analyzer {
         resolve(self, ty, &mut HashSet::new())
     }
 
+    fn validate_type_args(&mut self, ty: &Type, span: Span) {
+        match ty {
+            Type::Array(inner) | Type::Channel(inner) | Type::State(inner) | Type::Set(inner) => {
+                self.validate_type_args(inner, span)
+            }
+            Type::Map(key, value) => {
+                self.validate_type_args(key, span);
+                self.validate_type_args(value, span);
+            }
+            Type::Tuple(elements) => {
+                for t in elements {
+                    self.validate_type_args(t, span);
+                }
+            }
+            Type::Function {
+                params,
+                return_type,
+                ..
+            } => {
+                for p in params {
+                    self.validate_type_args(p, span);
+                }
+                self.validate_type_args(return_type, span);
+            }
+            Type::Union(members) => {
+                for m in members {
+                    self.validate_type_args(m, span);
+                }
+            }
+            Type::Generic(name, args) => {
+                if let Some(enum_def) = self.enums.get(name) {
+                    let expected = enum_def.type_params.len();
+                    if expected == 0 && !args.is_empty() {
+                        self.add_error(
+                            format!("Type Error: '{}' does not take type arguments", name),
+                            span,
+                        );
+                    } else if expected > 0 && args.len() != expected {
+                        self.add_error(
+                            format!(
+                                "Type Error: '{}' expects {} type arguments, got {}",
+                                name,
+                                expected,
+                                args.len()
+                            ),
+                            span,
+                        );
+                    }
+                }
+                for a in args {
+                    self.validate_type_args(a, span);
+                }
+            }
+            Type::Model(name) => {
+                if let Some(enum_def) = self.enums.get(name) {
+                    if !enum_def.type_params.is_empty() {
+                        self.add_error(
+                            format!("Type Error: '{}' requires type arguments", name),
+                            span,
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn normalize_type(&self, ty: Type) -> Type {
         let ty = self.resolve_type_aliases(ty);
         match ty {
             Type::Model(name) => {
-                if self.enums.contains_key(&name) {
-                    Type::Enum(name)
+                if let Some(enum_def) = self.enums.get(&name) {
+                    if enum_def.type_params.is_empty() {
+                        Type::Enum(name)
+                    } else {
+                        Type::Model(name)
+                    }
                 } else if self.roles.contains_key(&name) {
                     Type::Role(name)
                 } else {
@@ -5234,8 +5327,15 @@ impl Analyzer {
                 return_type: Box::new(self.normalize_type(*return_type)),
             },
             Type::Generic(name, args) => {
-                if self.enums.contains_key(&name) {
-                    Type::Enum(name)
+                if let Some(enum_def) = self.enums.get(&name) {
+                    if enum_def.type_params.is_empty() {
+                        Type::Enum(name)
+                    } else {
+                        Type::Generic(
+                            name,
+                            args.into_iter().map(|a| self.normalize_type(a)).collect(),
+                        )
+                    }
                 } else if self.roles.contains_key(&name) {
                     Type::Role(name)
                 } else {
