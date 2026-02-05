@@ -35,6 +35,7 @@ fn build_llama_cpp() {
     let root = repo_root(&manifest_dir);
 
     println!("cargo:rerun-if-env-changed=NGN_LLAMA_BACKEND");
+    println!("cargo:rerun-if-env-changed=NGN_EMBED_RUNTIME");
 
     let feature_enabled = env::var("CARGO_FEATURE_LLM").is_ok();
     if !feature_enabled {
@@ -344,18 +345,39 @@ fn copy_runtime_binaries() {
         .join("embed");
 
     let mut candidates = Vec::new();
-    candidates.push(embed_dir.join("ngnr"));
-    if let Some(t) = &target {
-        let target_dir = PathBuf::from(&manifest_dir)
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("target")
-            .join(t)
-            .join("release");
-        candidates.push(target_dir.join("ngnr"));
-        candidates.push(target_dir.join("runtime"));
+    let embed_runtime = env::var("NGN_EMBED_RUNTIME").ok().filter(|s| !s.is_empty());
+    if let Some(name) = &embed_runtime {
+        let path = PathBuf::from(name);
+        if path.is_absolute() || name.contains(std::path::MAIN_SEPARATOR) {
+            candidates.push(path);
+        } else {
+            candidates.push(embed_dir.join(name));
+            if let Some(t) = &target {
+                let target_dir = PathBuf::from(&manifest_dir)
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .join("target")
+                    .join(t)
+                    .join("release");
+                candidates.push(target_dir.join(name));
+            }
+        }
+    } else {
+        candidates.push(embed_dir.join("ngnr"));
+        if let Some(t) = &target {
+            let target_dir = PathBuf::from(&manifest_dir)
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("target")
+                .join(t)
+                .join("release");
+            candidates.push(target_dir.join("ngnr"));
+            candidates.push(target_dir.join("runtime"));
+        }
     }
 
     let src_path = candidates.iter().find(|p| p.exists()).cloned();
@@ -374,10 +396,22 @@ fn copy_runtime_binaries() {
     }
 
     // Tell cargo to rerun if runtime changes
-    println!("cargo:rerun-if-changed=target/embed/ngnr");
-    if let Some(t) = target {
-        println!("cargo:rerun-if-changed=target/{}/release/ngnr", t);
-        println!("cargo:rerun-if-changed=target/{}/release/runtime", t);
+    if let Some(name) = embed_runtime {
+        let path = PathBuf::from(&name);
+        if path.is_absolute() || name.contains(std::path::MAIN_SEPARATOR) {
+            println!("cargo:rerun-if-changed={}", path.display());
+        } else {
+            println!("cargo:rerun-if-changed={}", embed_dir.join(&name).display());
+            if let Some(t) = target {
+                println!("cargo:rerun-if-changed=target/{}/release/{}", t, name);
+            }
+        }
+    } else {
+        println!("cargo:rerun-if-changed=target/embed/ngnr");
+        if let Some(t) = target {
+            println!("cargo:rerun-if-changed=target/{}/release/ngnr", t);
+            println!("cargo:rerun-if-changed=target/{}/release/runtime", t);
+        }
     }
     println!("cargo:rerun-if-changed=src/bin/runtime.rs");
 }
