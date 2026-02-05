@@ -170,12 +170,57 @@ fn build_llama_cpu(llama_src: &Path, llama_include: &Path, ggml_include: &Path, 
     // for quantization kernels on some platforms. Compile the current target's arch
     // directory so the expected symbols exist.
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
-    if target_arch == "x86_64" || target_arch == "x86" {
-        collect_sources_shallow(
-            &ggml_src.join("ggml-cpu").join("arch").join("x86"),
-            &mut c_files,
-            &mut cpp_files,
-        );
+    match target_arch.as_str() {
+        "x86_64" | "x86" => {
+            collect_sources_shallow(
+                &ggml_src.join("ggml-cpu").join("arch").join("x86"),
+                &mut c_files,
+                &mut cpp_files,
+            );
+        }
+        "aarch64" | "arm" => {
+            collect_sources_shallow(
+                &ggml_src.join("ggml-cpu").join("arch").join("arm"),
+                &mut c_files,
+                &mut cpp_files,
+            );
+        }
+        "riscv64" => {
+            collect_sources_shallow(
+                &ggml_src.join("ggml-cpu").join("arch").join("riscv"),
+                &mut c_files,
+                &mut cpp_files,
+            );
+        }
+        "powerpc64" | "powerpc64le" => {
+            collect_sources_shallow(
+                &ggml_src.join("ggml-cpu").join("arch").join("powerpc"),
+                &mut c_files,
+                &mut cpp_files,
+            );
+        }
+        "s390x" => {
+            collect_sources_shallow(
+                &ggml_src.join("ggml-cpu").join("arch").join("s390"),
+                &mut c_files,
+                &mut cpp_files,
+            );
+        }
+        "loongarch64" => {
+            collect_sources_shallow(
+                &ggml_src.join("ggml-cpu").join("arch").join("loongarch"),
+                &mut c_files,
+                &mut cpp_files,
+            );
+        }
+        "wasm32" | "wasm64" => {
+            collect_sources_shallow(
+                &ggml_src.join("ggml-cpu").join("arch").join("wasm"),
+                &mut c_files,
+                &mut cpp_files,
+            );
+        }
+        _ => {}
     }
 
     let mut build_cpp = cc::Build::new();
