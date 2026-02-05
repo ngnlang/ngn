@@ -9,6 +9,39 @@ ngn includes a built-in web server, as well as Request and Response models for A
 ngn does not currently have an API framework.
 :::
 
+## Request
+### Properties
+- `method`: The HTTP method of the request
+- `url`: The URL of the request
+- `protocol`: Whether HTTP or HTTPs was used
+- `host`: The host the client used to make the request
+- `path`: The path of the request
+- `query`: The query string of the request
+- `params`: Query parameters as a `Map<string, string>`
+- `headers`: The headers of the request
+- `body`: The body of the request
+- `ip`: The client's IP address
+- `cookies`: The cookies sent with the request
+
+### Methods
+- `clone()`: Creates a new `Request` object with the same properties
+- `text()`: Parses the body as a string, returns a `string`
+- `json()`: Parses the body as JSON, returns a Result enum
+- `formData()`: Parses URL-encoded body, returns a `Map<string, string>`
+
+## Response
+### Properties
+- `status`: The HTTP status code - default is 200
+- `statusText`: The HTTP status text - default is ""
+- `ok`: A boolean indicating whether the response status code is in the range 200-299
+- `headers`: The headers to include in the response
+- `body`: The body of the response - default is ""
+
+### Methods
+- `text()`: Parses the body as a string, returns a `string`
+- `json()`: Parses the body as JSON, returns a Result enum
+- `formData()`: Parses URL-encoded body, returns a `Map<string, string>`
+
 ## export default
 
 ```ngn

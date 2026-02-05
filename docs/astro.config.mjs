@@ -46,6 +46,7 @@ export default defineConfig({
 					label: 'Build',
 					items: [
 						{ label: 'Web Servers', slug: 'build/web-servers' },
+						{ label: 'LLM Inference', slug: 'build/llm' },
 					],
 				},
 				{
