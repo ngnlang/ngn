@@ -4,6 +4,54 @@ set -euo pipefail
 BASE_URL="https://github.com/ngnlang/ngn/releases"
 VERSION="${NGN_VERSION:-latest}"
 INSTALL_DIR="${NGN_INSTALL_DIR:-$HOME/.local/bin}"
+FEATURE=""
+ARCHITECTURE=""
+
+print_usage() {
+  cat <<'EOF'
+Usage: install.sh [-f feature] [-a architecture]
+
+Architecture is detected via the host.
+Only Linux OS is supported.
+
+Options:
+  -f, --feature   Release feature: llm
+  -a, --arch      Architecture override: x86_64, amd64, arm64, aarch64
+  -h, --help      Show this help
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -f|--feature)
+      if [ "$#" -lt 2 ]; then
+        echo "Missing value for $1" >&2
+        print_usage >&2
+        exit 1
+      fi
+      FEATURE="$2"
+      shift 2
+      ;;
+    -a|--arch)
+      if [ "$#" -lt 2 ]; then
+        echo "Missing value for $1" >&2
+        print_usage >&2
+        exit 1
+      fi
+      ARCHITECTURE="$2"
+      shift 2
+      ;;
+    -h|--help)
+      print_usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      print_usage >&2
+      exit 1
+      ;;
+  esac
+done
 
 OS_NAME="$(uname -s)"
 ARCH_NAME="$(uname -m)"
@@ -20,12 +68,37 @@ case "${ARCH_NAME}" in
   x86_64|amd64) ARCH="x86_64" ;;
   arm64|aarch64) ARCH="arm64" ;;
   *)
-    echo "Unsupported architecture: ${ARCH_NAME}" >&2
+    echo "Unsupported host arch: ${ARCH_NAME}" >&2
     exit 1
     ;;
 esac
 
-TARBALL="ngn-${VERSION}-${OS}-${ARCH}.tar.gz"
+if [ -n "${ARCHITECTURE}" ]; then
+  case "${ARCHITECTURE}" in
+    x86_64|amd64) ARCH="x86_64" ;;
+    arm64|aarch64) ARCH="arm64" ;;
+    *)
+      echo "Unsupported architecture: ${ARCHITECTURE}" >&2
+      exit 1
+      ;;
+  esac
+fi
+
+if [ -n "${FEATURE}" ]; then
+  case "${FEATURE}" in
+    llm) FEATURE="llm" ;;
+    *)
+      echo "Unsupported feature: ${FEATURE}" >&2
+      exit 1
+      ;;
+  esac
+fi
+
+if [ -n "${FEATURE}" ]; then
+  TARBALL="ngn-${FEATURE}-${VERSION}-${OS}-${ARCH}.tar.gz"
+else
+  TARBALL="ngn-${VERSION}-${OS}-${ARCH}.tar.gz"
+fi
 URL="${BASE_URL}/${TARBALL}"
 
 TMP_DIR="$(mktemp -d)"
