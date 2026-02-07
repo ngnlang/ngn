@@ -2086,7 +2086,15 @@ impl Compiler {
                 value,
             } => {
                 // Compile the source expression
-                let src_reg = self.compile_expr(&value);
+                let mut src_reg = self.compile_expr(&value);
+
+                // If the source lives in temp regs, preserve it so destructured
+                // bindings (which use local slots) don't overwrite it.
+                if src_reg >= self.temp_start {
+                    let preserved_reg = self.alloc_reg();
+                    self.instructions.push(OpCode::Move(preserved_reg, src_reg));
+                    src_reg = preserved_reg;
+                }
 
                 // For each field, emit GetField and store in a new local variable
                 for (field_name, alias) in fields.iter() {
