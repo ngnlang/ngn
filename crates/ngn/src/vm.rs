@@ -2271,19 +2271,27 @@ impl Fiber {
             }
             OpCode::JsonParse(dest_reg, src_reg) => {
                 let src_val = self.get_reg_at(src_reg);
+                let make_null =
+                    || EnumData::into_value("Maybe".to_string(), "Null".to_string(), None);
                 if let Value::String(json_str) = src_val {
                     match serde_json::from_str::<serde_json::Value>(&json_str) {
                         Ok(json) => {
-                            self.set_reg_at(dest_reg, Value::from_json(json));
+                            let parsed = Value::from_json(json);
+                            let wrapped = EnumData::into_value(
+                                "Maybe".to_string(),
+                                "Value".to_string(),
+                                Some(Box::new(parsed)),
+                            );
+                            self.set_reg_at(dest_reg, wrapped);
                         }
                         Err(e) => {
                             eprintln!("JSON parse error: {}", e);
-                            self.set_reg_at(dest_reg, Value::Void);
+                            self.set_reg_at(dest_reg, make_null());
                         }
                     }
                 } else {
                     eprintln!("json.parse expects a string argument");
-                    self.set_reg_at(dest_reg, Value::Void);
+                    self.set_reg_at(dest_reg, make_null());
                 }
             }
             OpCode::JsonStringify(dest_reg, src_reg) => {

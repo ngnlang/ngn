@@ -4544,11 +4544,15 @@ impl Analyzer {
 
                     // Allow method calls on Type::Json (for json.parse, json.stringify)
                     Type::Json => {
-                        // Check arguments but return Any since parse returns dynamic data
+                        // Check arguments but return appropriate type for json.parse/stringify
                         for arg in args {
                             self.check_expression(arg);
                         }
-                        Type::Any
+                        match method.as_str() {
+                            "parse" => Type::Generic("Maybe".to_string(), vec![Type::Any]),
+                            "stringify" => Type::String,
+                            _ => Type::Any,
+                        }
                     }
 
                     // Allow method calls on Type::Spawn (for spawn.all, spawn.try, spawn.race)
