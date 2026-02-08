@@ -279,9 +279,13 @@ print("hello \${x}") // hello ${x}
 ## json
 
 ### `parse()`
-You can parse a JSON string or an array.
+You can parse a JSON string or an array. `json.parse()` returns a `Result<any, { message: string, line: i64, column: i64 }>`.
 ```ngn
 const data = json.parse('{"name": "ngn"}')
+check data?, err? { 
+  print("Parse error at line ${err.line}: ${err.message}")
+  return 
+}
 print(data.name) // ngn
 ```
 
@@ -824,11 +828,14 @@ Destructuring allows you to extract values from objects and arrays into individu
 
 ### Object Destructuring
 
-Extract fields from an object into variables:
+Extract fields from an object into variables. Destructured fields are `Maybe` values, so use `check` or `??` to unwrap.
 
 ```ngn
 const person = { name: "Alice", age: 30, city: "NYC" }
 const { name, age } = person
+
+check name? { return }
+check age? { return }
 
 print(name) // Alice
 print(age) // 30
@@ -842,6 +849,9 @@ Use a different variable name than the field name:
 const user = { id: 42, email: "test@example.com" }
 const { id, email: userEmail } = user
 
+check id? { return }
+check userEmail? { return }
+
 print(id) // 42
 print(userEmail) // test@example.com
 ```
@@ -853,6 +863,10 @@ Collect remaining fields into a new object:
 ```ngn
 const data = { a: 1, b: 2, c: 3, d: 4 }
 const { a, b, ...rest } = data
+
+check a? { return }
+check b? { return }
+check rest? { return }
 
 print(a) // 1
 print(b) // 2

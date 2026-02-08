@@ -480,6 +480,9 @@ match (value) {
 ```ngn
 const user = { name: "Alice", age: 30, city: "NYC" }
 const { name, age, ...rest } = user
+check name? { return }
+check age? { return }
+check rest? { return }
 
 const numbers = [1, 2, 3, 4, 5]
 const [first, second, ...tail] = numbers
