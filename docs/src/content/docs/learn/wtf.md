@@ -92,6 +92,83 @@ x = "goodbye" ✅ // `x` is still available
 If you move ownership of data declared with `const`, it's not mutable, since... you know, constants aren't mutable in ngn*
 :::
 
+## Handling `Maybe`
+
+ngn doesn't have a `null` value. Instead, we have a `Maybe` enum with `Value<T>` and `Null` variants. There are various ways of handling this, to get access to the data.
+
+### match
+
+```ngn
+match (maybe_value) {
+  Ok(val) => print(val),
+  Null => print("no value")
+}
+```
+
+### nullish coalescing operator
+
+If there's a value, it's unwrapped and assigned.
+
+```ngn
+const thing = maybe_value ?? "fallback"
+```
+
+### if
+Unwrap the value and make it available in the block.
+
+```ngn
+if (maybe_value?) {
+  // success scenario
+  // "maybe_value" is the actual data here
+}
+```
+
+### check
+If it's a `Maybe::Null`, run the failure block. You must either return or break within the block.
+
+```ngn
+check maybe_value? {
+  // failure scenario
+  // must return or break
+}
+
+// "maybe_value" is the actual data here
+```
+
+### Optional chaining
+
+This unwraps the `Maybe` for further testing of nested values; the assigned value is wrapped in `Maybe`.
+
+```ngn
+const maybe_location = user?.meta_data?.location
+```
+
+## Parsing json
+
+The `json.parse()` method returns a `Maybe` for unknown data. So, you need to check it using one of the above methods. However, this unknown data (from a user, for example), could throw a runtime error if you start using dot notation to access fields.
+
+```ngn
+const maybe_data = json.parse(data)
+const name = maybe_data?.name // might error if "name" isn't there
+```
+
+It is safer to destructure the data, which returns `Maybe` for each field, which you can then test against.
+
+```ngn
+const { name } = maybe_data
+
+check name? {
+  // any error handling
+  return
+}
+
+// "name" is actual data here
+```
+
+:::note
+Using `json.parse()` on known model data returns the raw data, instead of a `Maybe`.
+:::
+
 ## "standard library"
 
 Yeah, it's not called that in ngn, but you can use the phrase if you'd like. We call it the toolbox; after all, anyone who works on an engine has a toolbox, right?

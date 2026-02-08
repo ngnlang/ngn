@@ -3,7 +3,7 @@ title: MCP Servers
 description: Build an MCP server
 ---
 
-Build a basic MCP server. This code could stand to be tweaked a bit.
+Build a basic MCP server.
 
 ```ngn
 import { serve } from "tbx::http"
@@ -14,6 +14,17 @@ fn handleMcpWs(): WebSocketResponse {
   thread(|| {
     for (raw in <-? recv) {
       const parsed = json.parse(raw)
+
+      // only continue if we successfully parsed
+      check parsed?, err? {
+        send <- json.stringify({
+          jsonrpc: "2.0",
+          error: { code: -32601, message: "Invalid message. Could not parse json: ${err.message}" }
+        })
+        send.close()
+        return
+      }
+
       const method = parsed.method
       const id = parsed.id
 
@@ -55,36 +66,46 @@ fn handleMcpWs(): WebSocketResponse {
           send <- payload
         },
         "tools/call" => {
-          const name = parsed.params.name
-          var args = parsed.params.arguments
-          if (args == null) args = {}
-          var text = ""
-          if (args.text != null) text = args.text
-          if (name == "echo") {
+          const { name, arguments: args } = parsed.params
+          check name? {
             const payload = json.stringify({
               jsonrpc: "2.0",
               id,
-              result: { content: [{ "type": "text", text }] }
+              error: { code: -32601, message: "Invalid message. Missing tool name." }
             })
             send <- payload
-          } : {
-            const payload = json.stringify({
-              jsonrpc: "2.0",
-              id,
-              error: { code: -32601, message: "Unknown tool" }
-            })
-            send <- payload
+            return
+          }
+
+          const text = args?.text ?? "NO TEXT SENT"
+
+          if {
+            (name == "echo")
+              const payload = json.stringify({
+                jsonrpc: "2.0",
+                id,
+                result: { content: [{ "type": "text", text }] }
+              })
+              send <- payload
+            :
+              const payload = json.stringify({
+                jsonrpc: "2.0",
+                id,
+                error: { code: -32601, message: "Unknown tool" }
+              })
+              send <- payload
           }
         },
         _ => {
           // Ignore notifications or unknown methods
-          if (id != null) {
-            const payload = json.stringify({
-              jsonrpc: "2.0",
-              id,
-              error: { code: -32601, message: "Method not found" }
-            })
-            send <- payload
+          if {
+            (id)
+              const payload = json.stringify({
+                jsonrpc: "2.0",
+                id,
+                error: { code: -32601, message: "Method not found" }
+              })
+              send <- payload
           }
         }
       }

@@ -45,7 +45,8 @@ export default defineConfig({
 				{
 					label: 'Build',
 					items: [
-						{ label: 'Web Servers', slug: 'build/web-servers' },
+						{ label: 'Web Server', slug: 'build/http' },
+						{ label: 'MCP Server', slug: 'build/mcp' },
 						{ label: 'LLM Inference', slug: 'build/llm' },
 					],
 				},

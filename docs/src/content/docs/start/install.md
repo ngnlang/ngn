@@ -11,8 +11,21 @@ If using bash or zsh, the installer will add ngn and it's runtime, ngnr, to your
 
 By default, ngn installs at `~/.local/bin`. To customize this, prefix the below command with `NGN_INSTALL_DIR=/custom/dir/path`
 
+## Choose your adventure
+
+Standard install (no llm support)
 ```bash
 curl -fsSL https://ngnlang.com/install | sh
+```
+
+With LLM support
+```bash
+curl -fsSL https://ngnlang.com/install -f llm | sh
+```
+
+Architecture is auto-detected, but you can be explicit (x86_64, amd64, arm64, aarch64)
+```bash
+curl -fsSL https://ngnlang.com/install -a aarch64 | sh
 ```
 
 ## Verify
