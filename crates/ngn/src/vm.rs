@@ -2093,6 +2093,96 @@ impl Fiber {
                     ),
                 }
             }
+            OpCode::GetFieldMaybe(dest, obj_reg, field_idx) => {
+                let obj = self.get_reg_at(obj_reg);
+                let field_name = self.expect_string_const(field_idx);
+
+                let make_null =
+                    || EnumData::into_value("Maybe".to_string(), "Null".to_string(), None);
+                let wrap_value = |value: Value| {
+                    EnumData::into_value(
+                        "Maybe".to_string(),
+                        "Value".to_string(),
+                        Some(Box::new(value)),
+                    )
+                };
+
+                // Unwrap Maybe/Result if needed
+                let resolved = match obj {
+                    Value::Enum(ref e)
+                        if (e.enum_name == "Maybe" && e.variant_name == "Value")
+                            || (e.enum_name == "Result" && e.variant_name == "Ok") =>
+                    {
+                        Some(e.data.clone().map(|b| *b).unwrap_or(Value::Void))
+                    }
+                    Value::Enum(ref e)
+                        if (e.enum_name == "Maybe" && e.variant_name == "Null")
+                            || (e.enum_name == "Result" && e.variant_name == "Error") =>
+                    {
+                        None
+                    }
+                    _ => Some(obj),
+                };
+
+                let resolved = if let Some(resolved) = resolved {
+                    resolved
+                } else {
+                    self.set_reg_at(dest, make_null());
+                    return FiberStatus::Running;
+                };
+
+                match resolved {
+                    Value::Object(o) => {
+                        // Check if this is an anonymous object or a Model instance
+                        if o.model_name == "__anon__" {
+                            // Anonymous object: return Maybe
+                            if let Some(val) = o.fields.get(&field_name) {
+                                self.set_reg_at(dest, wrap_value(val.clone()));
+                            } else {
+                                self.set_reg_at(dest, make_null());
+                            }
+                        } else {
+                            // Model instance: return direct value or panic
+                            if let Some(val) = o.fields.get(&field_name) {
+                                self.set_reg_at(dest, val.clone());
+                            } else {
+                                panic!(
+                                    "Runtime Error: Field '{}' not found in {}",
+                                    field_name, o.model_name
+                                );
+                            }
+                        }
+                    }
+                    Value::Response(r) => {
+                        let val = match field_name.as_str() {
+                            "status" => {
+                                Some(Value::Numeric(crate::value::Number::I64(r.status as i64)))
+                            }
+                            "statusText" => Some(Value::String(r.status_text.clone())),
+                            "ok" => Some(Value::Bool(r.ok)),
+                            "body" => Some(Value::String(r.body.clone())),
+                            "headers" => {
+                                let mut map = std::collections::HashMap::new();
+                                for (k, v) in r.headers.iter() {
+                                    map.insert(Value::String(k.clone()), Value::String(v.clone()));
+                                }
+                                Some(Value::Map(map))
+                            }
+                            _ => None,
+                        };
+
+                        if let Some(val) = val {
+                            self.set_reg_at(dest, wrap_value(val));
+                        } else {
+                            self.set_reg_at(dest, make_null());
+                        }
+                    }
+                    _ => panic!(
+                        "Runtime Error: GetFieldMaybe on non-object type: {:?}",
+                        resolved.type_name()
+                    ),
+                }
+            }
             OpCode::SetField(obj_reg, field_idx, src_reg) => {
                 let mut obj = self.get_reg_at(obj_reg);
                 let field_name = self.expect_string_const(field_idx);
@@ -2271,27 +2361,57 @@ impl Fiber {
             }
             OpCode::JsonParse(dest_reg, src_reg) => {
                 let src_val = self.get_reg_at(src_reg);
-                let make_null =
-                    || EnumData::into_value("Maybe".to_string(), "Null".to_string(), None);
+
+                let make_ok = |value: Value| {
+                    EnumData::into_value(
+                        "Result".to_string(),
+                        "Ok".to_string(),
+                        Some(Box::new(value)),
+                    )
+                };
+
+                let make_error = |message: String, line: i64, column: i64| {
+                    // Create structured error object
+                    let mut error_fields = std::collections::HashMap::new();
+                    error_fields.insert("message".to_string(), Value::String(message));
+                    error_fields.insert(
+                        "line".to_string(),
+                        Value::Numeric(crate::value::Number::I64(line)),
+                    );
+                    error_fields.insert(
+                        "column".to_string(),
+                        Value::Numeric(crate::value::Number::I64(column)),
+                    );
+
+                    let error_obj = Value::Object(Box::new(ObjectData {
+                        model_name: "__anon__".to_string(),
+                        fields: error_fields,
+                    }));
+
+                    EnumData::into_value(
+                        "Result".to_string(),
+                        "Error".to_string(),
+                        Some(Box::new(error_obj)),
+                    )
+                };
+
                 if let Value::String(json_str) = src_val {
                     match serde_json::from_str::<serde_json::Value>(&json_str) {
                         Ok(json) => {
                             let parsed = Value::from_json(json);
-                            let wrapped = EnumData::into_value(
-                                "Maybe".to_string(),
-                                "Value".to_string(),
-                                Some(Box::new(parsed)),
-                            );
-                            self.set_reg_at(dest_reg, wrapped);
+                            self.set_reg_at(dest_reg, make_ok(parsed));
                         }
                         Err(e) => {
-                            eprintln!("JSON parse error: {}", e);
-                            self.set_reg_at(dest_reg, make_null());
+                            // Extract line and column from serde_json error if available
+                            let line = e.line() as i64;
+                            let column = e.column() as i64;
+                            let message = format!("{}", e);
+                            self.set_reg_at(dest_reg, make_error(message, line, column));
                         }
                     }
                 } else {
-                    eprintln!("json.parse expects a string argument");
-                    self.set_reg_at(dest_reg, make_null());
+                    let message = "json.parse expects a string argument".to_string();
+                    self.set_reg_at(dest_reg, make_error(message, 0, 0));
                 }
             }
             OpCode::JsonStringify(dest_reg, src_reg) => {
@@ -2463,7 +2583,7 @@ impl Fiber {
                     };
 
                 // Create a new object with remaining fields
-                let rest_fields = match obj {
+                let (rest_fields, is_anonymous) = match obj {
                     Value::Object(obj_data) => {
                         let mut fields = std::collections::HashMap::new();
                         for (key, value) in obj_data.fields.iter() {
@@ -2471,18 +2591,29 @@ impl Fiber {
                                 fields.insert(key.clone(), value.clone());
                             }
                         }
-                        fields
+                        (fields, obj_data.model_name == "__anon__")
                     }
-                    _ => std::collections::HashMap::new(),
+                    _ => (std::collections::HashMap::new(), true),
                 };
 
-                self.set_reg_at(
-                    dest_reg,
-                    Value::Object(Box::new(ObjectData {
-                        model_name: "__anon__".to_string(),
-                        fields: rest_fields,
-                    })),
-                );
+                let rest_obj = Value::Object(Box::new(ObjectData {
+                    model_name: "__anon__".to_string(),
+                    fields: rest_fields,
+                }));
+
+                // If source was anonymous, wrap in Maybe; otherwise return direct
+                if is_anonymous {
+                    self.set_reg_at(
+                        dest_reg,
+                        EnumData::into_value(
+                            "Maybe".to_string(),
+                            "Value".to_string(),
+                            Some(Box::new(rest_obj)),
+                        ),
+                    );
+                } else {
+                    self.set_reg_at(dest_reg, rest_obj);
+                }
             }
             OpCode::TimeNow(dest_reg) => {
                 // Returns a DateTime object for current local time

@@ -2104,8 +2104,11 @@ impl Compiler {
 
                     let field_const_idx = self.add_constant(Value::String(field_name.clone()));
                     let dest_reg = self.alloc_reg();
-                    self.instructions
-                        .push(OpCode::GetField(dest_reg, src_reg, field_const_idx));
+                    self.instructions.push(OpCode::GetFieldMaybe(
+                        dest_reg,
+                        src_reg,
+                        field_const_idx,
+                    ));
                     self.instructions
                         .push(OpCode::Move(var_idx as u16, dest_reg));
                     self.instructions.push(OpCode::DefVar(var_idx, is_mutable));
@@ -2131,6 +2134,10 @@ impl Compiler {
                         src_reg,
                         excluded_const_idx,
                     ));
+
+                    // Note: ObjectRest opcode will handle wrapping in Maybe for anonymous objects
+                    // vs direct return for Model instances at runtime
+
                     self.instructions
                         .push(OpCode::Move(var_idx as u16, dest_reg));
                     self.instructions.push(OpCode::DefVar(var_idx, is_mutable));

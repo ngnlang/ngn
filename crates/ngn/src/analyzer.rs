@@ -4549,7 +4549,9 @@ impl Analyzer {
                             self.check_expression(arg);
                         }
                         match method.as_str() {
-                            "parse" => Type::Generic("Maybe".to_string(), vec![Type::Any]),
+                            "parse" => {
+                                Type::Generic("Result".to_string(), vec![Type::Any, Type::Any])
+                            } // Result<any, object>
                             "stringify" => Type::String,
                             _ => Type::Any,
                         }
