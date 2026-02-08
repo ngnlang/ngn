@@ -2133,24 +2133,12 @@ impl Fiber {
 
                 match resolved {
                     Value::Object(o) => {
-                        // Check if this is an anonymous object or a Model instance
-                        if o.model_name == "__anon__" {
-                            // Anonymous object: return Maybe
-                            if let Some(val) = o.fields.get(&field_name) {
-                                self.set_reg_at(dest, wrap_value(val.clone()));
-                            } else {
-                                self.set_reg_at(dest, make_null());
-                            }
+                        // Always return Maybe for GetFieldMaybe
+                        // This is used by optional chaining (?.), destructuring, etc.
+                        if let Some(val) = o.fields.get(&field_name) {
+                            self.set_reg_at(dest, wrap_value(val.clone()));
                         } else {
-                            // Model instance: return direct value or panic
-                            if let Some(val) = o.fields.get(&field_name) {
-                                self.set_reg_at(dest, val.clone());
-                            } else {
-                                panic!(
-                                    "Runtime Error: Field '{}' not found in {}",
-                                    field_name, o.model_name
-                                );
-                            }
+                            self.set_reg_at(dest, make_null());
                         }
                     }
                     Value::Response(r) => {

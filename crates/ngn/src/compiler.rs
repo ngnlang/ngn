@@ -1810,36 +1810,23 @@ impl Compiler {
                 let jump_to_null = self.instructions.len();
                 self.instructions.push(OpCode::JumpIfFalse(check_reg, 0)); // patch later
 
-                // Value path: unwrap, access field, wrap in Maybe::Value
+                // Value path: unwrap, access field (using GetFieldMaybe for safety)
+                // GetFieldMaybe returns Maybe directly (handles anonymous vs Model objects)
                 let unwrapped_reg = self.alloc_reg();
                 self.instructions
                     .push(OpCode::UnwrapMaybe(unwrapped_reg, obj_reg));
 
                 let field_idx = self.add_constant(Value::String(field.clone()));
-                let field_result_reg = self.alloc_reg();
-                self.instructions.push(OpCode::GetField(
-                    field_result_reg,
-                    unwrapped_reg,
-                    field_idx,
-                ));
-
-                // Wrap result in Maybe::Value
-                let value_names_idx = self.add_constant(Value::Tuple(vec![
-                    Value::String("Maybe".to_string()),
-                    Value::String("Value".to_string()),
-                ]));
-                self.instructions.push(OpCode::CreateEnum(
-                    dest,
-                    value_names_idx,
-                    field_result_reg,
-                    1,
-                ));
+                // GetFieldMaybe returns Maybe::Value(field) or Maybe::Null for anonymous,
+                // or direct value for Model instances
+                self.instructions
+                    .push(OpCode::GetFieldMaybe(dest, unwrapped_reg, field_idx));
 
                 // Jump over null path
                 let jump_to_end = self.instructions.len();
                 self.instructions.push(OpCode::Jump(0)); // patch later
 
-                // Null path: create Maybe::Null
+                // Null path: create Maybe::Null (when obj itself is null)
                 let null_label = self.instructions.len();
                 let null_names_idx = self.add_constant(Value::Tuple(vec![
                     Value::String("Maybe".to_string()),
