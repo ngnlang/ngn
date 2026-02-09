@@ -20,11 +20,6 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Rust build cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ngn-release
-
       - name: Install musl toolchains
         run: |
           sudo apt-get update
