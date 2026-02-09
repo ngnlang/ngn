@@ -6,6 +6,10 @@
 CARGO := cargo
 EMBED_DIR := target/embed
 
+# Targets
+TARGET_X86 := x86_64-unknown-linux-musl
+TARGET_ARM := aarch64-unknown-linux-musl
+
 # Build everything
 all: dist lsp
 
@@ -15,7 +19,8 @@ bench:
 
 # Build the minimal runtime first, then the full ngn with embedded runtime
 release: runtime
-	NGN_EMBED_RUNTIME=ngnr $(CARGO) build --release -p ngn --bin ngn
+	NGN_EMBED_RUNTIME=ngnr $(CARGO) build --release -p ngn --bin ngn --target $(TARGET_X86)
+	cp target/$(TARGET_X86)/release/ngn target/release/ngn
 	$(MAKE) release-aarch64
 
 # Build ngn with LLM+CUDA support and embedded LLM runtime
@@ -25,9 +30,10 @@ release-cuda: runtime-cuda
 
 # Build runtime binary separately (must be done first)
 runtime:
-	NGN_SKIP_RUNTIME_COPY=1 $(CARGO) build --release -p ngn --bin runtime
-	$(MAKE) embed-runtime RUNTIME=target/release/runtime EMBED_NAME=ngnr
-	cp target/release/runtime target/release/ngnr
+	mkdir -p target/release
+	NGN_SKIP_RUNTIME_COPY=1 $(CARGO) build --release -p ngn --bin runtime --target $(TARGET_X86)
+	$(MAKE) embed-runtime RUNTIME=target/$(TARGET_X86)/release/runtime EMBED_NAME=ngnr
+	cp target/$(TARGET_X86)/release/runtime target/release/ngnr
 
 # Build runtime with CUDA support
 runtime-cuda:
@@ -45,17 +51,17 @@ embed-runtime:
 
 # Build aarch64 binaries if cross toolchain is available
 release-aarch64:
-	@if rustup target list --installed | grep -q aarch64-unknown-linux-gnu; then \
-		if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then \
-			NGN_SKIP_RUNTIME_COPY=1 $(CARGO) build --release -p ngn --bin runtime --target aarch64-unknown-linux-gnu; \
-			NGN_EMBED_RUNTIME=target/aarch64-unknown-linux-gnu/release/runtime \
-				$(CARGO) build --release -p ngn --bin ngn --target aarch64-unknown-linux-gnu; \
-			cp target/aarch64-unknown-linux-gnu/release/runtime target/aarch64-unknown-linux-gnu/release/ngnr; \
+	@if rustup target list --installed | grep -q $(TARGET_ARM); then \
+		if command -v aarch64-linux-musl-gcc >/dev/null 2>&1; then \
+			NGN_SKIP_RUNTIME_COPY=1 $(CARGO) build --release -p ngn --bin runtime --target $(TARGET_ARM); \
+			NGN_EMBED_RUNTIME=target/$(TARGET_ARM)/release/runtime \
+				$(CARGO) build --release -p ngn --bin ngn --target $(TARGET_ARM); \
+			cp target/$(TARGET_ARM)/release/runtime target/$(TARGET_ARM)/release/ngnr; \
 		else \
-			echo "Skipping aarch64 release: missing gcc-aarch64-linux-gnu"; \
+			echo "Skipping aarch64 release: missing aarch64-linux-musl-gcc"; \
 		fi; \
 	else \
-		echo "Skipping aarch64 release: rust target aarch64-unknown-linux-gnu not installed"; \
+		echo "Skipping aarch64 release: rust target $(TARGET_ARM) not installed"; \
 	fi
 
 # Build the LSP server
@@ -87,15 +93,9 @@ dist: release
 		cp "$$BIN_DIR/ngnr" "$$TMP_DIR/ngnr"; \
 		tar -czf "dist/ngn-$$VERSION-$$OS-$$ARCH.tar.gz" -C "$$TMP_DIR" ngn ngnr; \
 	}; \
-	ARCH_NAME="$$(uname -m)"; \
-	case "$$ARCH_NAME" in \
-		x86_64|amd64) HOST_ARCH=x86_64 ;; \
-		arm64|aarch64) HOST_ARCH=arm64 ;; \
-		*) echo "Unsupported architecture: $$ARCH_NAME" >&2; exit 1 ;; \
-	esac; \
-	package "$$HOST_ARCH" "target/release"; \
-	if [ -f "target/aarch64-unknown-linux-gnu/release/ngn" ] && [ -f "target/aarch64-unknown-linux-gnu/release/ngnr" ]; then \
-		package "arm64" "target/aarch64-unknown-linux-gnu/release"; \
+	package "x86_64" "target/release"; \
+	if [ -f "target/$(TARGET_ARM)/release/ngn" ] && [ -f "target/$(TARGET_ARM)/release/ngnr" ]; then \
+		package "arm64" "target/$(TARGET_ARM)/release"; \
 	fi
 
 # Build CUDA release binaries and package a tarball in dist/

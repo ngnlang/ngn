@@ -74,7 +74,11 @@ if [ -n "${ARCHITECTURE}" ]; then
 fi
 
 TARBALL="ngn-${VERSION}-${OS}-${ARCH}.tar.gz"
-URL="${BASE_URL}/${TARBALL}"
+if [ "$VERSION" = "latest" ]; then
+  URL="${BASE_URL}/latest/download/${TARBALL}"
+else
+  URL="${BASE_URL}/download/${VERSION}/${TARBALL}"
+fi
 
 TMP_DIR="$(mktemp -d)"
 cleanup() { rm -rf "${TMP_DIR}"; }
