@@ -16,6 +16,10 @@ fn main() {
 }
 
 fn should_copy_runtime_binaries() -> bool {
+    if env::var("NGN_SKIP_RUNTIME_COPY").ok().as_deref() == Some("1") {
+        return false;
+    }
+
     env::var("CARGO_BIN_NAME")
         .map(|name| name != "runtime")
         .unwrap_or(true)

@@ -25,7 +25,7 @@ release-cuda: runtime-cuda
 
 # Build runtime binary separately (must be done first)
 runtime:
-	$(CARGO) build --release -p ngn --bin runtime
+	NGN_SKIP_RUNTIME_COPY=1 $(CARGO) build --release -p ngn --bin runtime
 	$(MAKE) embed-runtime RUNTIME=target/release/runtime EMBED_NAME=ngnr
 	cp target/release/runtime target/release/ngnr
 
@@ -47,8 +47,9 @@ embed-runtime:
 release-aarch64:
 	@if rustup target list --installed | grep -q aarch64-unknown-linux-gnu; then \
 		if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then \
-			$(CARGO) build --release -p ngn --bin runtime --target aarch64-unknown-linux-gnu; \
-			$(CARGO) build --release -p ngn --bin ngn --target aarch64-unknown-linux-gnu; \
+			NGN_SKIP_RUNTIME_COPY=1 $(CARGO) build --release -p ngn --bin runtime --target aarch64-unknown-linux-gnu; \
+			NGN_EMBED_RUNTIME=target/aarch64-unknown-linux-gnu/release/runtime \
+				$(CARGO) build --release -p ngn --bin ngn --target aarch64-unknown-linux-gnu; \
 			cp target/aarch64-unknown-linux-gnu/release/runtime target/aarch64-unknown-linux-gnu/release/ngnr; \
 		else \
 			echo "Skipping aarch64 release: missing gcc-aarch64-linux-gnu"; \
