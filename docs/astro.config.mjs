@@ -7,9 +7,6 @@ import ngn_grammar from './src/assets/ngn.tmLanguage.json' with { type: 'json' }
 
 // https://astro.build/config
 export default defineConfig({
-	redirects: {
-		'/install': '/install.sh'
-	},
 	markdown: {
 		shikiConfig: {
 			langs: [
