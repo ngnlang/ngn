@@ -152,7 +152,7 @@ const maybe_data = json.parse(data)
 const name = maybe_data?.name // might error if "name" isn't there
 ```
 
-It is safer to destructure the data, which returns `Maybe` for each field, which you can then test against.
+It's safer to destructure the data, which returns `Maybe` for each field, which you can then test against.
 
 ```ngn
 const { name } = maybe_data
@@ -166,7 +166,7 @@ check name? {
 ```
 
 :::note
-Using `json.parse()` on known model data returns the raw data, instead of a `Maybe`.
+Using `json.parse()` on known model data returns the raw data, instead of a `Maybe` - except if a field is optional.
 :::
 
 ## "standard library"

@@ -227,6 +227,28 @@ model Dog {
 }
 ```
 
+#### Optional Model Fields
+Mark optional fields with `?`. Optional fields return `Maybe<T>` when accessed and can have defaults.
+
+```ngn
+model User {
+  name: string,
+  age?: i64 = 42,
+  nickname?: string
+}
+
+fn main() {
+  const user = User { name: "Alice" }
+
+  const { age, nickname } = user
+  check age? { return }
+  print(age) // 42
+
+  // Missing optional fields become null
+  assert(!nickname)
+}
+```
+
 #### Generic Models
 Models can have type parameters for creating reusable container types:
 
