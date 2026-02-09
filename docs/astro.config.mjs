@@ -51,6 +51,12 @@ export default defineConfig({
 					],
 				},
 				{
+					label: 'Deploy',
+					items: [
+						{ label: 'Your Server', slug: 'deploy' },
+					],
+				},
+				{
 					label: 'The Manual',
 					autogenerate: { directory: 'the-manual' },
 				},
