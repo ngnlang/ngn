@@ -1,0 +1,6 @@
+global greeting = "hello"
+
+export fn ping(message: string): string {
+    const punctuation = "!!!" 
+    return "${greeting} ${message}${punctuation}"
+}

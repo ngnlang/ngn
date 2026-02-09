@@ -1,0 +1,6 @@
+fn sing(message: string): string {
+    const punctuation = "!!!" 
+    return "${message}${punctuation}"
+}
+
+export default sing

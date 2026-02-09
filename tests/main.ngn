@@ -1,5 +1,4 @@
 import { assert } from "tbx::test"
-//import { read, write, append, exists, delete } from "tbx::io"
 import * as file from "tbx::io"
 import { ping } from "./module.ngn"
 import * as sing from "./module2.ngn"
