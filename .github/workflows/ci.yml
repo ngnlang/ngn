@@ -21,25 +21,13 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
       - name: Rust build cache
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: ngn-linux-cpu
-
-      - name: Install musl toolchain
-        run: |
-          wget -q https://musl.cc/x86_64-linux-musl-cross.tgz
-          tar -xzf x86_64-linux-musl-cross.tgz
-          echo "$PWD/x86_64-linux-musl-cross/bin" >> $GITHUB_PATH
-          rustup target add x86_64-unknown-linux-musl
-
-      - name: Configure cargo for musl
-        run: |
-          mkdir -p .cargo
-          cat >> .cargo/config.toml <<EOF
-          [target.x86_64-unknown-linux-musl]
-          linker = "x86_64-linux-musl-gcc"
-          EOF
 
       - name: "Guard: no GGUF files committed"
         run: |
@@ -53,7 +41,7 @@ jobs:
           fi
 
       - name: Build Release (embedded runtime)
-        run: make release
+        run: make release BUILD_CMD=cross
 
       - name: Run ngn test suite
         run: ./target/release/ngn run tests/main.ngn
@@ -81,29 +69,16 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
       - name: Rust build cache
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: ngn-linux-aarch64
 
-      - name: Install aarch64 musl toolchain
-        run: |
-          sudo apt-get update
-          wget -q https://musl.cc/aarch64-linux-musl-cross.tgz
-          tar -xzf aarch64-linux-musl-cross.tgz
-          echo "$PWD/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
-          rustup target add aarch64-unknown-linux-musl
-
-      - name: Configure cargo for cross-compilation
-        run: |
-          mkdir -p .cargo
-          cat >> .cargo/config.toml <<EOF
-          [target.aarch64-unknown-linux-musl]
-          linker = "aarch64-linux-musl-gcc"
-          EOF
-
       - name: Build (aarch64)
         run: |
-          NGN_SKIP_RUNTIME_COPY=1 cargo build --release -p ngn --bin runtime --target aarch64-unknown-linux-musl
+          NGN_SKIP_RUNTIME_COPY=1 cross build --release -p ngn --bin runtime --target aarch64-unknown-linux-musl
           NGN_EMBED_RUNTIME=target/aarch64-unknown-linux-musl/release/runtime \
-            cargo build --release -p ngn --bin ngn --target aarch64-unknown-linux-musl
+            cross build --release -p ngn --bin ngn --target aarch64-unknown-linux-musl

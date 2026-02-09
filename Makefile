@@ -4,6 +4,7 @@
 .PHONY: release clean runtime embed-runtime lsp all bench dist release-aarch64
 
 CARGO := cargo
+BUILD_CMD := $(or $(BUILD_CMD),cargo)
 EMBED_DIR := target/embed
 
 # Targets
@@ -19,25 +20,25 @@ bench:
 
 # Build the minimal runtime first, then the full ngn with embedded runtime
 release: runtime
-	NGN_EMBED_RUNTIME=ngnr $(CARGO) build --release -p ngn --bin ngn --target $(TARGET_X86)
+	NGN_EMBED_RUNTIME=ngnr $(BUILD_CMD) build --release -p ngn --bin ngn --target $(TARGET_X86)
 	cp target/$(TARGET_X86)/release/ngn target/release/ngn
 	$(MAKE) release-aarch64
 
 # Build ngn with LLM+CUDA support and embedded LLM runtime
 release-cuda: runtime-cuda
-	NGN_LLAMA_BACKEND=cuda NGN_EMBED_RUNTIME=ngnr-cuda $(CARGO) build --release -p ngn --bin ngn
+	NGN_LLAMA_BACKEND=cuda NGN_EMBED_RUNTIME=ngnr-cuda $(BUILD_CMD) build --release -p ngn --bin ngn
 	cp target/release/ngn target/release/ngn-cuda
 
 # Build runtime binary separately (must be done first)
 runtime:
 	mkdir -p target/release
-	NGN_SKIP_RUNTIME_COPY=1 $(CARGO) build --release -p ngn --bin runtime --target $(TARGET_X86)
+	NGN_SKIP_RUNTIME_COPY=1 $(BUILD_CMD) build --release -p ngn --bin runtime --target $(TARGET_X86)
 	$(MAKE) embed-runtime RUNTIME=target/$(TARGET_X86)/release/runtime EMBED_NAME=ngnr
 	cp target/$(TARGET_X86)/release/runtime target/release/ngnr
 
 # Build runtime with CUDA support
 runtime-cuda:
-	NGN_LLAMA_BACKEND=cuda NGN_SKIP_RUNTIME_COPY=1 $(CARGO) build --release -p ngn --bin runtime
+	NGN_LLAMA_BACKEND=cuda NGN_SKIP_RUNTIME_COPY=1 $(BUILD_CMD) build --release -p ngn --bin runtime
 	$(MAKE) embed-runtime RUNTIME=target/release/runtime EMBED_NAME=ngnr-cuda
 	cp target/release/runtime target/release/ngnr-cuda
 
@@ -53,9 +54,9 @@ embed-runtime:
 release-aarch64:
 	@if rustup target list --installed | grep -q $(TARGET_ARM); then \
 		if command -v aarch64-linux-musl-gcc >/dev/null 2>&1; then \
-			NGN_SKIP_RUNTIME_COPY=1 $(CARGO) build --release -p ngn --bin runtime --target $(TARGET_ARM); \
+			NGN_SKIP_RUNTIME_COPY=1 $(BUILD_CMD) build --release -p ngn --bin runtime --target $(TARGET_ARM); \
 			NGN_EMBED_RUNTIME=target/$(TARGET_ARM)/release/runtime \
-				$(CARGO) build --release -p ngn --bin ngn --target $(TARGET_ARM); \
+				$(BUILD_CMD) build --release -p ngn --bin ngn --target $(TARGET_ARM); \
 			cp target/$(TARGET_ARM)/release/runtime target/$(TARGET_ARM)/release/ngnr; \
 		else \
 			echo "Skipping aarch64 release: missing aarch64-linux-musl-gcc"; \
@@ -66,7 +67,7 @@ release-aarch64:
 
 # Build the LSP server
 lsp:
-	$(CARGO) build --release -p ngn-lsp
+	$(BUILD_CMD) build --release -p ngn-lsp
 
 clean:
 	cargo clean
