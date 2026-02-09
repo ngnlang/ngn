@@ -39,6 +39,33 @@ You can import in different ways:
 - `atan`: arctangent `atan(1) // ~0.7853981633974483`
 - `atan2`: arctangent of `y/x` using signs to determine quadrant `atan2(1, 1) // ~0.7853981633974483`
 
+## tbx::encoding
+
+Encoding helpers for bytes and strings.
+
+```ngn
+import { hexEncode, hexDecode, base64Encode, base64Decode } from "tbx::encoding"
+```
+
+- `hexEncode`: encode bytes to a lowercase hex string
+- `hexDecode`: decode a hex string into bytes
+- `base64Encode`: encode bytes to a base64 string (standard alphabet)
+- `base64Decode`: decode a base64 string into bytes
+
+```ngn
+const data = "hello".toBytes()
+
+const hex = hexEncode(data)         // "68656c6c6f"
+const roundtrip = hexDecode(hex)    // bytes
+print(roundtrip.toStringStrict())   // "hello"
+
+const b64 = base64Encode(data)      // "aGVsbG8="
+const decoded = base64Decode(b64)   // bytes
+print(decoded.toStringStrict())     // "hello"
+```
+
+`hexDecode` and `base64Decode` return a type error if the input string is not valid for the encoding.
+
 ## tbx::test
 `assert`: assert that a condition is true
 

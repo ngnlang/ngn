@@ -76,6 +76,14 @@ print("World")
 // World
 ```
 
+## Runtime errors
+Use to stop execution and show a runtime error.
+
+```ngn
+print("before")
+panic("Something went wrong")
+print("after") // not reached
+
 ## String Interpolation
 ```ngn
 const x = 5
