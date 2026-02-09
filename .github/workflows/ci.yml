@@ -26,6 +26,12 @@ jobs:
         with:
           shared-key: ngn-linux-cpu
 
+      - name: Install musl toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools musl-dev
+          rustup target add x86_64-unknown-linux-musl
+
       - name: "Guard: no GGUF files committed"
         run: |
           set -euo pipefail
@@ -71,16 +77,24 @@ jobs:
         with:
           shared-key: ngn-linux-aarch64
 
-      - name: Install aarch64 toolchain
+      - name: Install aarch64 musl toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          wget -q https://musl.cc/aarch64-linux-musl-cross.tgz
+          tar -xzf aarch64-linux-musl-cross.tgz
+          echo "$PWD/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
+          rustup target add aarch64-unknown-linux-musl
 
-      - name: Add aarch64 target
-        run: rustup target add aarch64-unknown-linux-gnu
+      - name: Configure cargo for cross-compilation
+        run: |
+          mkdir -p .cargo
+          cat >> .cargo/config.toml <<EOF
+          [target.aarch64-unknown-linux-musl]
+          linker = "aarch64-linux-musl-gcc"
+          EOF
 
       - name: Build (aarch64)
         run: |
-          NGN_SKIP_RUNTIME_COPY=1 cargo build --release -p ngn --bin runtime --target aarch64-unknown-linux-gnu
-          NGN_EMBED_RUNTIME=target/aarch64-unknown-linux-gnu/release/runtime \
-            cargo build --release -p ngn --bin ngn --target aarch64-unknown-linux-gnu
+          NGN_SKIP_RUNTIME_COPY=1 cargo build --release -p ngn --bin runtime --target aarch64-unknown-linux-musl
+          NGN_EMBED_RUNTIME=target/aarch64-unknown-linux-musl/release/runtime \
+            cargo build --release -p ngn --bin ngn --target aarch64-unknown-linux-musl
