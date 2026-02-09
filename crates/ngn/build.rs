@@ -37,11 +37,6 @@ fn build_llama_cpp() {
     println!("cargo:rerun-if-env-changed=NGN_LLAMA_BACKEND");
     println!("cargo:rerun-if-env-changed=NGN_EMBED_RUNTIME");
 
-    let feature_enabled = env::var("CARGO_FEATURE_LLM").is_ok();
-    if !feature_enabled {
-        return;
-    }
-
     let llama_src = root.join("vendor").join("llama.cpp");
     let ggml_src = llama_src.join("ggml").join("src");
     let llama_include = llama_src.join("include");

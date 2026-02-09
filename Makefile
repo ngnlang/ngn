@@ -1,19 +1,13 @@
 # Build ngn with embedded runtime
 # Usage: make release
 
-.PHONY: release release-llm release-llm-cuda release-all clean runtime runtime-llm runtime-llm-cuda embed-runtime lsp all bench dist dist-llm dist-llm-cuda release-aarch64 release-aarch64-llm
+.PHONY: release clean runtime embed-runtime lsp all bench dist release-aarch64
 
 CARGO := cargo
 EMBED_DIR := target/embed
 
 # Build everything
-all: dist-all lsp
-
-# Build distributions for both runtimes and binaries (no LSP)
-dist-all: dist-llm dist # dist-llm-cuda
-
-# Build both runtime flavors and ngn binaries (no LSP)
-release-all: release-llm release # release-llm-cuda
+all: dist lsp
 
 # Run benchmarks
 bench:
@@ -24,17 +18,10 @@ release: runtime
 	NGN_EMBED_RUNTIME=ngnr $(CARGO) build --release -p ngn --bin ngn
 	$(MAKE) release-aarch64
 
-# Build ngn with LLM support and embedded LLM runtime
-release-llm: runtime-llm
-	NGN_EMBED_RUNTIME=ngnr-llm $(CARGO) build --release -p ngn --bin ngn --features llm
-	cp target/release/ngn target/release/ngn-llm
-	$(MAKE) release-aarch64-llm
-
 # Build ngn with LLM+CUDA support and embedded LLM runtime
-release-llm-cuda: runtime-llm-cuda
-	NGN_LLAMA_BACKEND=cuda NGN_EMBED_RUNTIME=ngnr-llm-cuda $(CARGO) build --release -p ngn --bin ngn --features llm
-	cp target/release/ngn target/release/ngn-llm-cuda
-
+release-cuda: runtime-cuda
+	NGN_LLAMA_BACKEND=cuda NGN_EMBED_RUNTIME=ngnr-cuda $(CARGO) build --release -p ngn --bin ngn
+	cp target/release/ngn target/release/ngn-cuda
 
 # Build runtime binary separately (must be done first)
 runtime:
@@ -42,23 +29,16 @@ runtime:
 	$(MAKE) embed-runtime RUNTIME=target/release/runtime EMBED_NAME=ngnr
 	cp target/release/runtime target/release/ngnr
 
-# Build runtime with LLM support (temporarily replaces embedded runtime)
-runtime-llm:
-	$(CARGO) build --release -p ngn --bin runtime --features llm
-	$(MAKE) embed-runtime RUNTIME=target/release/runtime EMBED_NAME=ngnr-llm
-	cp target/release/runtime target/release/ngnr-llm
-
-# Build runtime with LLM+CUDA support
-runtime-llm-cuda:
-	NGN_LLAMA_BACKEND=cuda $(CARGO) build --release -p ngn --bin runtime --features llm
-	$(MAKE) embed-runtime RUNTIME=target/release/runtime EMBED_NAME=ngnr-llm-cuda
-	cp target/release/runtime target/release/ngnr-llm-cuda
-
+# Build runtime with CUDA support
+runtime-cuda:
+	NGN_LLAMA_BACKEND=cuda $(CARGO) build --release -p ngn --bin runtime
+	$(MAKE) embed-runtime RUNTIME=target/release/runtime EMBED_NAME=ngnr-cuda
+	cp target/release/runtime target/release/ngnr-cuda
 
 embed-runtime:
 	mkdir -p $(EMBED_DIR)
 	@if [ -z "$(EMBED_NAME)" ]; then \
-		echo "EMBED_NAME is required (e.g. ngnr or ngnr-llm)" >&2; \
+		echo "EMBED_NAME is required (e.g. ngnr)" >&2; \
 		exit 1; \
 	fi
 	cp $(RUNTIME) $(EMBED_DIR)/$(EMBED_NAME)
@@ -75,21 +55,6 @@ release-aarch64:
 		fi; \
 	else \
 		echo "Skipping aarch64 release: rust target aarch64-unknown-linux-gnu not installed"; \
-	fi
-
-# Build aarch64 binaries with LLM support if cross toolchain is available
-release-aarch64-llm:
-	@if rustup target list --installed | grep -q aarch64-unknown-linux-gnu; then \
-		if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 && command -v aarch64-linux-gnu-g++ >/dev/null 2>&1; then \
-			NGN_EMBED_RUNTIME=ngnr-llm $(CARGO) build --release -p ngn --bin runtime --features llm --target aarch64-unknown-linux-gnu; \
-			NGN_EMBED_RUNTIME=ngnr-llm $(CARGO) build --release -p ngn --bin ngn --features llm --target aarch64-unknown-linux-gnu; \
-			cp target/aarch64-unknown-linux-gnu/release/runtime target/aarch64-unknown-linux-gnu/release/ngnr-llm; \
-			cp target/aarch64-unknown-linux-gnu/release/ngn target/aarch64-unknown-linux-gnu/release/ngn-llm; \
-		else \
-			echo "Skipping aarch64-llm release: missing gcc-aarch64-linux-gnu or g++-aarch64-linux-gnu"; \
-		fi; \
-	else \
-		echo "Skipping aarch64-llm release: rust target aarch64-unknown-linux-gnu not installed"; \
 	fi
 
 # Build the LSP server
@@ -132,9 +97,9 @@ dist: release
 		package "arm64" "target/aarch64-unknown-linux-gnu/release"; \
 	fi
 
-# Build LLM release binaries and package a tarball in dist/
-# Usage: make dist-llm VERSION=0.1.0
-dist-llm: release-llm
+# Build CUDA release binaries and package a tarball in dist/
+# Usage: make dist-cuda VERSION=0.1.0
+dist-cuda: release-cuda
 	@if [ -z "${VERSION}" ]; then \
 		VERSION="$$(git describe --tags --always --dirty 2>/dev/null || echo dev)"; \
 	fi; \
@@ -149,41 +114,9 @@ dist-llm: release-llm
 		BIN_DIR="$$2"; \
 		TMP_DIR="$$(mktemp -d)"; \
 		trap 'rm -rf "$$TMP_DIR"' EXIT; \
-		cp "$$BIN_DIR/ngn-llm" "$$TMP_DIR/ngn"; \
-		cp "$$BIN_DIR/ngnr-llm" "$$TMP_DIR/ngnr"; \
-		tar -czf "dist/ngn-llm-$$VERSION-$$OS-$$ARCH.tar.gz" -C "$$TMP_DIR" ngn ngnr; \
-	}; \
-	ARCH_NAME="$$(uname -m)"; \
-	case "$$ARCH_NAME" in \
-		x86_64|amd64) HOST_ARCH=x86_64 ;; \
-		arm64|aarch64) HOST_ARCH=arm64 ;; \
-		*) echo "Unsupported architecture: $$ARCH_NAME" >&2; exit 1 ;; \
-	esac; \
-	package "$$HOST_ARCH" "target/release"; \
-	if [ -f "target/aarch64-unknown-linux-gnu/release/ngn-llm" ] && [ -f "target/aarch64-unknown-linux-gnu/release/ngnr-llm" ]; then \
-		package "arm64" "target/aarch64-unknown-linux-gnu/release"; \
-	fi
-
-# Build LLM+CUDA release binaries and package a tarball in dist/
-# Usage: make dist-llm-cuda VERSION=0.1.0
-dist-llm-cuda: release-llm-cuda
-	@if [ -z "${VERSION}" ]; then \
-		VERSION="$$(git describe --tags --always --dirty 2>/dev/null || echo dev)"; \
-	fi; \
-	OS_NAME="$$(uname -s)"; \
-	case "$$OS_NAME" in \
-		Linux) OS=linux ;; \
-		*) echo "Unsupported OS: $$OS_NAME" >&2; exit 1 ;; \
-	esac; \
-	mkdir -p dist; \
-	package() { \
-		ARCH="$$1"; \
-		BIN_DIR="$$2"; \
-		TMP_DIR="$$(mktemp -d)"; \
-		trap 'rm -rf "$$TMP_DIR"' EXIT; \
-		cp "$$BIN_DIR/ngn-llm-cuda" "$$TMP_DIR/ngn"; \
-		cp "$$BIN_DIR/ngnr-llm-cuda" "$$TMP_DIR/ngnr"; \
-		tar -czf "dist/ngn-llm-cuda-$$VERSION-$$OS-$$ARCH.tar.gz" -C "$$TMP_DIR" ngn ngnr; \
+		cp "$$BIN_DIR/ngn-cuda" "$$TMP_DIR/ngn"; \
+		cp "$$BIN_DIR/ngnr-cuda" "$$TMP_DIR/ngnr"; \
+		tar -czf "dist/ngn-cuda-$$VERSION-$$OS-$$ARCH.tar.gz" -C "$$TMP_DIR" ngn ngnr; \
 	}; \
 	ARCH_NAME="$$(uname -m)"; \
 	case "$$ARCH_NAME" in \
