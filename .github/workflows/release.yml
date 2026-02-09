@@ -42,11 +42,21 @@ jobs:
           cp dist/ngn-${GITHUB_REF_NAME}-linux-x86_64.tar.gz dist/ngn-latest-linux-x86_64.tar.gz
           cp dist/ngn-${GITHUB_REF_NAME}-linux-arm64.tar.gz dist/ngn-latest-linux-arm64.tar.gz
 
+      - name: Create release (if needed)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --notes ""
+          fi
+
       - name: Upload release assets
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/ngn-${{ github.ref_name }}-linux-x86_64.tar.gz
-            dist/ngn-${{ github.ref_name }}-linux-arm64.tar.gz
-            dist/ngn-latest-linux-x86_64.tar.gz
-            dist/ngn-latest-linux-arm64.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" \
+            dist/ngn-${GITHUB_REF_NAME}-linux-x86_64.tar.gz \
+            dist/ngn-${GITHUB_REF_NAME}-linux-arm64.tar.gz \
+            dist/ngn-latest-linux-x86_64.tar.gz \
+            dist/ngn-latest-linux-arm64.tar.gz \
+            --clobber
