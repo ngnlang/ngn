@@ -3,7 +3,7 @@ title: Sick Picks
 description: You gotta try these!
 ---
 
-Here are some features you should know about.
+Some of our favs.
 
 ## Piping
 
@@ -26,22 +26,22 @@ You can destructure arrays and tuples with the `$n` syntax. Notice that `$1` wou
 ```ngn
 const pair = (2, 3)
 const res = pair |> add($1, $2) // 5
+```
 
-// however, `$1` is not the same as what we do below
-// with index-based access
+You can also access the entire piped value with `$`.
+
+```ngn
+// $1 above is not the same as what we do below
+// with index-based access, since $ is referencing the entire array
 const key = 1
 const picked = ["a", "b", "c"] |> $[key] // grabs second element, at index 1
 assert(picked == "b") ✅
-```
 
-If you need to reference the entire output, use `$`.
-```ngn
 const tuple_joined = ("b", "a") |> $.join(",")
 
 // use expressions too
-const price = 100 |> $ * 1.05 |> round() // explicit call syntax
+const price = 100 |> $ * 1.05 |> round() // explicit fn call syntax
 ```
-
 
 ## State
 
@@ -58,9 +58,9 @@ counter.update(|n| n + 1) // we pass a closure
 You can also call `.read()`; as well as `.write()`, which is an overwrite of the current value and should not be used in combination with `.update()` unless you can guarantee order of operations - otherwise, you may get unexpected results.
 
 :::note
-Yep, you saw that right: you can use `const` to declare state variables. You just can't do something like `counter = ...` after that.
+Yep, you saw that correctly: you can use `const` to declare state variables; because the methods are mutating the value it holds, not the state variable itself.
 
-However, you could do the below; although the same could be achieved with the `.write()` method.
+However, you can mutate a state variable into another one, using `var`; although the same effect could be achieved with the `.write()` method. I wouldn't recommend the below pattern.
 ```ngn
 var counter = state(0)
 counter = state(100)

@@ -51,8 +51,8 @@ export default defineConfig({
 					],
 				},
 				{
-					label: 'Reference',
-					autogenerate: { directory: 'reference' },
+					label: 'The Manual',
+					autogenerate: { directory: 'the-manual' },
 				},
 			],
 		}),

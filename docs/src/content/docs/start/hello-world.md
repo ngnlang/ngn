@@ -18,6 +18,7 @@ fn main() {
   print("Hello, ngn!")
 }
 ```
+> Your entrypoint file's name does not have to be main.ngn
 
 ## Run it
 

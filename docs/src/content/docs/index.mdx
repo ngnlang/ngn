@@ -1,37 +1,36 @@
 ---
 title: ngn
-description: Expressive, pragmatic language for APIs and AI.
 template: splash
 hero:
-  tagline: Build APIs and AI tooling without async ceremony.
+  tagline: An expressive, multi-threaded backend language
   actions:
     - text: Get started
       link: /start/
       icon: right-arrow
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
-
-ngn (pronounced "engine") is a high-level language that focuses on clean concurrency,
-fast API development, and a tight standard library.
+import { Card, CardGrid, LinkButton } from '@astrojs/starlight/components';
 
 <CardGrid stagger>
-  <Card title="Install" icon="add-document">
-    Get the CLI and verify your setup in a few commands.
-  </Card>
-  <Card title="Hello World" icon="document">
-    Write your first ngn program with a single `main()` function.
+  <Card title="Built-in HTTP Server" icon="document">
+    Streaming, websockets, and server-sent events
   </Card>
   <Card title="Concurrency" icon="open-book">
-    Learn channels, threads, and the `<-` await syntax.
+    Channels and threads, with beautiful "await" syntax.
+    No async/await contagion here.
   </Card>
-  <Card title="HTTP Servers" icon="document">
-    Build APIs with `serve(handler)` or `export default { fetch }`.
+  <Card title="Shared, atomic state" icon="document">
+    Safe mutation across threads and closures.
   </Card>
-  <Card title="Types" icon="pencil">
-    Explore union types, `Maybe`, and `Result`.
+  <Card title="Extensibility" icon="add-document">
+    Create your own methods for certain built-in types!
+  </Card>
+  <Card title="Type safety" icon="pencil">
+    Aliases, unions, etc.
   </Card>
   <Card title="Toolbox" icon="setting">
-    See the toolbox modules for math, HTTP, LLMs, and more.
+    Our "standard library" for math, HTTP, LLMs, and more.
   </Card>
 </CardGrid>
+
+<LinkButton href="/start/" icon="right-arrow">Get Started</LinkButton>

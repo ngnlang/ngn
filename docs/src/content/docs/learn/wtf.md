@@ -55,9 +55,9 @@ Functions are isolated data environments; i.e. you can't reference outside `var`
 
 ## Function params
 
-You know how in Rust you use `&`, as in `(name: &str)`, to borrow data for a function, otherwise you transfer ownership of the data to the function? ngn essentially does the opposite - function params are borrowed by default, so they get a non-mutable copy.
+You know how in Rust you use `&`, as in `(name: &str)`, to borrow data for a function, otherwise you transfer ownership of the data to the function? ngn essentially does the opposite - function params are "borrowed" by default (they get a non-mutable copy).
 
-This means that if you want to mutate a passed-in `var` within a function, you need to mark the param as "owned". Optionally, you could also do this if you're not going to use the data after the function - for a smidge of early memory cleanup.
+This means that if you want to mutate a passed-in `var` within a function, you need to mark the param as "owned". Optionally, you could also do this if you're not going to use the data after the function runs; which gets you a smidge of early memory cleanup.
 ```ngn
 var x = "hello"
 
@@ -89,7 +89,7 @@ x = "goodbye" ✅ // `x` is still available
 
 :::note
 
-If you move ownership of data declared with `const`, it's not mutable, since... you know, constants aren't mutable in ngn*
+If you move ownership of data declared with `const`, it's not mutable, since... you know, constants aren't mutable in ngn.
 :::
 
 ## Handling `Maybe`
@@ -105,7 +105,7 @@ match (maybe_value) {
 }
 ```
 
-### nullish coalescing operator
+### Nullish coalescing operator
 
 If there's a value, it's unwrapped and assigned.
 
@@ -121,6 +121,8 @@ if (maybe_value?) {
   // success scenario
   // "maybe_value" is the actual data here
 }
+
+// note that "maybe_value" is still a "maybe" here, not the actual data
 ```
 
 ### check
@@ -135,24 +137,28 @@ check maybe_value? {
 // "maybe_value" is the actual data here
 ```
 
+> `check` can handle `Result<T, E>` as well. Access the error value, within the block: `check value?, err? {}`
+
 ### Optional chaining
 
-This unwraps the `Maybe` for further testing of nested values; the assigned value is wrapped in `Maybe`.
+This unwraps the `Maybe` for further testing of nested values; however, the assigned value is wrapped in `Maybe`.
 
 ```ngn
 const maybe_location = user?.meta_data?.location
+
+// still need to unwrap maybe_location, because it could be `Maybe::Null`
 ```
 
 ## Parsing json
 
-The `json.parse()` method returns a `Maybe` for unknown data. So, you need to check it using one of the above methods. However, this unknown data (from a user, for example), could throw a runtime error if you start using dot notation to access fields.
+The `json.parse()` method returns a `Maybe` for raw objects and unknown data. So, you need to check for `Maybe` using one of the above methods. However, this unknown data (from a user, for example), could throw a runtime error if you start using dot notation to access fields.
 
 ```ngn
 const maybe_data = json.parse(data)
-const name = maybe_data?.name // might error if "name" isn't there
+const name = maybe_data?.name // runtime error if "name" isn't there
 ```
 
-It's safer to destructure the data, which returns `Maybe` for each field, which you can then test against.
+You may want to destructure the data, which returns `Maybe` for each field.
 
 ```ngn
 const { name } = maybe_data
@@ -166,7 +172,7 @@ check name? {
 ```
 
 :::note
-Using `json.parse()` on known model data returns the raw data, instead of a `Maybe` - except if a field is optional.
+Using `json.parse()` on known model data returns the raw data, instead of a `Maybe`. However, any fields that are optional would still be `Maybe`.
 :::
 
 ## "standard library"
@@ -179,3 +185,6 @@ import { ceil } from "tbx::math"
 
 idk, there's just something about having `std` in code that's a bit cringe for me. Perhaps I'm just nitpicking.
 
+
+<br><br>
+If you made it this far without puking, you just might fall in love with ngn. If you're still skeptical, at least checkout our Sick Picks.
