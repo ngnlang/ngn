@@ -24,11 +24,6 @@ jobs:
       - name: Install cross
         run: cargo install cross --git https://github.com/cross-rs/cross
 
-      - name: Rust build cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ngn-linux-cpu
-
       - name: "Guard: no GGUF files committed"
         run: |
           set -euo pipefail
@@ -71,11 +66,6 @@ jobs:
 
       - name: Install cross
         run: cargo install cross --git https://github.com/cross-rs/cross
-
-      - name: Rust build cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ngn-linux-aarch64
 
       - name: Build (aarch64)
         run: |
