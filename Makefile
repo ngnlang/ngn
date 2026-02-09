@@ -31,7 +31,7 @@ runtime:
 
 # Build runtime with CUDA support
 runtime-cuda:
-	NGN_LLAMA_BACKEND=cuda $(CARGO) build --release -p ngn --bin runtime
+	NGN_LLAMA_BACKEND=cuda NGN_SKIP_RUNTIME_COPY=1 $(CARGO) build --release -p ngn --bin runtime
 	$(MAKE) embed-runtime RUNTIME=target/release/runtime EMBED_NAME=ngnr-cuda
 	cp target/release/runtime target/release/ngnr-cuda
 
