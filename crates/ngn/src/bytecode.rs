@@ -120,9 +120,11 @@ pub enum OpCode {
     // Objects/Models
     CreateObject(u16, usize, usize, u16, u8), // (DestReg, ModelNameConstIdx, FieldNamesConstIdx, ArgStartReg, FieldCount)
     GetField(u16, u16, usize),                // (DestReg, ObjReg, FieldNameConstIdx)
-    GetFieldMaybe(u16, u16, usize),           // (DestReg, ObjReg, FieldNameConstIdx)
-    SetField(u16, usize, u16),                // (ObjReg, FieldNameConstIdx, SrcReg)
-    DefMethod(usize, usize, u16),             // (TargetTypeIdx, MethodNameIdx, ClosureReg)
+    GetFieldMaybe(u16, u16, usize), // (DestReg, ObjReg, FieldNameConstIdx) - returns Maybe for anon, direct for Models
+    GetFieldSafe(u16, u16, usize),  // (DestReg, ObjReg, FieldNameConstIdx) - always returns Maybe
+    WrapMaybe(u16, u16),            // (DestReg, SrcReg) - wrap value in Maybe if needed
+    SetField(u16, usize, u16),      // (ObjReg, FieldNameConstIdx, SrcReg)
+    DefMethod(usize, usize, u16),   // (TargetTypeIdx, MethodNameIdx, ClosureReg)
 
     // HTTP Server (for export default with fetch method)
     ServeHttp(usize), // (GlobalIndex) - starts HTTP server with handler from global

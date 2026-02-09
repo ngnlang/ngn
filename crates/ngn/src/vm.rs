@@ -2133,12 +2133,24 @@ impl Fiber {
 
                 match resolved {
                     Value::Object(o) => {
-                        // Always return Maybe for GetFieldMaybe
-                        // This is used by optional chaining (?.), destructuring, etc.
-                        if let Some(val) = o.fields.get(&field_name) {
-                            self.set_reg_at(dest, wrap_value(val.clone()));
+                        // Distinguish between anonymous objects and Model instances
+                        if o.model_name == "__anon__" {
+                            // Anonymous object (from JSON, object literals): return Maybe
+                            if let Some(val) = o.fields.get(&field_name) {
+                                self.set_reg_at(dest, wrap_value(val.clone()));
+                            } else {
+                                self.set_reg_at(dest, make_null());
+                            }
                         } else {
-                            self.set_reg_at(dest, make_null());
+                            // Model instance: return direct value or panic
+                            if let Some(val) = o.fields.get(&field_name) {
+                                self.set_reg_at(dest, val.clone());
+                            } else {
+                                panic!(
+                                    "Runtime Error: Field '{}' not found in {}",
+                                    field_name, o.model_name
+                                );
+                            }
                         }
                     }
                     Value::Response(r) => {
@@ -2170,6 +2182,69 @@ impl Fiber {
                         resolved.type_name()
                     ),
                 }
+            }
+            OpCode::GetFieldSafe(dest, obj_reg, field_idx) => {
+                // Always returns Maybe - used by optional chaining (?.)
+                let obj = self.get_reg_at(obj_reg);
+                let field_name = self.expect_string_const(field_idx);
+
+                let make_null =
+                    || EnumData::into_value("Maybe".to_string(), "Null".to_string(), None);
+                let wrap_value = |value: Value| {
+                    EnumData::into_value(
+                        "Maybe".to_string(),
+                        "Value".to_string(),
+                        Some(Box::new(value)),
+                    )
+                };
+
+                match obj {
+                    Value::Object(o) => {
+                        // Always return Maybe, regardless of object type
+                        if let Some(val) = o.fields.get(&field_name) {
+                            self.set_reg_at(dest, wrap_value(val.clone()));
+                        } else {
+                            self.set_reg_at(dest, make_null());
+                        }
+                    }
+                    Value::Response(r) => {
+                        let val = match field_name.as_str() {
+                            "status" => {
+                                Some(Value::Numeric(crate::value::Number::I64(r.status as i64)))
+                            }
+                            "statusText" => Some(Value::String(r.status_text.clone())),
+                            "ok" => Some(Value::Bool(r.ok)),
+                            "body" => Some(Value::String(r.body.clone())),
+                            "headers" => {
+                                let mut map = std::collections::HashMap::new();
+                                for (k, v) in r.headers.iter() {
+                                    map.insert(Value::String(k.clone()), Value::String(v.clone()));
+                                }
+                                Some(Value::Map(map))
+                            }
+                            _ => None,
+                        };
+
+                        if let Some(val) = val {
+                            self.set_reg_at(dest, wrap_value(val));
+                        } else {
+                            self.set_reg_at(dest, make_null());
+                        }
+                    }
+                    _ => self.set_reg_at(dest, make_null()),
+                }
+            }
+            OpCode::WrapMaybe(dest_reg, src_reg) => {
+                let val = self.get_reg_at(src_reg);
+                let wrapped = match val {
+                    Value::Enum(ref e) if e.enum_name == "Maybe" => val,
+                    _ => EnumData::into_value(
+                        "Maybe".to_string(),
+                        "Value".to_string(),
+                        Some(Box::new(val)),
+                    ),
+                };
+                self.set_reg_at(dest_reg, wrapped);
             }
             OpCode::SetField(obj_reg, field_idx, src_reg) => {
                 let mut obj = self.get_reg_at(obj_reg);
@@ -2410,18 +2485,21 @@ impl Fiber {
             }
             OpCode::CheckMaybeValue(dest_reg, maybe_reg) => {
                 // Check if the value is a "success" variant: Maybe::Value or Result::Ok
+                // Non-Maybe values are treated as "always present" (success = true)
                 let val = self.get_reg_at(maybe_reg);
                 let is_success = match val {
                     Value::Enum(ref e) => {
                         (e.enum_name == "Maybe" && e.variant_name == "Value")
                             || (e.enum_name == "Result" && e.variant_name == "Ok")
                     }
-                    _ => false,
+                    // Non-Maybe values (like Model instances) are treated as always present
+                    _ => true,
                 };
                 self.set_reg_at(dest_reg, Value::Bool(is_success));
             }
             OpCode::UnwrapMaybe(dest_reg, maybe_reg) => {
                 // Extract the inner value from Maybe::Value or Result::Ok
+                // For non-Maybe values, return the value as-is
                 let val = self.get_reg_at(maybe_reg);
                 let inner = match val {
                     Value::Enum(ref e)
@@ -2430,7 +2508,8 @@ impl Fiber {
                     {
                         e.data.clone().map(|b| *b).unwrap_or(Value::Void)
                     }
-                    _ => Value::Void,
+                    // Non-Maybe values pass through unchanged
+                    _ => val,
                 };
                 self.set_reg_at(dest_reg, inner);
             }

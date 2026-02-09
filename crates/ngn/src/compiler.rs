@@ -1,6 +1,6 @@
 use crate::bytecode::OpCode;
 use crate::lexer::{is_emoji_identifier, Span, Token};
-use crate::parser::{EnumDef, Expr, ExprKind, Pattern, Statement, StatementKind};
+use crate::parser::{EnumDef, Expr, ExprKind, ModelDef, Pattern, Statement, StatementKind};
 use crate::value::{Function, Number, Value};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -32,6 +32,7 @@ pub struct Compiler {
     pub next_body_patches: Vec<Vec<usize>>,
     pub is_global: bool,
     pub enums: HashMap<String, EnumDef>,
+    pub models: HashMap<String, ModelDef>,
     pub signatures: HashMap<String, Vec<bool>>,
     pub moved_locals: HashSet<String>,
     pub state_vars: HashSet<String>,
@@ -139,6 +140,7 @@ impl Compiler {
             next_body_patches: Vec::new(),
             is_global: true,
             enums: HashMap::new(),
+            models: HashMap::new(),
             signatures: HashMap::new(),
             moved_locals: HashSet::new(),
             state_vars: HashSet::new(),
@@ -1077,11 +1079,13 @@ impl Compiler {
                     let global_table = self.global_table.clone();
                     let static_values = self.static_values.clone();
                     let enums = self.enums.clone();
+                    let models = self.models.clone();
                     let signatures = self.signatures.clone();
                     sub_compiler.is_global = false;
                     sub_compiler.global_table = global_table;
                     sub_compiler.static_values = static_values;
                     sub_compiler.enums = enums;
+                    sub_compiler.models = models;
                     sub_compiler.signatures = signatures;
                     sub_compiler.next_index = 0;
 
@@ -1387,28 +1391,61 @@ impl Compiler {
             }
             ExprKind::ModelInstance { name, fields } => {
                 let model_name_idx = self.add_constant(Value::String(name.clone()));
-                // Collect field names and compile values into consecutive registers
+
+                // Collect provided fields
+                let mut fields_to_compile: Vec<(String, Expr)> = fields.clone();
+                let mut provided: HashSet<String> = HashSet::new();
+                for (f_name, _) in fields.iter() {
+                    provided.insert(f_name.clone());
+                }
+
+                // Fill in missing optional fields with defaults or null
+                if let Some(model_def) = self.models.get(name) {
+                    for field_def in &model_def.fields {
+                        if field_def.is_optional && !provided.contains(&field_def.name) {
+                            let default_expr = field_def.default_value.clone().unwrap_or(Expr {
+                                kind: ExprKind::Null,
+                                span: expr.span,
+                            });
+                            fields_to_compile.push((field_def.name.clone(), default_expr));
+                        }
+                    }
+                }
+
+                // Collect field names for all fields
                 let mut field_names = Vec::new();
-                for (f_name, _) in fields {
+                for (f_name, _) in &fields_to_compile {
                     field_names.push(Value::String(f_name.clone()));
                 }
                 let fields_idx = self.add_constant(Value::Tuple(field_names));
 
                 // Use compile_args-like pattern for correct consecutive register placement
                 let start_reg = self.reg_top;
-                for (i, (_, f_expr)) in fields.iter().enumerate() {
+                for (i, (f_name, f_expr)) in fields_to_compile.iter().enumerate() {
                     let expected_reg = start_reg + i as u16;
                     let result_reg = self.compile_expr(f_expr);
                     if result_reg != expected_reg {
                         self.instructions
                             .push(OpCode::Move(expected_reg, result_reg));
                     }
+
+                    // Wrap optional fields in Maybe
+                    if let Some(model_def) = self.models.get(name) {
+                        if let Some(field_def) = model_def.fields.iter().find(|f| f.name == *f_name)
+                        {
+                            if field_def.is_optional {
+                                self.instructions
+                                    .push(OpCode::WrapMaybe(expected_reg, expected_reg));
+                            }
+                        }
+                    }
+
                     if self.reg_top <= expected_reg {
                         self.reg_top = expected_reg + 1;
                     }
                 }
 
-                let count = fields.len() as u8;
+                let count = fields_to_compile.len() as u8;
                 let dest = self.alloc_reg();
                 self.instructions.push(OpCode::CreateObject(
                     dest,
@@ -1810,17 +1847,23 @@ impl Compiler {
                 let jump_to_null = self.instructions.len();
                 self.instructions.push(OpCode::JumpIfFalse(check_reg, 0)); // patch later
 
-                // Value path: unwrap, access field (using GetFieldMaybe for safety)
-                // GetFieldMaybe returns Maybe directly (handles anonymous vs Model objects)
+                // Value path: unwrap, access field safely, wrap in Maybe
                 let unwrapped_reg = self.alloc_reg();
                 self.instructions
                     .push(OpCode::UnwrapMaybe(unwrapped_reg, obj_reg));
 
                 let field_idx = self.add_constant(Value::String(field.clone()));
-                // GetFieldMaybe returns Maybe::Value(field) or Maybe::Null for anonymous,
-                // or direct value for Model instances
-                self.instructions
-                    .push(OpCode::GetFieldMaybe(dest, unwrapped_reg, field_idx));
+                let field_result_reg = self.alloc_reg();
+                // Use GetFieldSafe to safely handle missing fields (always returns Maybe)
+                // This works for both anonymous and Model objects
+                self.instructions.push(OpCode::GetFieldSafe(
+                    field_result_reg,
+                    unwrapped_reg,
+                    field_idx,
+                ));
+
+                // GetFieldMaybe already returns Maybe, so move to dest
+                self.instructions.push(OpCode::Move(dest, field_result_reg));
 
                 // Jump over null path
                 let jump_to_end = self.instructions.len();
@@ -2251,7 +2294,10 @@ impl Compiler {
                 self.temp_start = self.next_index as u16;
                 self.reg_top = self.temp_start;
             }
-            StatementKind::Model(_) | StatementKind::Role(_) => {}
+            StatementKind::Model(def) => {
+                self.models.insert(def.name.clone(), def.clone());
+            }
+            StatementKind::Role(_) => {}
             StatementKind::Extend {
                 target, methods, ..
             } => {
@@ -3173,6 +3219,7 @@ impl Compiler {
             sub_compiler.global_table.insert(n.clone(), idx);
         }
         sub_compiler.enums = self.enums.clone();
+        sub_compiler.models = self.models.clone();
         sub_compiler.static_values = self.static_values.clone();
         sub_compiler.signatures = self.signatures.clone();
         sub_compiler.current_function_name = Some(name.clone()); // For CallSelf optimization

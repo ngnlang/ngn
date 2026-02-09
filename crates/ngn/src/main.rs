@@ -537,6 +537,9 @@ fn main() {
         );
     }
 
+    // Share analyzed model definitions with the compiler
+    compiler.models = analyzer.model_defs().clone();
+
     // 3a. Now resolve the export type and check for fetch method
     let is_http_server = if let Some(expr_kind) = &default_export_expr_kind {
         match expr_kind {
@@ -908,6 +911,13 @@ fn load_module(module_path: &str, base_path: &PathBuf, cache: &mut ModuleCache) 
     let filename_ref = std::sync::Arc::new(resolved_path.to_string_lossy().to_string());
     let mut module_compiler = Compiler::new(None, source_ref.clone(), filename_ref.clone());
     module_compiler.inject_builtins();
+
+    // Preload model definitions for optional fields/defaults
+    for stmt in &processed_statements {
+        if let StatementKind::Model(def) = &stmt.kind {
+            module_compiler.models.insert(def.name.clone(), def.clone());
+        }
+    }
 
     for stmt in processed_statements {
         module_compiler.compile_statement(stmt);

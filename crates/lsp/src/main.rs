@@ -9,7 +9,7 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 use ngn::analyzer::Analyzer;
 use ngn::lexer::{Lexer, Span, Token};
-use ngn::parser::{ExprKind, ParseDiagnostic, Parser, Statement, StatementKind, Type};
+use ngn::parser::{ExprKind, ModelField, ParseDiagnostic, Parser, Statement, StatementKind, Type};
 use ngn::toolbox::core::{get_type, GLOBAL_NAMES};
 use ngn::toolbox::Toolbox;
 
@@ -342,14 +342,40 @@ fn model_fields_for_type(
         Type::Model(name) => analysis
             .models
             .get(name)
-            .map(|m| m.fields.clone())
+            .map(|m| {
+                m.fields
+                    .iter()
+                    .map(|field| {
+                        let field_ty = if field.is_optional {
+                            Type::Generic(
+                                "Maybe".to_string(),
+                                vec![field.field_type.clone()],
+                            )
+                        } else {
+                            field.field_type.clone()
+                        };
+                        (field.name.clone(), field_ty)
+                    })
+                    .collect::<Vec<(String, Type)>>()
+            })
             .unwrap_or_default(),
         Type::Generic(name, args) => {
             if let Some(model_def) = analysis.models.get(name) {
                 let mut out = Vec::new();
-                for (field_name, field_ty) in &model_def.fields {
-                    let mapped = substitute_type_params(field_ty, &model_def.type_params, args);
-                    out.push((field_name.clone(), mapped));
+                for ModelField {
+                    name: field_name,
+                    field_type,
+                    is_optional,
+                    ..
+                } in &model_def.fields
+                {
+                    let mapped = substitute_type_params(field_type, &model_def.type_params, args);
+                    let field_ty = if *is_optional {
+                        Type::Generic("Maybe".to_string(), vec![mapped])
+                    } else {
+                        mapped
+                    };
+                    out.push((field_name.clone(), field_ty));
                 }
                 out
             } else {

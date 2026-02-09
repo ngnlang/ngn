@@ -265,10 +265,18 @@ pub enum StatementKind {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct ModelField {
+    pub name: String,
+    pub field_type: Type,
+    pub is_optional: bool,
+    pub default_value: Option<Expr>, // Only used if is_optional is true
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct ModelDef {
     pub name: String,
     pub type_params: Vec<String>, // Type parameters like T, U for generic models
-    pub fields: Vec<(String, Type)>,
+    pub fields: Vec<ModelField>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -3529,9 +3537,32 @@ impl Parser {
         let mut fields = Vec::new();
         while self.current_token != Token::RBrace && self.current_token != Token::EOF {
             let field_name = self.expect_identifier();
+
+            // Check for optional marker: field?: Type
+            let is_optional = if self.current_token == Token::Question {
+                self.advance(); // consume '?'
+                true
+            } else {
+                false
+            };
+
             self.expect(Token::Colon);
             let field_type = self.parse_type();
-            fields.push((field_name, field_type));
+
+            // Check for default value: field?: Type = default
+            let default_value = if is_optional && self.current_token == Token::Equal {
+                self.advance(); // consume '='
+                Some(self.parse_expression())
+            } else {
+                None
+            };
+
+            fields.push(ModelField {
+                name: field_name,
+                field_type,
+                is_optional,
+                default_value,
+            });
 
             if self.current_token == Token::Comma {
                 self.advance();

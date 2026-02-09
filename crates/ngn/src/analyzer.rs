@@ -1,7 +1,7 @@
 use crate::lexer::{is_emoji_identifier, Span, Token};
 use crate::parser::{
-    EnumDef, EnumVariantDef, Expr, ExprKind, ModelDef, Pattern, RoleDef, Statement, StatementKind,
-    Type,
+    EnumDef, EnumVariantDef, Expr, ExprKind, ModelDef, ModelField, Pattern, RoleDef, Statement,
+    StatementKind, Type,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -292,23 +292,72 @@ impl Analyzer {
                 name: "Request".to_string(),
                 type_params: vec![],
                 fields: vec![
-                    ("method".to_string(), Type::String),
-                    ("path".to_string(), Type::String),
-                    ("query".to_string(), Type::String),
-                    ("headers".to_string(), Type::Any),
-                    ("body".to_string(), Type::String),
-                    (
-                        "params".to_string(),
-                        Type::Map(Box::new(Type::String), Box::new(Type::String)),
-                    ),
-                    ("ip".to_string(), Type::String),
-                    ("url".to_string(), Type::String),
-                    (
-                        "cookies".to_string(),
-                        Type::Map(Box::new(Type::String), Box::new(Type::String)),
-                    ),
-                    ("protocol".to_string(), Type::String),
-                    ("host".to_string(), Type::String),
+                    ModelField {
+                        name: "method".to_string(),
+                        field_type: Type::String,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "path".to_string(),
+                        field_type: Type::String,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "query".to_string(),
+                        field_type: Type::String,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "headers".to_string(),
+                        field_type: Type::Any,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "body".to_string(),
+                        field_type: Type::String,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "params".to_string(),
+                        field_type: Type::Map(Box::new(Type::String), Box::new(Type::String)),
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "ip".to_string(),
+                        field_type: Type::String,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "url".to_string(),
+                        field_type: Type::String,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "cookies".to_string(),
+                        field_type: Type::Map(Box::new(Type::String), Box::new(Type::String)),
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "protocol".to_string(),
+                        field_type: Type::String,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "host".to_string(),
+                        field_type: Type::String,
+                        is_optional: false,
+                        default_value: None,
+                    },
                 ],
             },
         );
@@ -320,11 +369,36 @@ impl Analyzer {
                 name: "Response".to_string(),
                 type_params: vec![],
                 fields: vec![
-                    ("status".to_string(), Type::I64),
-                    ("statusText".to_string(), Type::String),
-                    ("ok".to_string(), Type::Bool),
-                    ("headers".to_string(), Type::Any), // accepts map or object literal
-                    ("body".to_string(), Type::String),
+                    ModelField {
+                        name: "status".to_string(),
+                        field_type: Type::I64,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "statusText".to_string(),
+                        field_type: Type::String,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "ok".to_string(),
+                        field_type: Type::Bool,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "headers".to_string(),
+                        field_type: Type::Any,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "body".to_string(),
+                        field_type: Type::String,
+                        is_optional: false,
+                        default_value: None,
+                    },
                 ],
             },
         );
@@ -336,9 +410,24 @@ impl Analyzer {
                 name: "StreamingResponse".to_string(),
                 type_params: vec![],
                 fields: vec![
-                    ("status".to_string(), Type::I64),
-                    ("headers".to_string(), Type::Any), // accepts map or object literal
-                    ("body".to_string(), Type::Channel(Box::new(Type::String))), // channel<string>
+                    ModelField {
+                        name: "status".to_string(),
+                        field_type: Type::I64,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "headers".to_string(),
+                        field_type: Type::Any,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "body".to_string(),
+                        field_type: Type::Channel(Box::new(Type::String)),
+                        is_optional: false,
+                        default_value: None,
+                    },
                 ],
             },
         );
@@ -350,11 +439,36 @@ impl Analyzer {
                 name: "SseEvent".to_string(),
                 type_params: vec![],
                 fields: vec![
-                    ("data".to_string(), Type::String),
-                    ("event".to_string(), Type::String),
-                    ("id".to_string(), Type::String),
-                    ("retryMs".to_string(), Type::I64),
-                    ("comment".to_string(), Type::String),
+                    ModelField {
+                        name: "data".to_string(),
+                        field_type: Type::String,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "event".to_string(),
+                        field_type: Type::String,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "id".to_string(),
+                        field_type: Type::String,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "retryMs".to_string(),
+                        field_type: Type::I64,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "comment".to_string(),
+                        field_type: Type::String,
+                        is_optional: false,
+                        default_value: None,
+                    },
                 ],
             },
         );
@@ -391,13 +505,30 @@ impl Analyzer {
                 name: "SseResponse".to_string(),
                 type_params: vec![],
                 fields: vec![
-                    ("status".to_string(), Type::I64),
-                    ("headers".to_string(), Type::Any), // accepts map or object literal
-                    (
-                        "body".to_string(),
-                        Type::Channel(Box::new(Type::Model("SseMessage".to_string()))),
-                    ),
-                    ("keepAliveMs".to_string(), Type::I64),
+                    ModelField {
+                        name: "status".to_string(),
+                        field_type: Type::I64,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "headers".to_string(),
+                        field_type: Type::Any,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "body".to_string(),
+                        field_type: Type::Channel(Box::new(Type::Model("SseMessage".to_string()))),
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "keepAliveMs".to_string(),
+                        field_type: Type::I64,
+                        is_optional: false,
+                        default_value: None,
+                    },
                 ],
             },
         );
@@ -412,15 +543,24 @@ impl Analyzer {
                 name: "WebSocketResponse".to_string(),
                 type_params: vec![],
                 fields: vec![
-                    ("headers".to_string(), Type::Any), // accepts map or object literal
-                    (
-                        "recv".to_string(),
-                        Type::Channel(Box::new(Type::Model("WsMessage".to_string()))),
-                    ),
-                    (
-                        "send".to_string(),
-                        Type::Channel(Box::new(Type::Model("WsMessage".to_string()))),
-                    ),
+                    ModelField {
+                        name: "headers".to_string(),
+                        field_type: Type::Any,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "recv".to_string(),
+                        field_type: Type::Channel(Box::new(Type::Model("WsMessage".to_string()))),
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "send".to_string(),
+                        field_type: Type::Channel(Box::new(Type::Model("WsMessage".to_string()))),
+                        is_optional: false,
+                        default_value: None,
+                    },
                 ],
             },
         );
@@ -432,9 +572,24 @@ impl Analyzer {
                 name: "ProcessOutput".to_string(),
                 type_params: vec![],
                 fields: vec![
-                    ("code".to_string(), Type::I64),
-                    ("stdout".to_string(), Type::String),
-                    ("stderr".to_string(), Type::String),
+                    ModelField {
+                        name: "code".to_string(),
+                        field_type: Type::I64,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "stdout".to_string(),
+                        field_type: Type::String,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "stderr".to_string(),
+                        field_type: Type::String,
+                        is_optional: false,
+                        default_value: None,
+                    },
                 ],
             },
         );
@@ -445,21 +600,31 @@ impl Analyzer {
                 name: "ProcessStream".to_string(),
                 type_params: vec![],
                 fields: vec![
-                    (
-                        "stdout".to_string(),
-                        Type::Channel(Box::new(Type::Model("ProcessChunk".to_string()))),
-                    ),
-                    (
-                        "stderr".to_string(),
-                        Type::Channel(Box::new(Type::Model("ProcessChunk".to_string()))),
-                    ),
-                    (
-                        "done".to_string(),
-                        Type::Channel(Box::new(Type::Generic(
+                    ModelField {
+                        name: "stdout".to_string(),
+                        field_type: Type::Channel(Box::new(Type::Model(
+                            "ProcessChunk".to_string(),
+                        ))),
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "stderr".to_string(),
+                        field_type: Type::Channel(Box::new(Type::Model(
+                            "ProcessChunk".to_string(),
+                        ))),
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "done".to_string(),
+                        field_type: Type::Channel(Box::new(Type::Generic(
                             "Result".to_string(),
                             vec![Type::Model("ProcessOutput".to_string()), Type::String],
                         ))),
-                    ),
+                        is_optional: false,
+                        default_value: None,
+                    },
                 ],
             },
         );
@@ -480,10 +645,30 @@ impl Analyzer {
                 name: "FetchOptions".to_string(),
                 type_params: vec![],
                 fields: vec![
-                    ("method".to_string(), Type::String),
-                    ("headers".to_string(), Type::Any), // accepts map or object literal
-                    ("body".to_string(), Type::String),
-                    ("timeout".to_string(), Type::I64),
+                    ModelField {
+                        name: "method".to_string(),
+                        field_type: Type::String,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "headers".to_string(),
+                        field_type: Type::Any,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "body".to_string(),
+                        field_type: Type::String,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "timeout".to_string(),
+                        field_type: Type::I64,
+                        is_optional: false,
+                        default_value: None,
+                    },
                 ],
             },
         );
@@ -495,20 +680,69 @@ impl Analyzer {
                 name: "DateTime".to_string(),
                 type_params: vec![],
                 fields: vec![
-                    ("year".to_string(), Type::I64),
-                    ("month".to_string(), Type::I64),
-                    ("day".to_string(), Type::I64),
-                    ("hour".to_string(), Type::I64),
-                    ("minute".to_string(), Type::I64),
-                    ("second".to_string(), Type::I64),
-                    ("weekday".to_string(), Type::I64),
-                    ("timestamp".to_string(), Type::I64),
-                    ("timestampMs".to_string(), Type::I64),
+                    ModelField {
+                        name: "year".to_string(),
+                        field_type: Type::I64,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "month".to_string(),
+                        field_type: Type::I64,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "day".to_string(),
+                        field_type: Type::I64,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "hour".to_string(),
+                        field_type: Type::I64,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "minute".to_string(),
+                        field_type: Type::I64,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "second".to_string(),
+                        field_type: Type::I64,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "weekday".to_string(),
+                        field_type: Type::I64,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "timestamp".to_string(),
+                        field_type: Type::I64,
+                        is_optional: false,
+                        default_value: None,
+                    },
+                    ModelField {
+                        name: "timestampMs".to_string(),
+                        field_type: Type::I64,
+                        is_optional: false,
+                        default_value: None,
+                    },
                 ],
             },
         );
 
         analyzer
+    }
+
+    pub fn model_defs(&self) -> &HashMap<String, ModelDef> {
+        &self.models
     }
 
     pub fn new_with_index(source_len: usize) -> Self {
@@ -762,8 +996,26 @@ impl Analyzer {
                         stmt.span,
                         false,
                     );
-                    for (_, ty) in &model_def.fields {
-                        self.validate_type_args(ty, stmt.span);
+                    for field in &model_def.fields {
+                        self.validate_type_args(&field.field_type, stmt.span);
+
+                        if let Some(default_expr) = &field.default_value {
+                            let default_ty = self.check_expression(default_expr);
+                            let expected_ty = field.field_type.clone();
+                            let maybe_expected =
+                                Type::Generic("Maybe".to_string(), vec![expected_ty.clone()]);
+                            if !self.types_compatible(&expected_ty, &default_ty)
+                                && !self.types_compatible(&maybe_expected, &default_ty)
+                            {
+                                self.add_error(
+                                    format!(
+                                        "Type Error: Default value for field '{}' expected {:?}, got {:?}",
+                                        field.name, expected_ty, default_ty
+                                    ),
+                                    stmt.span,
+                                );
+                            }
+                        }
                     }
                 }
                 StatementKind::Role(role_def) => {
@@ -1179,8 +1431,17 @@ impl Analyzer {
                                 model_def
                                     .fields
                                     .iter()
-                                    .find(|(name, _)| name == field_name)
-                                    .map(|(_, ty)| ty.clone())
+                                    .find(|f| f.name == *field_name)
+                                    .map(|f| {
+                                        if f.is_optional {
+                                            Type::Generic(
+                                                "Maybe".to_string(),
+                                                vec![f.field_type.clone()],
+                                            )
+                                        } else {
+                                            f.field_type.clone()
+                                        }
+                                    })
                                     .unwrap_or(Type::Any)
                             } else {
                                 Type::Any
@@ -1191,14 +1452,19 @@ impl Analyzer {
                                 model_def
                                     .fields
                                     .iter()
-                                    .find(|(n, _)| n == field_name)
-                                    .map(|(_, ty)| {
+                                    .find(|f| f.name == *field_name)
+                                    .map(|f| {
                                         // Substitute type params
-                                        self.substitute_type_params(
-                                            ty,
+                                        let substituted = self.substitute_type_params(
+                                            &f.field_type,
                                             &model_def.type_params,
                                             args,
-                                        )
+                                        );
+                                        if f.is_optional {
+                                            Type::Generic("Maybe".to_string(), vec![substituted])
+                                        } else {
+                                            substituted
+                                        }
                                     })
                                     .unwrap_or(Type::Any)
                             } else {
@@ -2678,10 +2944,24 @@ impl Analyzer {
                 match &obj_type {
                     Type::Model(name) => {
                         if let Some(model_def) = self.models.get(name) {
-                            if let Some((_, expected_ty)) =
-                                model_def.fields.iter().find(|(f, _)| f == field)
+                            if let Some(field_def) =
+                                model_def.fields.iter().find(|f| f.name == *field)
                             {
-                                if !self.types_compatible(expected_ty, &val_type) {
+                                let expected_ty = if field_def.is_optional {
+                                    // For optional fields, check against the inner type
+                                    match &field_def.field_type {
+                                        Type::Generic(name, args)
+                                            if name == "Maybe" && args.len() == 1 =>
+                                        {
+                                            args[0].clone()
+                                        }
+                                        _ => field_def.field_type.clone(),
+                                    }
+                                } else {
+                                    field_def.field_type.clone()
+                                };
+
+                                if !self.types_compatible(&expected_ty, &val_type) {
                                     self.add_error(
                                         format!(
                                             "Type Error: Cannot assign {:?} to field '{}' of type {:?}",
@@ -3204,9 +3484,10 @@ impl Analyzer {
                         vec![None; model_def.type_params.len()];
 
                     for (f_name, f_val_expr) in fields {
-                        if let Some((_, f_ty)) = model_def.fields.iter().find(|(n, _)| n == f_name)
+                        if let Some(field_def) = model_def.fields.iter().find(|f| f.name == *f_name)
                         {
                             let val_ty = self.check_expression(f_val_expr);
+                            let f_ty = &field_def.field_type;
 
                             // If the field type is a TypeParam, infer its binding
                             if let Type::TypeParam(param_name) = f_ty {
@@ -3238,7 +3519,20 @@ impl Analyzer {
                                     &finalized_args,
                                 );
 
-                                if !self.types_compatible(&expected_ty, &val_ty) {
+                                // For optional fields, accept Maybe<T> as well as T
+                                let compatible = if field_def.is_optional {
+                                    // Check if val_ty is Maybe<expected_ty> or expected_ty
+                                    let maybe_expected = Type::Generic(
+                                        "Maybe".to_string(),
+                                        vec![expected_ty.clone()],
+                                    );
+                                    self.types_compatible(&expected_ty, &val_ty)
+                                        || self.types_compatible(&maybe_expected, &val_ty)
+                                } else {
+                                    self.types_compatible(&expected_ty, &val_ty)
+                                };
+
+                                if !compatible {
                                     self.add_error(format!(
                                         "Type Error: Field '{}' in model '{}' expected {:?}, got {:?}",
                                         f_name, name, expected_ty, val_ty
@@ -3256,30 +3550,18 @@ impl Analyzer {
                         }
                     }
 
-                    // Check for missing fields (skip for models where fields have defaults)
-                    if name == "WebSocketResponse" {
-                        // headers is optional (defaults to empty map). recv/send are required.
-                        for f_name in ["recv", "send"] {
-                            if !fields.iter().any(|(n, _)| n == f_name) {
+                    // Check for missing required fields
+                    // Skip Response models and fields with defaults
+                    if name != "Response" && name != "StreamingResponse" && name != "SseResponse" {
+                        for field_def in &model_def.fields {
+                            // Only check required fields (not optional)
+                            if !field_def.is_optional
+                                && !fields.iter().any(|(n, _)| n == &field_def.name)
+                            {
                                 self.add_error(
                                     format!(
-                                        "Type Error: Missing field '{}' in instantiation of model '{}'",
-                                        f_name, name
-                                    ),
-                                    expr.span,
-                                );
-                            }
-                        }
-                    } else if name != "Response"
-                        && name != "StreamingResponse"
-                        && name != "SseResponse"
-                    {
-                        for (f_name, _) in &model_def.fields {
-                            if !fields.iter().any(|(n, _)| n == f_name) {
-                                self.add_error(
-                                    format!(
-                                        "Type Error: Missing field '{}' in instantiation of model '{}'",
-                                        f_name, name
+                                        "Type Error: Missing required field '{}' in instantiation of model '{}'",
+                                        field_def.name, name
                                     ),
                                     expr.span,
                                 );
@@ -3323,10 +3605,18 @@ impl Analyzer {
                 match &obj_ty {
                     Type::Model(name) => {
                         if let Some(model_def) = self.models.get(name) {
-                            if let Some((_, f_ty)) =
-                                model_def.fields.iter().find(|(f, _)| f == field)
+                            if let Some(field_def) =
+                                model_def.fields.iter().find(|f| f.name == *field)
                             {
-                                f_ty.clone()
+                                if field_def.is_optional {
+                                    // Return Maybe<T> for optional fields
+                                    Type::Generic(
+                                        "Maybe".to_string(),
+                                        vec![field_def.field_type.clone()],
+                                    )
+                                } else {
+                                    field_def.field_type.clone()
+                                }
                             } else {
                                 self.add_error(
                                     format!(
@@ -3394,16 +3684,21 @@ impl Analyzer {
                 // obj?.field where obj is Maybe<T> - unwrap T, access field, wrap result in Maybe
                 let obj_ty = self.check_expression(object);
 
-                // Extract inner type from Maybe<T>
+                // Extract inner type from Maybe<T> or use object type directly for non-Maybe
                 let inner_ty = match &obj_ty {
                     Type::Generic(name, args) if name == "Maybe" && args.len() == 1 => {
                         args[0].clone()
                     }
                     Type::Any => Type::Any,
+                    Type::Model(_) | Type::Generic(_, _) => {
+                        // Allow optional chaining on Model instances and generic types
+                        // Treat them as the type itself (not wrapped in Maybe)
+                        obj_ty.clone()
+                    }
                     _ => {
                         self.add_error(
                             format!(
-                                "Type Error: Optional chaining (?.) requires Maybe<T>, got {:?}",
+                                "Type Error: Optional chaining (?.) requires Maybe<T> or Model, got {:?}",
                                 obj_ty
                             ),
                             expr.span,
@@ -3416,10 +3711,15 @@ impl Analyzer {
                 let field_ty = match &inner_ty {
                     Type::Model(name) => {
                         if let Some(model_def) = self.models.get(name) {
-                            if let Some((_, f_ty)) =
-                                model_def.fields.iter().find(|(f, _)| f == field)
+                            if let Some(field_def) =
+                                model_def.fields.iter().find(|f| f.name == *field)
                             {
-                                f_ty.clone()
+                                if field_def.is_optional {
+                                    // Optional fields are already Maybe<T>, don't double-wrap
+                                    field_def.field_type.clone()
+                                } else {
+                                    field_def.field_type.clone()
+                                }
                             } else {
                                 self.add_error(
                                     format!(
@@ -3450,7 +3750,7 @@ impl Analyzer {
                     }
                 };
 
-                // Wrap result in Maybe
+                // Wrap result in Maybe (for optional chaining)
                 Type::Generic("Maybe".to_string(), vec![field_ty])
             }
             ExprKind::OptionalMethodCall(object, method, args) => {
@@ -3469,16 +3769,20 @@ impl Analyzer {
                     self.check_expression(arg);
                 }
 
-                // Extract inner type from Maybe<T>
+                // Extract inner type from Maybe<T> or use object type directly
                 let inner_ty = match &obj_ty {
                     Type::Generic(name, type_args) if name == "Maybe" && type_args.len() == 1 => {
                         type_args[0].clone()
                     }
                     Type::Any => Type::Any,
+                    Type::Model(_) | Type::Generic(_, _) => {
+                        // Allow optional method chaining on Model instances
+                        obj_ty.clone()
+                    }
                     _ => {
                         self.add_error(
                             format!(
-                                "Type Error: Optional chaining (?.) requires Maybe<T>, got {:?}",
+                                "Type Error: Optional chaining (?.) requires Maybe<T> or Model, got {:?}",
                                 obj_ty
                             ),
                             expr.span,
@@ -5681,10 +5985,17 @@ impl Analyzer {
         field_name: &str,
     ) -> Option<Type> {
         if let Some(model_def) = self.models.get(model_name) {
-            if let Some((_, field_ty)) = model_def.fields.iter().find(|(n, _)| n == field_name) {
+            if let Some(field_def) = model_def.fields.iter().find(|f| f.name == field_name) {
                 // Substitute type parameters with concrete types
-                let substituted =
-                    self.substitute_type_params(field_ty, &model_def.type_params, type_args);
+                let substituted = self.substitute_type_params(
+                    &field_def.field_type,
+                    &model_def.type_params,
+                    type_args,
+                );
+                // Wrap in Maybe if field is optional
+                if field_def.is_optional {
+                    return Some(Type::Generic("Maybe".to_string(), vec![substituted]));
+                }
                 return Some(substituted);
             }
         }
