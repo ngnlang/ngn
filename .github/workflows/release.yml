@@ -37,23 +37,37 @@ jobs:
         env:
           NGN_LLAMA_BACKEND: cpu
         run: |
-          make release
+          set -euo pipefail
           make dist VERSION=${GITHUB_REF_NAME}
-          cp dist/ngn-${GITHUB_REF_NAME}-linux-x86_64.tar.gz dist/ngn-latest-linux-x86_64.tar.gz
-          cp dist/ngn-${GITHUB_REF_NAME}-linux-arm64.tar.gz dist/ngn-latest-linux-arm64.tar.gz
+          if [ -f "dist/ngn-${GITHUB_REF_NAME}-linux-x86_64.tar.gz" ]; then
+            cp dist/ngn-${GITHUB_REF_NAME}-linux-x86_64.tar.gz dist/ngn-latest-linux-x86_64.tar.gz
+          fi
+          if [ -f "dist/ngn-${GITHUB_REF_NAME}-linux-arm64.tar.gz" ]; then
+            cp dist/ngn-${GITHUB_REF_NAME}-linux-arm64.tar.gz dist/ngn-latest-linux-arm64.tar.gz
+          fi
+
+      - name: Verify release artifacts
+        run: |
+          set -euo pipefail
+          test -f "dist/ngn-${GITHUB_REF_NAME}-linux-x86_64.tar.gz"
+          test -f "dist/ngn-${GITHUB_REF_NAME}-linux-arm64.tar.gz"
+          test -f "dist/ngn-latest-linux-x86_64.tar.gz"
+          test -f "dist/ngn-latest-linux-arm64.tar.gz"
 
       - name: Create release (if needed)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --notes ""
+            gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --generate-notes
           fi
 
       - name: Upload release assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           gh release upload "${GITHUB_REF_NAME}" \
             dist/ngn-${GITHUB_REF_NAME}-linux-x86_64.tar.gz \
             dist/ngn-${GITHUB_REF_NAME}-linux-arm64.tar.gz \
