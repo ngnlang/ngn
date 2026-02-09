@@ -1,0 +1,2283 @@
+import { assert } from "tbx::test"
+//import { read, write, append, exists, delete } from "tbx::io"
+import * as file from "tbx::io"
+import { ping } from "./module.ngn"
+import * as sing from "./module2.ngn"
+import { abs, round, floor, ceil, trunc, sin, cos, tan, asin, acos, atan, atan2, sqrt, pow, exp, log, log10, log2, min, max, sign, clamp, PI } from "tbx::math"
+
+enum Status {
+    Active,
+    Inactive(string),
+    Loading,
+}
+
+// Generic type definitions for testing
+model Container<T> {
+    value: T
+}
+
+model Pair<K, V> {
+    key: K,
+    val: V
+}
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+type IntOrString = i64 | string
+
+
+type AliasIntOrString = IntOrString
+
+
+// Models for optional chaining tests
+model User {
+    name: string,
+    age: i64
+}
+
+model OptionalUser {
+    name: string,
+    age?: i64 = 42,
+    nickname?: string
+}
+
+model UserHolder {
+    user: User
+}
+
+// Generic extend demonstrations
+extend i64 {
+    fn doubled(): i64 { return this * 2 }
+}
+
+extend f64 {
+    fn half(): f64 { return this / 2.0 }
+}
+
+extend bool {
+    fn toInt(): i64 {
+        if (this) { return 1 }
+        return 0
+    }
+}
+
+extend string {
+    fn shout(): string {
+        return this + "!!!"
+    }
+}
+
+extend tuple {
+    fn describe(): string {
+        return "I am a tuple!"
+    }
+}
+
+extend array {
+    fn isEmpty(): bool {
+        return this.size() == 0
+    }
+}
+
+extend map {
+    fn isEmpty(): bool {
+        return this.size() == 0
+    }
+}
+
+extend set {
+    fn isEmpty(): bool {
+        return this.size() == 0
+    }
+}
+
+// Generic number extend - applies to ALL numeric types
+extend number {
+    fn squared(): number {
+        return this * this
+    }
+    fn isPositive(): bool {
+        return this > 0
+    }
+}
+
+model Point {
+    x: i64,
+    y: i64
+}
+
+role Named {
+    fn name(): string
+    fn description(): string 
+}
+
+extend Point with Named {
+    fn name(): string {
+        return "Point"
+    }
+    
+    fn description(): string {
+        return "A 2D Point"
+    }
+}
+
+extend Point {
+    fn dist_sq(): i64 {
+        return this.x * this.x + this.y * this.y
+    }
+}
+
+global c = channel<i64>()
+global global_val = 150
+
+// Global and model for emoji tests
+global 🌍 = "world"
+
+model 🏠 {
+  🚪: string
+  🪟: i64
+}
+
+// This is a comprehensive test suite for ngn2 features
+// including Math, Strings, Arrays, Tuples, and Functions.
+/* 
+   We assert correctness using the tbx::test assertion library.
+   (Comments are also tested here!)
+ */
+fn main() {
+    print("STARTING NGN TESTS")
+    //panic("oh no!")
+    print("--- Function Import ---")
+    const ping_import = ping("Jason")
+    assert(ping_import == "hello Jason!!!")
+
+    const sing_import = sing("Emily")
+    assert(sing_import == "Emily!!!")
+
+    print("--- Basic Logic ---")
+    var x = 10 + 20
+    assert(x == 30)
+
+    print("\n--- Float Support ---")
+    // Implicit float division
+    assert(10 / 4 == 2.5)
+    // Relaxed promotion
+    assert(100 + 0.5 == 100.5)
+
+    print("\n--- Arrays and Tuples ---")
+    var arr = [1, 2, 3]
+    // Deep equality check
+    assert(arr == [1, 2, 3])
+
+    var empty_typed_array: array<string> = []
+
+    var tup = (10, 20)
+    assert(tup == (10, 20))
+    
+    // Explicit typing
+    var arr_typed: array<i32> = [4, 5]
+    assert(arr_typed == [4, 5])
+    
+    var tup_typed: tuple<i32, 2> = (6, 7)
+    assert(tup_typed == (6, 7))
+
+    test_control_flow()
+    test_loop_break()
+    test_break_in_match()
+    test_spawn()
+    test_while_once()
+    test_operators()
+    test_pipe()
+    test_logical_operators()
+    test_compound()
+    test_static()
+    test_echo()
+    test_sleep()
+    test_interpolation()
+    test_json()
+    test_object_literals()
+    test_for_loops()
+    test_ranges()
+    test_match()
+    test_enums()
+    test_builtin_enums()
+    test_array_methods()
+    test_string_methods()
+    test_tuple_methods()
+    test_maps()
+    test_sets()
+    test_extend()
+    test_closures()
+    test_concurrency()
+    test_state()
+    test_extended_receive()
+    test_oop()
+    test_fetch()
+    test_optional_params()
+    test_null_keyword()
+    test_nullable_type_syntax()
+    test_optional_model_fields()
+    test_optional_chaining()
+    test_env()
+    test_file_io()
+
+    print("--- Local Function Test ---")
+    fn testy(a: i64, b: i64): i64 {
+        return a + b
+    }
+    assert(testy(2, 2) == 4)
+    
+    test_destructuring()
+    test_generic_types()
+    test_type_alias_and_union()
+    test_time()
+    test_math()
+    test_emoji()
+
+    // ADD TEST FUNCTION CALLS ABOVE THIS LINE
+    print()
+    assert(true, "ALL NGN TESTS PASSED")
+}
+
+fn check_named(obj: Named, expected_name: string) {
+    assert(obj.name() == expected_name)
+}
+
+fn test_oop() {
+    print("--- Object Oriented Tests (Model/Role/Extend) ---")
+    
+    var p = Point { x: 3, y: 4 }
+    
+    // Field access
+    assert(p.x == 3)
+    assert(p.y == 4)
+    
+    // Extended method
+    assert(p.dist_sq() == 25)
+    
+    // Role methods
+    assert(p.name() == "Point")
+    assert(p.description() == "A 2D Point")
+    
+    // Polymorphism check
+    check_named(p, "Point")
+
+    print("OOP Tests Passed")
+}
+
+fn test_control_flow() {
+    print("--- Control Flow Tests ---")
+    
+    // Inline If
+    var x = 10
+    if (x == 10) assert(true) : assert(false)
+
+    // mostly testing the multiline version of an inline "if" is parsed correctly
+    if (x == 20) 
+        assert(false)
+    : (x < 10)
+        assert(false)
+    : (x > 10)
+        assert(false)
+    : assert(true)
+    
+    // Block If
+    if {
+        (x == 20) assert(false)
+        : (x < 20) assert(true)
+        : assert(true)
+    }
+
+    // While Loop
+    var i = 0
+    while (i < 3) {
+        i = i + 1
+    }
+    assert(i == 3)
+    
+    // Nested
+    var j = 0
+    while (j < 2) {
+        if (j == 1) assert(true) : assert(j == 0)
+        j = j + 1
+    }
+    assert(j == 2)
+    print("Control Flow Tests Passed")
+}
+
+fn test_loop_break() {
+    print("--- Loop and Break Tests ---")
+    var i = 0
+    loop {
+        i = i + 1
+        if (i == 3) break
+    }
+    assert(i == 3)
+    
+    var j = 0
+    while (true) {
+        j = j + 1
+        if (j == 2) break
+    }
+    assert(j == 2)
+    print("Loop and Break Tests Passed")
+}
+
+fn test_break_in_match() {
+    print("--- Break in Match Tests ---")
+    
+    // Test 1: break in match inside WHILE loop
+    var x = 0
+    while (x < 10) {
+        x = x + 1
+        match (x) {
+            3 => break,
+            _ => {}
+        }
+    }
+    assert(x == 3)
+    
+    // Test 2: break in match inside FOR loop
+    var sum = 0
+    for (item in [1, 2, 3, 4, 5]) {
+        match (item) {
+            3 => break,
+            _ => sum = sum + item
+        }
+    }
+    assert(sum == 3)  // 1 + 2 = 3
+    
+    // Test 3: break in match inside LOOP
+    var y = 0
+    loop {
+        y = y + 1
+        match (y) {
+            5 => break,
+            _ => {}
+        }
+    }
+    assert(y == 5)
+    
+    // Test 4: code after break-in-match loop executes correctly
+    var z = 0
+    while (z < 10) {
+        z = z + 1
+        match (z) {
+            2 => break,
+            _ => {}
+        }
+    }
+    var after = z + 10
+    assert(after == 12)
+    
+    print("Break in Match Tests Passed")
+}
+
+fn test_spawn() {
+    print("--- Spawn API Tests ---")
+    
+    fn task_ok1(): Result<string, string> { return Ok("result1") }
+    fn task_ok2(): Result<string, string> { return Ok("result2") }
+    fn task_fail(): Result<string, string> { return Error("failed") }
+    
+    // Test spawn.all() - all succeed
+    const allOk = spawn.all([task_ok1, task_ok2])
+    assert(allOk.size() == 2)
+    
+    // Test spawn.all() - with failure (still returns all)
+    const allMixed = spawn.all([task_ok1, task_fail, task_ok2])
+    assert(allMixed.size() == 3)
+
+    // Test spawn.try() - stops at first error
+    const tryResults = spawn.try([task_ok1, task_fail, task_ok2])
+    assert(tryResults.size() == 2)  // Only up to and including the error
+    
+    // Test spawn.race() - first success wins
+    const raceResult = spawn.race([task_ok1, task_ok2])
+    match (raceResult) {
+        Ok(data) => assert(true),
+        Error(e) => assert(false)
+    }
+    
+    print("Spawn API Tests Passed")
+}
+
+fn test_operators() {
+    print("--- Power and Modulo Tests ---")
+    
+    // Test Power (**)
+    const p1 = 2 ** 3
+    assert(p1 == 8.0)
+
+    // Test Power (^)
+    const p2 = 3 ^ 2
+    assert(p2 == 9.0)
+
+    // Test Right-Associativity (2 ** 2 ** 3 should be 2 ** (2 ** 3) = 2 ** 8 = 256)
+    const p3 = 2 ** 2 ** 3
+    assert(p3 == 256.0)
+
+    // Test Modulo (%)
+    const m1 = 9 % 2
+    assert(m1 == 1)
+
+    const m2 = 10 % 3
+    assert(m2 == 1)
+
+    const m3 = 10.5 % 3
+    assert(m3 == 1.5)
+
+    print("All Operator Tests Passed")
+}
+
+fn test_pipe() {
+    print("--- Pipe Operator Tests ---")
+
+    var x = -10
+    const piped = x |> abs |> sqrt
+    assert(piped == sqrt(abs(x)))
+
+    fn add(a: i64, b: i64): i64 {
+        return a + b
+    }
+
+    fn pack(a: i64, b: i64): i64 {
+        return a * 10 + b
+    }
+
+    fn set_metadata(theme: string, items: array<i64>): i64 {
+        return items.size()
+    }
+
+    const res1 = 5 |> add(7)
+    assert(res1 == 12)
+
+    const pair = (2, 3)
+    const res2 = pair |> add($1, $2)
+    assert(res2 == 5)
+
+    const res3 = pair |> pack($2, $1)
+    assert(res3 == 32)
+
+    const res4 = pair |> pack($1, 9)
+    assert(res4 == 29)
+
+    const tuple_joined = ("b", "a") |> $.join(",")
+    assert(tuple_joined == "b,a")
+
+    const count = [1, 2, 3] |> set_metadata("dark", $)
+    assert(count == 3)
+
+    const price = 100 |> $ * 1.05 |> round()
+    assert(price == 105)
+
+    const key = 1
+
+    // index-based array access
+    const picked = ["a", "b", "c"] |> $[key]
+    assert(picked == "b")
+
+    // index-based tuple access
+    assert((2, 3) |> $[key] == 3)
+
+    const array_size = [1, 2, 3] |> $.size()
+    assert(array_size == 3)
+
+    const array_copy = [9, 8, 7] |> $.copy(0, 2)
+    assert(array_copy == [9, 8])
+
+    const packed_array = [3, 4, 5] |> pack($1, $3)
+    assert(packed_array == 35)
+
+    print("Pipe Operator Tests Passed")
+}
+
+fn test_logical_operators() {
+    print("--- Logical Operator Tests ---")
+
+    const a = 15
+    assert(a > 10 && a < 20, "15 should be in (10, 20)")
+    assert(a < 10 || a == 15, "OR basic check")
+    assert(!(a < 10 || a > 20), "NOT with OR")
+
+    // Precedence: && binds tighter than ||
+    assert(true || false && false, "&& binds tighter than ||")
+    assert(((true || false) && false) == false, "parentheses override")
+
+    // Short-circuit behavior
+    var calls = state(0)
+    const bump_true = || {
+        calls.update(|n| n + 1)
+        return true
+    }
+
+    assert((true || bump_true()) == true, "|| short-circuits when left is true")
+    assert(calls.read() == 0, "|| should not evaluate RHS when left is true")
+
+    assert((false && bump_true()) == false, "&& short-circuits when left is false")
+    assert(calls.read() == 0, "&& should not evaluate RHS when left is false")
+
+    assert((false || bump_true()) == true, "|| evaluates RHS when left is false")
+    assert(calls.read() == 1, "|| should evaluate RHS when left is false")
+
+    assert((true && bump_true()) == true, "&& evaluates RHS when left is true")
+    assert(calls.read() == 2, "&& should evaluate RHS when left is true")
+
+    // Ensure empty-parameter closures still parse with leading ||
+    const empty = || { return 123 }
+    assert(empty() == 123, "empty-arg closure should still work")
+
+    print("Logical Operator Tests Passed")
+}
+
+fn test_while_once() {
+    print("--- While Once Tests ---")
+    var x = 10
+    var ran = false
+    while once (x < 5) {
+        ran = true
+    }
+    assert(ran == true)
+    
+    var count = 0
+    while once (count < 2) {
+        count = count + 1
+    }
+    assert(count == 2)
+    print("While Once Tests Passed")
+}
+
+fn test_compound() {
+    print("--- Compound Assignment ---")
+    var x = 10
+    x += 5
+    assert(x == 15)
+    x -= 3
+    assert(x == 12)
+    x *= 2
+    assert(x == 24)
+    x /= 4
+    assert(x == 6.0)
+    
+    var y = 10
+    y %= 3
+    assert(y == 1)
+    
+    var z = 2
+    z **= 3
+    assert(z == 8.0)
+    
+    var w = 3
+    w ^= 2
+    assert(w == 9.0)
+    print("Compound Assignment Tests Passed")
+}
+
+fn test_static_read() {
+    assert(global_val == 150)
+}
+
+fn test_static() {
+    print("--- Static Variable ---")
+    assert(global_val == 150)
+    test_static_read()
+    print("Static Variable Tests Passed")
+}
+
+fn test_echo() {
+    print("--- Echo Tests ---")
+    echo("E")
+    sleep(200)
+    echo("c")
+    sleep(200)
+    echo("h")
+    sleep(200)
+    echo("o")
+    sleep(200)
+    print(" confirmed")
+    print("Echo Tests Passed")
+}
+
+fn test_sleep() {
+    print("--- Sleep Tests ---")
+    echo("Sleeping...")
+    sleep(2000)
+    print(" done")
+    print("Sleep Tests Passed")
+}
+
+fn test_interpolation() {
+    print("--- String Interpolation ---")
+    const name = "World"
+    const age = 25
+    
+    // Basic interpolation
+    const s1 = "Hello, ${name}!"
+    assert(s1 == "Hello, World!")
+    
+    // Numeric expression
+    const s2 = "Age next year: ${age + 1}"
+    assert(s2 == "Age next year: 26")
+    
+    // Multiple parts
+    const s3 = "${name} is ${age} years old."
+    assert(s3 == "World is 25 years old.")
+    
+    // Escaped brace
+    const s4 = "Escaped: {test}"
+    assert(s4 == "Escaped: {test}")
+    
+    // Nested interpolation - variable containing variable content
+    const inner = "inner"
+    const s5 = 'outer ${inner} outer'
+    assert(s5 == "outer inner outer")
+
+    const s6 = "Use \${expr} for interpolation"
+    assert(s6 == "Use \${expr} for interpolation")
+    
+    print("String Interpolation Tests Passed")
+}
+
+fn test_json() {
+    print("--- JSON Tests ---")
+    
+    // json.parse - basic object
+    const data = json.parse('{"name": "Jason", "age": 30}')
+    check data?, err? { assert(false, "json.parse basic object failed: " + err.message) }
+    assert(data.name == "Jason")
+    assert(data.age == 30)
+    
+    // json.parse - nested object
+    const nested = json.parse('{"user": {"name": "Alice"}, "active": true}')
+    check nested?, err? { assert(false, "json.parse nested object failed: " + err.message) }
+    assert(nested.user.name == "Alice")
+    assert(nested.active == true)
+    
+    // json.parse - array
+    const arr = json.parse('[1, 2, 3]')
+    check arr?, err? { assert(false, "json.parse array failed: " + err.message) }
+    assert(arr[0] == 1)
+    assert(arr[1] == 2)
+    assert(arr[2] == 3)
+    
+    // json.stringify - anonymous object
+    const obj = { name: "Test", count: 42 }
+    const str = json.stringify(obj)
+    assert(str == '{"count":42,"name":"Test"}')
+    
+    // json.stringify - nested
+    const nestedObj = { user: { name: "Bob" }, items: [1, 2, 3] }
+    const nestedStr = json.stringify(nestedObj)
+
+    // Note: key order may vary, so we just check it contains expected parts
+    assert(nestedStr == '{"items":[1,2,3],"user":{"name":"Bob"}}')
+    
+    // Round-trip: stringify then parse
+    const original = { value: 123, flag: true }
+    const roundTrip = json.parse(json.stringify(original))
+    check roundTrip?, err? { assert(false, "json.parse round-trip failed: " + err.message) }
+    assert(roundTrip.value == 123)
+    assert(roundTrip.flag == true)
+    
+    print("JSON Tests Passed")
+}
+
+fn test_object_literals() {
+    print("--- Anonymous Object Literal Tests ---")
+    
+    // Basic object literal
+    const obj = { name: "Alice", age: 25 }
+    assert(obj.name == "Alice")
+    assert(obj.age == 25)
+
+    const name = "Alice"
+    const age = 30
+    
+    // Shorthand syntax: { name } expands to { name: name }
+    const person = { name, age }
+    assert(person.name == 'Alice')
+    assert(person.age == 30)
+    
+    // Mixed shorthand and full syntax
+    const mixed = { name, status: 'active' }
+    assert(mixed.name == "Alice")
+    assert(mixed.status == "active")
+    
+    // Nested object
+    const nested = { user: { name: "Bob", id: 42 }, active: true }
+    assert(nested.user.name == "Bob")
+    assert(nested.user.id == 42)
+    assert(nested.active == true)
+    
+    // Object with array
+    const withArray = { items: [1, 2, 3], count: 3 }
+    assert(withArray.items[0] == 1)
+    assert(withArray.items[1] == 2)
+    assert(withArray.items[2] == 3)
+    assert(withArray.count == 3)
+    
+    // Deeply nested
+    const deep = { a: { b: { c: { value: "deep" } } } }
+    assert(deep.a.b.c.value == "deep")
+    
+    // Mixed types
+    const mixed = { str: "hello", num: 123, flag: false, arr: [4, 5] }
+    assert(mixed.str == "hello")
+    assert(mixed.num == 123)
+    assert(mixed.flag == false)
+    assert(mixed.arr[0] == 4)
+    
+    // Field assignment on mutable objects
+    var mutable = { name: "Bob", count: 0 }
+    assert(mutable.name == "Bob")
+    assert(mutable.count == 0)
+    
+    mutable.name = "Charlie"
+    mutable.count = 42
+    assert(mutable.name == "Charlie")
+    assert(mutable.count == 42)
+    
+    // Nested field assignment
+    var nested_mut = { user: { name: "Alice" } }
+    assert(nested_mut.user.name == "Alice")
+    nested_mut.user.name = "Bob"
+    assert(nested_mut.user.name == "Bob")
+    
+    // Deep nested assignment
+    var deep_mut = { a: { b: { value: "original" } } }
+    assert(deep_mut.a.b.value == "original")
+    deep_mut.a.b.value = "modified"
+    assert(deep_mut.a.b.value == "modified")
+    
+    print("Anonymous Object Literal Tests Passed")
+}
+ 
+fn test_for_loops() {
+    print("--- For Loop Tests ---")
+    
+    // Array iteration with index
+    var items = [10, 20, 30]
+
+    var sum = 0
+    var index_sum = 0
+    for (item, idx in items) {
+        sum = sum + item
+        index_sum = index_sum + idx
+    }
+    assert(sum == 60)
+    assert(index_sum == 3)
+    
+    // Array iteration without index
+    var sum2 = 0
+    for (x in [1, 2, 3]) {
+        sum2 = sum2 + x
+    }
+    assert(sum2 == 6)
+    
+    // Tuple iteration
+    var tup = (1, "two", 3.0)
+    var count = 0
+    for (val in tup) {
+        count = count + 1
+    }
+    assert(count == 3)
+    
+    // Tuple with index
+    var tuple_index_sum = 0
+    for (v, i in (100, 200)) {
+        tuple_index_sum = tuple_index_sum + i
+    }
+    assert(tuple_index_sum == 1)
+    
+    // Empty array
+    var ran = false
+    for (x in []) {
+        ran = true
+    }
+    assert(ran == false)
+    
+    // Break in for
+    var break_sum = 0
+    for (item in [1, 2, 3, 4, 5]) {
+        if (item == 3) {
+            break
+        }
+        break_sum = break_sum + item
+    }
+    assert(break_sum == 3)
+    
+    print("For Loop Tests Passed")
+}
+
+fn test_ranges() {
+    print("--- Range Tests ---")
+
+    const arr<i32> = [1..5]
+    assert(arr == [1, 2, 3, 4, 5])
+
+    const empty = [5..<5]
+    assert(empty.size() == 0)
+
+    var sum = 0
+    for (i in 1..5) {
+        sum = sum + i
+    }
+    assert(sum == 15)
+
+    const score = 95
+    var label = ""
+    match (score) {
+        100 => label = "perfect",
+        94..99 => label = "great",
+        90..<94 => label = "good",
+        _ => label = "keep striving"
+    }
+    assert(label == "great")
+
+    const score2 = 93
+    var label2 = ""
+    match (score2) {
+        94..99 => label2 = "great",
+        90..<94 => label2 = "good",
+        _ => label2 = "keep striving"
+    }
+    assert(label2 == "good")
+
+    print("Range Tests Passed")
+}
+
+fn test_match() {
+    print("--- Match Statement Tests ---")
+    
+    // 1. Basic match
+    var x = 2
+    var result = ""
+    match (x) {
+        1 => result = "one",
+        2 => result = "two",
+        _ => result = "default"
+    }
+    assert(result == "two")
+    // 2. OR patterns
+    var y = 3
+    var result2 = ""
+    match (y) {
+        1 => result2 = "one",
+        2 | 3 => result2 = "two or three",
+        _ => result2 = "default"
+    }
+    assert(result2 == "two or three")
+    
+    // 3. Match with 'next'
+    var z = 1
+    var count = 0
+    match (z) {
+        1 => {
+            count = count + 1
+            next
+        },
+        2 => count = count + 10,
+        _ => count = count + 100
+    }
+    assert(count == 1)
+
+    // 6. Mid-body next
+    var m_x = 1
+    var m_count = 0
+    match (m_x) {
+        1 => {
+            m_count = 1
+            next
+            m_count = 100 // Should be skipped
+        },
+        2 => m_count += 5
+        _ => m_count = m_count + 10
+    }
+    assert(m_count == 1)
+    
+    print("Match Statement Tests Passed")
+}
+
+fn test_enums() {
+    print("--- Custom Enum Tests ---")
+    
+    var s1 = Status::Active
+    var s2 = Inactive("Maintenance")
+    var s3 = Loading
+    
+    match (s1) {
+        Active => assert(true),
+        _ => assert(false)
+    }
+    
+    match (s2) {
+        Inactive(reason) => assert(reason == "Maintenance"),
+        _ => assert(false)
+    }
+    
+    match (s3) {
+        Loading => assert(true),
+        _ => assert(false)
+    }
+    
+    print("Custom Enum Tests Passed")
+}
+
+fn test_builtin_enums() {
+    print("--- Built-in Enum Tests (Result, Maybe) ---")
+    
+    // Result
+    var r1 = Ok("Data")
+    var r2 = Error("NotFound")
+    
+    match (r1) {
+        Ok(v) => assert(v == "Data"),
+        _ => assert(false)
+    }
+    
+    match (r2) {
+        Error(e) => assert(e == "NotFound"),
+        _ => assert(false)
+    }
+    
+    // Maybe
+    var m1 = Value(100)
+    var m2 = Null
+    
+    match (m1) {
+        Value(v) => assert(v == 100),
+        _ => assert(false)
+    }
+    
+    match (m2) {
+        Null => assert(true),
+        _ => assert(false)
+    }
+    
+    print("Built-in Enum Tests Passed")
+}
+
+fn test_array_methods() {
+    print("--- Array Method Tests ---")
+    var arr = [1, 2, 3]
+    assert(arr.size() == 3)
+
+    // push
+    arr.push(4)
+    assert(arr == [1, 2, 3, 4])
+    arr.push(10, 0)
+    assert(arr == [10, 1, 2, 3, 4])
+
+    // pop
+    var last = arr.pop()
+    assert(last == 4)
+    assert(arr == [10, 1, 2, 3])
+    var first = arr.pop(0)
+    assert(first == 10)
+    assert(arr == [1, 2, 3])
+
+    // copy
+    var arr_copy = arr.copy(1, 2)
+    assert(arr_copy == [2])
+    assert(arr == [1, 2, 3]) // Check non-mutating
+
+    // slice
+    var sliced = arr.slice(0, 2)
+    assert(sliced == [1, 2])
+    assert(arr == [3])
+
+    // splice
+    arr.splice([100, 200])
+    assert(arr == [3, 100, 200])
+
+    // each (item only)
+    var sum = state(0)
+    arr.each(|item| {
+        sum.update(|n| n + item)
+    })
+    assert(sum.read() == 303)
+
+    // each (item + index)
+    var index_sum = state(0)
+    arr.each(|item, idx| {
+        index_sum.update(|n| n + idx)
+    })
+    assert(index_sum.read() == 3)
+    
+    print("Array Method Tests Passed")
+}
+
+fn test_string_methods() {
+    print("--- String Method Tests ---")
+    var s = "  Hello World  "
+    assert(s.length() == 15)
+    assert(s.trim() == "Hello World")
+    assert(s.upper() == "  HELLO WORLD  ")
+    assert(s.lower() == "  hello world  ")
+
+    var s2 = "Hello World"
+    assert(s2.index("World") == 6)
+    assert(s2.index("World", 7) == -1)
+    assert(s2.includes("Hello") == true)
+    assert(s2.starts("Hello") == true)
+    assert(s2.ends("World") == true)
+
+    // replace (string)
+    var replaced = s2.replace("World", "NGN")
+    assert(replaced == "Hello NGN")
+    assert(s2 == "Hello World") // Check non-mutating
+
+    // replace (regex)
+    var re1 = s2.replace(/World/, "Regex")
+    assert(re1 == "Hello Regex")
+    
+    // replace (global)
+    var s_global = "a b a b"
+    var re_global = s_global.replace(/a/g, "A")
+    assert(re_global == "A b A b")
+    
+    // replace (case insensitive)
+    var s_case = "Hello HELLO"
+    var re_case = s_case.replace(/hello/i, "Hi")
+    assert(re_case == "Hi HELLO") // Only first match without 'g'
+    
+    // replace (global + case insensitive)
+    var re_case_global = s_case.replace(/hello/ig, "Hi")
+    assert(re_case_global == "Hi Hi")
+    
+    // replace (escaped)
+    var s_esc = "foo/bar"
+    var re_esc = s_esc.replace(/\//, "-")
+    assert(re_esc == "foo-bar")
+
+    // split
+    var parts = s2.split(" ")
+    assert(parts == ["Hello", "World"])
+    var chars = "ABC".split()
+    assert(chars == ["A", "B", "C"])
+
+    // repeat
+    var repeated = "Hi".repeat(3)
+    assert(repeated == "HiHiHi")
+
+    // copy
+    var s_copy = s2.copy(0, 5)
+    assert(s_copy == "Hello")
+    assert(s2 == "Hello World") // Check non-mutating
+
+    // slice (mutating)
+    var s3 = "Hello World"
+    var part = s3.slice(0, 5)
+    assert(part == "Hello")
+    assert(s3 == " World")
+
+    print("String Method Tests Passed")
+}
+
+fn test_tuple_methods() {
+    print("--- Tuple Method Tests ---")
+    var t = (1, 2, 3)
+    assert(t.size() == 3)
+
+    // index-based access
+    assert(t[1] == 2)
+    
+    // includes
+    assert(t.includes(2) == true)
+    assert(t.includes(5) == false)
+    
+    // index
+    assert(t.index(2) == 1)
+    assert(t.index(5) == -1)
+    
+    // toArray (homogeneous)
+    var arr: array<i64> = t.toArray()
+    assert(arr == [1, 2, 3])
+    // assert(arr.size() == 3) // Already verified in array tests
+    
+    // copy
+    var t2 = (1, 2, 3, 4, 5)
+    var s1 = t2.copy(1, 4)
+    assert(s1 == (2, 3, 4))
+    var s2 = t2.copy(2)
+    assert(s2 == (3, 4, 5))
+    var s3 = t2.copy()
+    assert(s3 == (1, 2, 3, 4, 5))
+    assert(s3 == t2)
+    
+    // join
+    var t3 = ("A", "B", "C")
+    assert(t3.join("-") == "A-B-C")
+    var t4 = (1, 2, 3)
+    assert(t4.join(",") == "1,2,3")
+
+    print("Tuple Method Tests Passed")
+}
+
+fn test_maps() {
+    print("--- Map Method Tests ---")
+
+    var seeded = map([
+        (1, "one"),
+        (2, "two"),
+    ])
+    assert(seeded.size() == 2)
+    assert(seeded.get(1) == "one")
+
+    // Creation
+    var m = map<i64, string>()
+    assert(m.size() == 0)
+
+    // Empty seed with explicit type
+    var empty = map<string, i64>([])
+    assert(empty.size() == 0)
+    
+    // set
+    m.set(1, "one")
+    m.set(2, "two")
+    m.set(3, "three")
+    assert(m.size() == 3)
+    
+    m.set(4, "four")
+    m.set(5, "five")
+    assert(m.size() == 5)
+    
+    // has
+    assert(m.has(1) == true)
+    assert(m.has(99) == false)
+    
+    // get
+    assert(m.get(1) == "one")
+    assert(m.get(2) == "two")
+    // m.get(99) returns void (not testable directly)
+    
+    // remove
+    var removed = m.remove(3)
+    assert(removed == "three")
+    assert(m.size() == 4)
+    assert(m.has(3) == false)
+    
+    // Different types
+    var m2 = map<string, i64>()
+    m2.set("hello", 100)
+    m2.set("world", 200)
+    assert(m2.get("hello") == 100)
+    assert(m2.size() == 2)
+    
+    // Complex values (arrays as values)
+    var m3 = map<i64, array<string>>()
+    m3.set(1, ["a", "b", "c"])
+    assert(m3.get(1)== ["a", "b", "c"])
+    
+    print("Map Method Tests Passed")
+}
+
+fn test_sets() {
+    print("--- Set Method Tests ---")
+
+    // Creation
+    var s = set<string>()
+    assert(s.size() == 0)
+
+    // Seeded set with inference
+    var seeded = set([1, 2, 3, 2])
+    assert(seeded.size() == 3)
+    assert(seeded.has(2) == true)
+
+    // Empty seed with explicit type
+    var empty = set<string>([])
+    assert(empty.size() == 0)
+    
+    // add
+    s.add("one")
+    s.add("two")
+    s.add("three")
+    assert(s.size() == 3)
+    
+    s.add("four")
+    s.add("five")
+    assert(s.size() == 5)
+    
+    // has
+    assert(s.has("one") == true)
+    assert(s.has("six") == false)
+    
+    // remove
+    var removed = s.remove("three")
+    assert(removed == true)
+    assert(s.size() == 4)
+    assert(s.has("three") == false)
+    
+    // Deduplication
+    s.add("one")
+    assert(s.size() == 4)
+    
+    // Remove non-existent
+    var removed2 = s.remove("nonexistent")
+    assert(removed2 == false)
+    
+    // Different type
+    var s2 = set<i64>()
+    s2.add(10)
+    s2.add(20)
+    s2.add(30)
+    s2.add(10)
+    assert(s2.size() == 3)
+    assert(s2.has(20) == true)
+    
+    // clear
+    s2.clear()
+    assert(s2.size() == 0)
+    assert(s2.has(20) == false)
+    
+    // Direct iteration
+    var s3 = set<i64>()
+    s3.add(1)
+    s3.add(2)
+    s3.add(3)
+    var sum = 0
+    var count = 0
+    for (v in s3) {
+        sum = sum + v
+        count = count + 1
+    }
+    assert(count == 3)
+    assert(sum == 6)
+    
+    // Iteration with index
+    var idx_sum = 0
+    for (v, i in s3) {
+        idx_sum = idx_sum + i
+    }
+    assert(idx_sum == 3) // 0 + 1 + 2
+    
+    print("Set Method Tests Passed")
+}
+
+fn test_extend() {
+    print("--- Generic Extend Tests ---")
+    
+    // Numbers
+    const x = 5
+    assert(x.doubled() == 10)
+    const f = 8.0
+    assert(f.half() == 4.0)
+    
+    // Bool
+    const b1 = true
+    const b2 = false
+    assert(b1.toInt() == 1)
+    assert(b2.toInt() == 0)
+    
+    // String
+    const s = "Hello"
+    assert(s.shout() == "Hello!!!")
+    
+    // Tuple (all types)
+    const t1 = (1, 2)
+    const t2 = ("a", true, 3.14)
+    assert(t1.describe() == "I am a tuple!")
+    assert(t2.describe() == "I am a tuple!")
+    
+    // Array (all types)
+    const arr1: array<i64> = []
+    const arr2: array<string> = ["a", "b"]
+    assert(arr1.isEmpty() == true)
+    assert(arr2.isEmpty() == false)
+    
+    // Map (all types)
+    var m1 = map<i64, string>()
+    var m2 = map<string, bool>()
+    m2.set("test", true)
+    assert(m1.isEmpty() == true)
+    assert(m2.isEmpty() == false)
+    
+    // Set (all types)
+    var s1 = set<i64>()
+    var s2 = set<string>()
+    s2.add("hello")
+    assert(s1.isEmpty() == true)
+    assert(s2.isEmpty() == false)
+    
+    // Number (all numeric types)
+    const n_i64: i64 = 5
+    const n_f64: f64 = 3.0
+    const n_neg: i64 = -7
+    assert(n_i64.squared() == 25)
+    assert(n_f64.squared() == 9.0)
+    assert(n_i64.isPositive() == true)
+    assert(n_f64.isPositive() == true)
+    assert(n_neg.isPositive() == false)
+    
+    print("Generic Extend Tests Passed")
+}
+
+fn test_concurrency() {
+    print("--- Concurrency Tests ---")
+    // Traditional channel communication
+    thread(|| {
+        print("Worker: Hello from a thread!")
+        c <- 42
+    })
+
+    var val = <- c
+    assert(val == 42)
+    
+    // Thread return channels
+    const res_chan = thread(|| {
+        print("Worker: Computing return value...")
+        return 100 + 50
+    })
+    const res_val = <- res_chan
+    assert(res_val == 150)
+    
+    // Void thread synchronization
+    const sync_chan = thread(|| {
+        print("Worker: Doing some background work...")
+    })
+    <- sync_chan // Just wait for completion
+    print("Worker finished background work")
+    
+    print("Concurrency Tests Passed")
+}
+
+fn test_closures() {
+    print("--- Closure Tests ---")
+    
+    // Basic closure
+    const f1 = ||: i64 { return 100 }
+    assert(f1() == 100)
+    
+    // Closure with parameter
+    const f2 = |x: i64|: i64 { return x * 2 }
+    assert(f2(5) == 10)
+    
+    // Upvalue capture
+    var outer = 50
+    const f3 = ||: i64 { return outer + 10 }
+    assert(f3() == 60)
+    
+    outer = 100
+    assert(f3() == 60)
+    const f4 = ||: i64 { return outer + 10 }
+    assert(f4() == 110)
+    
+    print("Closure Tests Passed")
+}
+
+fn test_state() {
+    print("--- Shared State Tests ---")
+    var counter = state(0)
+    const done = channel<bool>()
+    
+    assert(counter.read() == 0)
+
+    thread(|| {
+        counter.update(|n| n + 10)
+        done <- true
+    })
+    
+    thread(|| {
+        counter.update(|n| n + 5)
+        done <- true
+    })
+    
+    // Receive 2 messages
+    <-2 done
+
+    assert(counter.read() == 15)
+    
+    // Test write
+    counter.write(100)
+    assert(counter.read() == 100)
+    print("Shared State Tests Passed")
+}
+
+fn test_extended_receive() {
+    print("--- Extended Receive Tests ---")
+    // Test maybe receive
+    const c_maybe = channel<i64>()
+    var m1 = <-? c_maybe
+    match (m1) {
+        Null => print("MaybeNull passed"),
+        _ => assert(false)
+    }
+    
+    c_maybe <- 42
+    var m2 = <-? c_maybe
+    match (m2) {
+        Value(v) => {
+            assert(v == 42)
+        },
+        _ => assert(false)
+    }
+
+    // Test counted receive
+    const c_count = channel<i64>()
+    c_count <- 1
+    c_count <- 2
+    c_count <- 3
+    var items = <-3 c_count
+    assert(items[0] == 1)
+    assert(items[1] == 2)
+    assert(items[2] == 3)
+    
+    print("Extended Receive Tests Passed")
+}
+
+fn test_fetch() {
+    print("--- Fetch Tests ---")
+    
+    // Simple GET
+    const get_response = <- fetch("https://httpbin.org/get")
+    const get_data = get_response.text()
+    assert(get_data.includes('"url": "https://httpbin.org/get"'))
+    
+    // POST with string key headers
+    const response = <- fetch("https://httpbin.org/post", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Test-Header": "ngn" },
+        body: '{"test": "value"}'
+    })
+    const post_data = response.text()
+    assert(post_data.includes('"Content-Type": "application/json"'))
+    assert(post_data.includes('"X-Test-Header": "ngn"'))
+    assert(post_data.includes('"test": "value"'))
+    
+    print("Fetch Tests Passed")
+}
+
+fn test_optional_params() {
+    print("--- Optional Parameters Tests ---")
+    
+    // Test ? syntax with match statement
+    fn greet(name: string, suffix?: string): string {
+        match (suffix) {
+            Value(s) => return "Hello ${name}${s}"
+            Null => return "Hello ${name}"
+        }
+    }
+    assert(greet("Bob") == "Hello Bob")
+    assert(greet("Bob", "!") == "Hello Bob!")
+    
+    // Test = syntax (default value)
+    fn add(a: i64, b: i64 = 10): i64 {
+        return a + b
+    }
+    assert(add(5) == 15)
+    assert(add(5, 3) == 8)
+    
+    // Test mixed optional and defaults
+    fn combine(a: string, b?: i64, c: string = "default"): string {
+        match (b) {
+            Value(n) => return "${a}-${n}-${c}"
+            Null => return "${a}-null-${c}"
+        }
+    }
+    assert(combine("x") == "x-null-default", "combine just x")
+    assert(combine("x", 42) == "x-42-default", "combine x and 42")
+    assert(combine("x", 7, "custom") == "x-7-custom", "combine x, 7, custom")
+    
+    // Test unwrap guard syntax: if (suffix?)
+    fn greet_if(name: string, suffix?: string): string {
+        if {
+            (suffix?)
+                return "${name}${suffix}" 
+            :
+                return name
+        }
+    }
+    assert(greet_if("Hi") == "Hi", "greet_if with no suffix")
+    assert(greet_if("Hi", "!") == "Hi!", "greet_if with suffix")
+
+    fn greet_if_inline(name: string, suffix?: string): string {
+        if (suffix?) 
+            return "${name}${suffix}" 
+        : return name
+    }
+
+    assert(greet_if_inline("Hi") == "Hi", "greet_if_inline with no suffix")
+    assert(greet_if_inline("Hi", "!") == "Hi!", "greet_if_inline with suffix")
+    
+    // Test check rebind: check x? { failure }
+    fn validate(x?: i64): i64 {
+        check x? {
+            return -1
+        }
+        return x
+    }
+    assert(validate() == -1, "validate with no arguments")
+    assert(validate(42) == 42, "validate to 42")
+    
+    // Test check rebind with error binding: check result?, err? { ... }
+    fn validateResult(): string {
+        const result: Result<i64, string> = Error("something went wrong")
+        check result?, err? {
+            return "caught: ${err}"
+        }
+        return "got: ${result}"
+    }
+    assert(validateResult() == "caught: something went wrong", "error binding captures error value")
+    
+    // Test error binding with Ok case (should skip failure block)
+    fn validateOk(): i64 {
+        const result: Result<i64, string> = Ok(100)
+        check result?, err? {
+            return -1  // Should not reach here
+        }
+        return result
+    }
+    assert(validateOk() == 100, "Ok case with error binding skips failure block")
+
+    // Test `if (name?)` guard with Result<T, E>
+    fn unwrap_result_guard(r: Result<i64, string>): i64 {
+        if (r?) return r : return -1
+    }
+    const ok_r: Result<i64, string> = Ok(7)
+    const bad_r: Result<i64, string> = Error("no")
+    assert(unwrap_result_guard(ok_r) == 7, "if guard unwraps Ok")
+    assert(unwrap_result_guard(bad_r) == -1, "if guard skips Error")
+
+    // Test that `check name?` can upgrade a const binding
+    fn check_const_upgrade(): i64 {
+        const n: i64? = Value(5)
+        check n? { return -1 }
+        return n
+    }
+    assert(check_const_upgrade() == 5, "check upgrades const Maybe")
+
+    fn check_const_upgrade_null(): i64 {
+        const n: i64? = null
+        check n? { return -1 }
+        return n
+    }
+    assert(check_const_upgrade_null() == -1, "check failure path still works")
+    
+    print("Optional Parameters Tests Passed")
+}
+
+fn test_null_keyword() {
+    print("--- null Keyword Tests ---")
+    
+    // Test 1: null is equivalent to Maybe::Null
+    var m1 = null
+    match (m1) {
+        Null => assert(true, "null matches Null"),
+        _ => assert(false, "null should match Null")
+    }
+    
+    // Test 2: null comparison with Maybe::Null
+    var m2 = Null
+    assert(m1 == m2, "null equals Null")
+    assert(m2 == null, "Null equals null")
+    
+    // Test 3: null in function return
+    fn maybe_value(flag: bool): Maybe<i64> {
+        if (flag) return Value(42)
+        return null  // Use null instead of Null
+    }
+    
+    match (maybe_value(false)) {
+        Null => assert(true, "returned null"),
+        _ => assert(false, "should return null")
+    }
+    
+    match (maybe_value(true)) {
+        Value(v) => assert(v == 42, "returned Value(42)"),
+        _ => assert(false, "should return Value")
+    }
+    
+    // Test 4: null coalescing with null
+    var m3: Maybe<i64> = null
+    var result = m3 ?? 100
+    assert(result == 100, "null ?? 100 should be 100")
+    
+    var m4 = Value(50)
+    var result2 = m4 ?? 100
+    assert(result2 == 50, "Value(50) ?? 100 should be 50")
+    
+    // Test 5: check rebind with null
+    fn check_null(x?: i64): string {
+        check x? {
+            return "was null"
+        }
+        return "was ${x}"
+    }
+    assert(check_null() == "was null", "check null case")
+    assert(check_null(7) == "was 7", "check value case")
+    
+    // Test 6: Comparison: Value(x) == x
+    var m5 = Value(42)
+    assert(m5 == 42, "Value(42) should equal 42")
+    assert(42 == m5, "42 should equal Value(42)")
+    
+    // Test 7: Compare null != Value(x)
+    var m6: Maybe<i64> = null
+    assert(m6 != 42, "null should not equal 42")
+    assert(42 != m6, "42 should not equal null")
+    
+    // Test 8: !x on Maybe types (null check)
+    var m7: Maybe<string> = null
+    if (!m7) {
+        assert(true, "!null should be true")
+    } : {
+        assert(false, "!null branch failed")
+    }
+    
+    var m8 = Value("hello")
+    if (!m8) {
+        assert(false, "!Value should be false")
+    } : {
+        assert(true, "!Value(hello) is false, so else branch runs")
+    }
+    
+    // Test 9: Combine ! with if-else for null checks
+    fn describe_maybe(x?: i64): string {
+        if (!x) return "is null"
+        return "has value"
+    }
+    assert(describe_maybe() == "is null", "describe null case")
+    assert(describe_maybe(5) == "has value", "describe value case")
+    
+    print("null Keyword Tests Passed")
+}
+
+fn test_nullable_type_syntax() {
+    print("--- Nullable Type Syntax (T?) Tests ---")
+    
+    // Test 1: i64? is equivalent to Maybe<i64>
+    var x: i64? = null
+    match (x) {
+        Null => assert(true, "i64? == null matches Null"),
+        _ => assert(false, "should be Null")
+    }
+    
+    // Test 2: Assign Value to nullable type
+    var y: string? = Value("hello")
+    match (y) {
+        Value(s) => assert(s == "hello", "string? with Value"),
+        _ => assert(false, "should be Value")
+    }
+    
+    // Test 3: Function returning T?
+    fn find_value(id: i64): i64? {
+        if (id == 1) return Value(100)
+        return null
+    }
+    
+    match (find_value(1)) {
+        Value(v) => assert(v == 100, "find_value(1) returns Value(100)"),
+        _ => assert(false, "should return Value")
+    }
+    
+    match (find_value(99)) {
+        Null => assert(true, "find_value(99) returns null"),
+        _ => assert(false, "should return null")
+    }
+    
+    // Test 4: Null coalescing with T?
+    var z: i64? = null
+    var result = z ?? 42
+    assert(result == 42, "null ?? 42 should be 42")
+    
+    // Test 5: Complex types with ?
+    var arr: array<i64>? = null
+    assert(!arr, "array<i64>? can be null")
+    
+    // Note: T?? (nested nullable) is not supported because ?? is the null-coalescing operator
+    // Use Maybe<Maybe<T>> explicitly for nested optionals if needed
+    
+    print("Nullable Type Syntax Tests Passed")
+}
+
+fn test_optional_model_fields() {
+    print("--- Optional Model Fields Tests ---")
+
+    // Optional field with default
+    const user1 = OptionalUser { name: "Alice" }
+    const { age: age1, nickname: nick1 } = user1
+
+    check age1? { assert(false, "optional age should have default") }
+    assert(age1 == 42, "optional age default should be 42")
+    assert(!nick1, "optional nickname should be null when missing")
+
+    // Optional field provided
+    const user2 = OptionalUser { name: "Bob", age: 7, nickname: "B" }
+    const { age: age2, nickname: nick2 } = user2
+
+    check age2? { assert(false, "optional age should be present") }
+    check nick2? { assert(false, "optional nickname should be present") }
+    assert(age2 == 7, "optional age should match provided value")
+    assert(nick2 == "B", "optional nickname should match provided value")
+
+    // Direct access returns Maybe
+    const maybe_age = user1.age
+    check maybe_age? { assert(false, "direct optional age should be Maybe with value") }
+    assert(maybe_age == 42, "direct optional age should be 42")
+
+    print("Optional Model Fields Tests Passed")
+}
+
+fn test_optional_chaining() {
+    print("--- Optional Chaining (?.) Tests ---")
+    
+    // Test 1: Optional field access on null
+    var user: User? = null
+    var name = user?.name
+    assert(!name, "user?.name on null should be null")
+    
+    // Test 2: Optional field access on value
+    var user2: User? = Value(User { name: "Alice", age: 30 })
+    var name2 = user2?.name
+    match (name2) {
+        Value(n) => assert(n == "Alice", "user?.name on value should be Alice"),
+        _ => assert(false, "should have a value")
+    }
+    
+    // Test 3: Optional chaining with ??
+    var user3: User? = null
+    var safeName = user3?.name ?? "Unknown"
+    assert(safeName == "Unknown", "null?.field ?? default should return default")
+    
+    var user4 = Value(User { name: "Bob", age: 25 })
+    var safeName2 = user4?.name ?? "Unknown"
+    assert(safeName2 == "Bob", "value?.field ?? default should return field value")
+    
+    // Test 4: Chained optional access
+    var holder: UserHolder? = null
+    var nestedName = holder?.user?.name
+    assert(!nestedName, "null?.x?.y should be null")
+    
+    print("Optional Chaining Tests Passed")
+}
+
+fn test_generic_types() {
+    print("--- Generic Types Tests ---")
+    
+    // Test generic model instantiation with type inference
+    const intContainer = Container { value: 42 }
+    assert(intContainer.value == 42, "Container<i64> value")
+    
+    const strContainer = Container { value: "hello" }
+    assert(strContainer.value == "hello", "Container<string> value")
+    
+    // Test multi-param generic model
+    const pair = Pair { key: "name", val: 100 }
+    assert(pair.key == "name", "Pair key")
+    assert(pair.val == 100, "Pair val")
+    
+    // Test mutable generic models
+    var mutableBox = Container { value: 10 }
+    mutableBox.value = 20  // Same type, should work
+    assert(mutableBox.value == 20, "mutable Container update")
+    
+    // Test generic enum with type inference
+    const opt = Some(99)
+    match (opt) {
+        Some(v) => assert(v == 99, "Option Some value"),
+        None => assert(false, "Should not be None")
+    }
+    
+    // Test None variant
+    const noneOpt = None
+    match (noneOpt) {
+        Some(v) => assert(false, "Should not be Some"),
+        None => assert(true, "Option None")
+    }
+    
+    print("Generic Types Tests Passed")
+}
+
+fn test_type_alias_and_union() {
+    print("--- Type Alias + Union Tests ---")
+
+    // A union-typed variable can be assigned either member, as long as it stays within the declared type.
+    var x: IntOrString = "hello"
+    assert(x == "hello", "IntOrString accepts string")
+
+    x = 123
+    assert(x == 123, "IntOrString accepts i64")
+
+    // Alias of alias should resolve.
+    var y: AliasIntOrString = 7
+    assert(y == 7, "AliasIntOrString resolves")
+
+    y = "world"
+    assert(y == "world", "AliasIntOrString accepts string")
+
+    // Union type can be nested inside generics.
+    const ch = channel<IntOrString>()
+    ch <- "a"
+    ch <- 2
+
+    const r1 = <- ch
+    assert(r1 == "a", "channel<IntOrString> receives string")
+
+    const r2 = <- ch
+    assert(r2 == 2, "channel<IntOrString> receives i64")
+
+    print("Type Alias + Union Tests Passed")
+}
+
+fn test_env() {
+    print("--- Environment Variable Tests ---")
+    
+    // Test env.has() - PATH should exist on most systems
+    const has_path = env.has("PATH")
+    assert(has_path == true, "PATH should exist")
+
+    // Test env.has() with non-existent var
+    const has_fake = env.has("THIS_VAR_DOES_NOT_EXIST_12345")
+    assert(has_fake == false, "Non-existent var should not exist")
+
+    // Test env.get() with existing var
+    const path_maybe = env.get("PATH")
+    match (path_maybe) {
+        Value(path) => assert(true, "PATH should have a value"),
+        Null => assert(false, "PATH should not be null"),
+    }
+
+    // Test env.get() with non-existent var  
+    const fake_maybe = env.get("THIS_VAR_DOES_NOT_EXIST_12345")
+    match (fake_maybe) {
+        Value(v) => assert(false, "Non-existent var should be null"),
+        Null => assert(true, "Non-existent var correctly returns Null"),
+    }
+
+    // Test with ?? operator (null coalescing)
+    const db_url = env.get("DATABASE_URL") ?? "postgres://localhost/dev"
+    
+    // Verify default was used (assuming DATABASE_URL isn't set)
+    const has_db_url = env.has("DATABASE_URL")
+    if (!has_db_url) assert(db_url == "postgres://localhost/dev", "Default should be used")
+
+    // Test .env file auto-loading with property access syntax
+    const dotenv_var = env.TEST_FROM_DOTENV
+    match (dotenv_var) {
+        Value(v) => assert(v == "hello_from_dotenv", ".env property access works"),
+        Null => print("(skipped .env test - file not present)"),
+    }
+
+    // Test property access with null coalescing
+    const prop_default = env.NON_EXISTENT_PROPERTY ?? "fallback"
+    assert(prop_default == "fallback", "Property access with ?? works")
+
+    print("Environment Variable Tests Passed")
+}
+
+fn test_file_io() {
+    print("--- File I/O Tests ---")
+    
+    const test_file = "test_io_temp_main.txt"
+    const content = "Hello from main.ngn!"
+    
+    // Test write
+    const write_result = file.write(test_file, content)
+    match (write_result) {
+        Ok(v) => assert(true, "write succeeded"),
+        Error(e) => assert(false, "write failed: ${e}"),
+    }
+    
+    // Test exists (should be true now)
+    assert(file.exists(test_file) == true, "File should exist after write")
+    
+    // Test read
+    const read_result = file.read(test_file)
+    match (read_result) {
+        Ok(data) => assert(data == content, "Read content matches"),
+        Error(e) => assert(false, "read failed: ${e}"),
+    }
+    
+    // Test append
+    const extra = "\nMore content!"
+    const append_result = file.append(test_file, extra)
+    match (append_result) {
+        Ok(v) => assert(true, "append succeeded"),
+        Error(e) => assert(false, "append failed"),
+    }
+    
+    // Test delete
+    const delete_result = file.delete(test_file)
+    match (delete_result) {
+        Ok(v) => assert(true, "delete succeeded"),
+        Error(e) => assert(false, "delete failed"),
+    }
+    
+    // Verify file is gone
+    assert(file.exists(test_file) == false, "File should not exist after delete")
+    
+    // Test read non-existent file (should return Error)
+    const read_missing = file.read("nonexistent_file_12345.txt")
+    match (read_missing) {
+        Ok(data) => assert(false, "Read non-existent should fail"),
+        Error(e) => assert(true, "Non-existent file correctly returns Error"),
+    }
+    
+    print("File I/O Tests Passed")
+}
+
+fn test_destructuring() {
+    print("--- Destructuring Tests ---")
+
+    // Test 1: Basic object destructuring
+    const person = { name: "Alice", age: 30, city: "NYC" }
+    const { name, age } = person
+    check name? { assert(false, "Object destructuring: name missing") }
+    check age? { assert(false, "Object destructuring: age missing") }
+    assert(name == "Alice", "Object destructuring: name")
+    assert(age == 30, "Object destructuring: age")
+    
+    // Test 2: Object destructuring with alias
+    const user = { id: 42, email: "test@example.com" }
+    const { id, email: userEmail } = user
+    check id? { assert(false, "Destructuring alias: id missing") }
+    check userEmail? { assert(false, "Destructuring alias: email missing") }
+    assert(id == 42, "Destructuring alias: id")
+    assert(userEmail == "test@example.com", "Destructuring alias: email -> userEmail")
+    
+    // Test 3: Object destructuring with rest
+    const data = { a: 1, b: 2, c: 3, d: 4 }
+    const { a, b, ...rest } = data
+    check a? { assert(false, "Object rest: a missing") }
+    check b? { assert(false, "Object rest: b missing") }
+    check rest? { assert(false, "Object rest: rest missing") }
+    assert(a == 1, "Object rest: a")
+    assert(b == 2, "Object rest: b")
+    assert(rest.c == 3, "Object rest: rest.c")
+    assert(rest.d == 4, "Object rest: rest.d")
+    
+    // Test 4: Basic array destructuring
+    const arr = [10, 20, 30, 40]
+    const [first, second] = arr
+    assert(first == 10, "Array destructuring: first")
+    assert(second == 20, "Array destructuring: second")
+    
+    // Test 5: Array destructuring with rest
+    const nums = [1, 2, 3, 4, 5]
+    const [head, ...tail] = nums
+    assert(head == 1, "Array rest: head")
+    assert(tail.size() == 4, "Array rest: tail size")
+    assert(tail[0] == 2, "Array rest: tail[0]")
+    assert(tail[3] == 5, "Array rest: tail[3]")
+    
+    // Test 6: Destructuring with model instances (using unique names)
+    // Model destructuring returns direct values (not Maybe), so no check needed
+    var point = Point { x: 5, y: 10 }
+    const { x: px, y: py } = point
+    assert(px == 5, "Model destructuring: x")
+    assert(py == 10, "Model destructuring: y")
+    
+    // Test 7: Mutable array destructuring
+    var items = ["a", "b", "c"]
+    var [first_item, second_item, third_item] = items
+    assert(first_item == "a", "Mutable array destruct: first")
+    assert(second_item == "b", "Mutable array destruct: second")
+    assert(third_item == "c", "Mutable array destruct: third")
+    
+    // Test 8: Destructuring from inline object literal
+    const { x: coordX, y: coordY } = { x: 100, y: 200 }
+    check coordX? { assert(false, "Inline object destruct: x missing") }
+    check coordY? { assert(false, "Inline object destruct: y missing") }
+    assert(coordX == 100, "Inline object destruct: x")
+    assert(coordY == 200, "Inline object destruct: y")
+
+    // Test 9: Destructuring from field access expression
+    const wrapped = { params: { name: "echo", arguments: { text: "hello" } } }
+    const { name: toolName, arguments: toolArgs } = wrapped.params
+    check toolName? { assert(false, "Field access destruct: name missing") }
+    check toolArgs? { assert(false, "Field access destruct: arguments missing") }
+    assert(toolName == "echo", "Field access destruct: name")
+    assert(toolArgs.text == "hello", "Field access destruct: arguments.text")
+    
+    // Test 10: Basic tuple destructuring
+    const tup = (10, "hello", true)
+    const (num, str, flag) = tup
+    assert(num == 10, "Tuple destructuring: num")
+    assert(str == "hello", "Tuple destructuring: str")
+    assert(flag == true, "Tuple destructuring: flag")
+    
+    // Test 11: Tuple destructuring with rest
+    const tup2 = (1, 2, 3, 4, 5)
+    const (first_t, second_t, ...rest_t) = tup2
+    assert(first_t == 1, "Tuple rest: first")
+    assert(second_t == 2, "Tuple rest: second")
+    assert(rest_t.size() == 3, "Tuple rest: rest size")
+    
+    // Test 12: Mutable tuple destructuring
+    var coords = (100, 200)
+    var (mx, my) = coords
+    mx = 150
+    assert(mx == 150, "Mutable tuple destruct: mx updated")
+    assert(my == 200, "Mutable tuple destruct: my unchanged")
+    
+    print("Destructuring Tests Passed")
+}
+
+fn test_time() {
+    print("--- Time API Tests ---")
+    
+    // Test time.now() - returns DateTime with local time
+    const now = time.now()
+    assert(now.year >= 2026, "time.now(): year should be >= 2026")
+    assert(now.month >= 1, "time.now(): month should be 1-12")
+    assert(now.month <= 12, "time.now(): month should be 1-12")
+    assert(now.day >= 1, "time.now(): day should be 1-31")
+    assert(now.day <= 31, "time.now(): day should be 1-31")
+    assert(now.hour >= 0, "time.now(): hour should be 0-23")
+    assert(now.hour <= 23, "time.now(): hour should be 0-23")
+    assert(now.minute >= 0, "time.now(): minute should be 0-59")
+    assert(now.minute <= 59, "time.now(): minute should be 0-59")
+    assert(now.second >= 0, "time.now(): second should be 0-59")
+    assert(now.second <= 59, "time.now(): second should be 0-59")
+    assert(now.weekday >= 0, "time.now(): weekday should be 0-6")
+    assert(now.weekday <= 6, "time.now(): weekday should be 0-6")
+    assert(now.timestamp > 0, "time.now(): timestamp should be positive")
+    assert(now.timestampMs > 0, "time.now(): timestampMs should be positive")
+    
+    // Test time.utc() - returns DateTime with UTC time
+    const utc = time.utc()
+    assert(utc.year >= 2026, "time.utc(): year should be >= 2026")
+    assert(utc.timestamp > 0, "time.utc(): timestamp should be positive")
+    
+    // Test time.unix() - returns i64 Unix timestamp in seconds
+    const unix = time.unix()
+    assert(unix > 1700000000, "time.unix(): should be a reasonable timestamp")
+    
+    // Test time.unixMs() - returns i64 Unix timestamp in milliseconds
+    const unixMs = time.unixMs()
+    assert(unixMs > 1700000000000, "time.unixMs(): should be a reasonable timestamp in ms")
+    assert(unixMs >= unix * 1000, "time.unixMs(): should be >= unix * 1000")
+
+    // Test time.parse() - parses a date string
+    const parsed = time.parse("2026-01-21 15:30:45", "%Y-%m-%d %H:%M:%S")
+    match (parsed) {
+        Ok(dt) => {
+            assert(dt.year == 2026, "time.parse(): year should be 2026")
+            assert(dt.month == 1, "time.parse(): month should be 1")
+            assert(dt.day == 21, "time.parse(): day should be 21")
+            assert(dt.hour == 15, "time.parse(): hour should be 15")
+            assert(dt.minute == 30, "time.parse(): minute should be 30")
+            assert(dt.second == 45, "time.parse(): second should be 45")
+        },
+        Error(e) => {
+            assert(false, "time.parse() should not fail on valid input")
+        }
+    }
+    
+    // Test time.parse() with invalid input - should return Error
+    const bad = time.parse("not a date", "%Y-%m-%d")
+    match (bad) {
+        Ok(dt) => assert(false, "time.parse() should fail on invalid input"),
+        Error(e) => assert(true, "time.parse() correctly returned Error for invalid input")
+    }
+
+    // Test time.parse() with different format (date only, no time)
+    const parsed2 = time.parse("15-06-2025 00:00:00", "%d-%m-%Y %H:%M:%S")
+    match (parsed2) {
+        Ok(dt) => {
+            assert(dt.year == 2025, "time.parse() with custom format: year")
+            assert(dt.month == 6, "time.parse() with custom format: month")
+            assert(dt.day == 15, "time.parse() with custom format: day")
+        },
+        Error(e) => {
+            // Just check that we got an Error properly
+            assert(true)
+        }
+    }
+    
+    print("Time API Tests Passed")
+}
+
+fn test_math() {
+    print("--- Math Module Tests ---")
+    
+    // Test abs
+    assert(abs(-5) == 5)
+    assert(abs(5) == 5)
+    assert(abs(-3.14) == 3.14)
+    
+    // Test round
+    assert(round(3.4) == 3.0)
+    assert(round(3.5) == 4.0)
+    assert(round(-2.7) == -3.0)
+    
+    // Test floor
+    assert(floor(3.9) == 3.0)
+    assert(floor(-2.1) == -3.0)
+    
+    // Test ceil
+    assert(ceil(3.1) == 4.0)
+    assert(ceil(-2.9) == -2.0)
+    
+    // Test trunc
+    assert(trunc(3.9) == 3.0)
+    assert(trunc(-3.9) == -3.0)
+    
+    // Test sqrt
+    assert(sqrt(4) == 2.0)
+    assert(sqrt(9.0) == 3.0)
+    assert(sqrt(16) == 4.0)
+    
+    // Test pow
+    assert(pow(2, 3) == 8.0)
+    assert(pow(3, 2) == 9.0)
+    assert(pow(2, 0) == 1.0)
+    
+    // Test exp
+    const exp1 = exp(1)
+    assert(exp1 > 2.718, "exp(1) should be > 2.718")
+    assert(exp1 < 2.719, "exp(1) should be < 2.719")
+    assert(exp(0) == 1.0)
+    
+    // Test log (natural logarithm)
+    const log1 = log(2.718281828)
+    assert(log1 > 0.999, "log(e) should be ~1")
+    assert(log1 < 1.001, "log(e) should be ~1")
+    
+    // Test log10
+    assert(log10(100) == 2.0)
+    assert(log10(1000) == 3.0)
+    
+    // Test log2
+    assert(log2(8) == 3.0)
+    assert(log2(16) == 4.0)
+    
+    // Test min
+    assert(min(5, 3) == 3.0)
+    assert(min(1, 2, 3) == 1.0)
+    assert(min(-5, -3) == -5.0)
+    
+    // Test max
+    assert(max(5, 3) == 5.0)
+    assert(max(1, 2, 3) == 3.0)
+    assert(max(-5, -3) == -3.0)
+    
+    // Test sign
+    assert(sign(5) == 1.0)
+    assert(sign(-5) == -1.0)
+    assert(sign(0) == 0.0)
+    
+    // Test clamp
+    assert(clamp(5, 0, 10) == 5.0)
+    assert(clamp(-5, 0, 10) == 0.0)
+    assert(clamp(15, 0, 10) == 10.0)
+    
+    // Test PI
+    const pi = PI()
+    assert(pi > 3.141, "PI should be > 3.141")
+    assert(pi < 3.142, "PI should be < 3.142")
+    
+    // Test sin
+    assert(sin(0) == 0.0)
+    const sin_pi_2 = sin(pi / 2)
+    assert(sin_pi_2 > 0.999, "sin(PI/2) should be ~1")
+    assert(sin_pi_2 < 1.001, "sin(PI/2) should be ~1")
+    
+    // Test cos
+    assert(cos(0) == 1.0)
+    const cos_pi = cos(pi)
+    assert(cos_pi > -1.001, "cos(PI) should be ~-1")
+    assert(cos_pi < -0.999, "cos(PI) should be ~-1")
+    
+    // Test tan
+    assert(tan(0) == 0.0)
+    
+    // Test asin
+    const asin_1 = asin(1)
+    assert(asin_1 > 1.57, "asin(1) should be ~PI/2")
+    assert(asin_1 < 1.58, "asin(1) should be ~PI/2")
+    
+    // Test acos
+    const acos_0 = acos(0)
+    assert(acos_0 > 1.57, "acos(0) should be ~PI/2")
+    assert(acos_0 < 1.58, "acos(0) should be ~PI/2")
+    
+    // Test atan
+    const atan_1 = atan(1)
+    assert(atan_1 > 0.785, "atan(1) should be ~PI/4")
+    assert(atan_1 < 0.786, "atan(1) should be ~PI/4")
+    
+    // Test atan2
+    const atan2_result = atan2(1, 1)
+    assert(atan2_result > 0.785, "atan2(1,1) should be ~PI/4")
+    assert(atan2_result < 0.786, "atan2(1,1) should be ~PI/4")
+    
+    print("Math Module Tests Passed")
+}
+
+fn test_emoji() {
+    print("--- Emoji Support Tests ---")
+    
+    // Global with emoji
+    assert(🌍 == "world", "Global emoji variable")
+    
+    // Test model instantiation with emoji fields
+    var house = 🏠 { 🚪: "wooden", 🪟: 4 }
+    assert(house.🚪 == "wooden", "Emoji field access")
+    assert(house.🪟 == 4, "Emoji field value")
+    
+    // Local constants with emojis
+    const 🎉 = "celebration"
+    const 🚀 = 42
+    assert(🎉 == "celebration", "Const with emoji")
+    assert(🚀 == 42, "Const with emoji numeric")
+    
+    // Variable with emoji
+    var 😀 = "smile"
+    assert(😀 == "smile", "Var with emoji")
+    😀 = "happy"
+    assert(😀 == "happy", "Reassigned var with emoji")
+    
+    // Object with emoji fields
+    const obj = {
+      🔑: "key",
+      🔒: "lock",
+      🎯: 100
+    }
+    assert(obj.🔑 == "key", "Object emoji field 🔑")
+    assert(obj.🔒 == "lock", "Object emoji field 🔒")
+    assert(obj.🎯 == 100, "Object emoji field 🎯")
+    
+    // Function with emoji parameter
+    fn greet(👋: string): string {
+      return "${👋}!"
+    }
+    assert(greet("Hello") == "Hello!", "Function with emoji parameter")
+    
+    // Function returning emoji-named model
+    fn create_house(): 🏠 {
+      return 🏠 {
+        🚪: "metal",
+        🪟: 6
+      }
+    }
+    const new_house = create_house()
+    assert(new_house.🚪 == "metal", "Function returning model with emoji fields")
+    assert(new_house.🪟 == 6, "Emoji model field value from function")
+    
+    // Test emoji in expressions
+    var 🎊 = 🚀 + 8
+    assert(🎊 == 50, "Emoji in arithmetic expression")
+    
+    // Test emoji in array
+    const emojis = [🎉, 😀, 🌍]
+    assert(emojis.size() == 3, "Array with emoji variables")
+    assert(emojis[0] == "celebration", "Array emoji element 0")
+    assert(emojis[1] == "happy", "Array emoji element 1")
+    assert(emojis[2] == "world", "Array emoji element 2")
+    
+    // Test emoji in tuple
+    const emoji_tuple = (🚀, 🎊)
+    const (first_emoji, second_emoji) = emoji_tuple
+    assert(first_emoji == 42, "Tuple emoji element 0")
+    assert(second_emoji == 50, "Tuple emoji element 1")
+    
+    const emoji_message = "Emoji Support Tests Passed ${❤️}"
+    assert(emoji_message == "Emoji Support Tests Passed ❤️", "Emoji literal interpolation")
+    echo("Echo emoji: ${❤️}\n")
+    print() // naked line return
+    print("Emoji Support Tests Passed ${❤️}")
+}
