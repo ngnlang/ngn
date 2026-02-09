@@ -53,13 +53,13 @@ embed-runtime:
 # Build aarch64 binaries if cross toolchain is available
 release-aarch64:
 	@if rustup target list --installed | grep -q $(TARGET_ARM); then \
-		if command -v aarch64-linux-musl-gcc >/dev/null 2>&1; then \
+		if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then \
 			NGN_SKIP_RUNTIME_COPY=1 $(BUILD_CMD) build --release -p ngn --bin runtime --target $(TARGET_ARM); \
 			NGN_EMBED_RUNTIME=target/$(TARGET_ARM)/release/runtime \
 				$(BUILD_CMD) build --release -p ngn --bin ngn --target $(TARGET_ARM); \
 			cp target/$(TARGET_ARM)/release/runtime target/$(TARGET_ARM)/release/ngnr; \
 		else \
-			echo "Skipping aarch64 release: missing aarch64-linux-musl-gcc"; \
+			echo "Skipping aarch64 release: missing aarch64-linux-gnu-gcc"; \
 		fi; \
 	else \
 		echo "Skipping aarch64 release: rust target $(TARGET_ARM) not installed"; \
