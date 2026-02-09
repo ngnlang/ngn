@@ -9,7 +9,7 @@ EMBED_DIR := target/embed
 
 # Targets
 TARGET_X86 := x86_64-unknown-linux-musl
-TARGET_ARM := aarch64-unknown-linux-musl
+TARGET_ARM := aarch64-unknown-linux-gnu
 
 # Build everything
 all: dist lsp

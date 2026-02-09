@@ -54,7 +54,7 @@ jobs:
           ./target/release/ngn run tests/test_thread_state_shared.ngn
 
   linux-aarch64-build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     timeout-minutes: 45
 
     steps:
@@ -64,11 +64,16 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
+      - name: Install aarch64 toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: Add aarch64 target
+        run: rustup target add aarch64-unknown-linux-gnu
 
       - name: Build (aarch64)
         run: |
-          NGN_SKIP_RUNTIME_COPY=1 cross build --release -p ngn --bin runtime --target aarch64-unknown-linux-musl
-          NGN_EMBED_RUNTIME=target/aarch64-unknown-linux-musl/release/runtime \
-            cross build --release -p ngn --bin ngn --target aarch64-unknown-linux-musl
+          NGN_SKIP_RUNTIME_COPY=1 cargo build --release -p ngn --bin runtime --target aarch64-unknown-linux-gnu
+          NGN_EMBED_RUNTIME=target/aarch64-unknown-linux-gnu/release/runtime \
+            cargo build --release -p ngn --bin ngn --target aarch64-unknown-linux-gnu

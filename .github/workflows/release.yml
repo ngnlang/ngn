@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build-and-release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     timeout-minutes: 45
 
     steps:
@@ -20,34 +20,19 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install musl toolchains
+      - name: Install cross and toolchains
         run: |
+          cargo install cross --git https://github.com/cross-rs/cross
           sudo apt-get update
-          sudo apt-get install -y musl-tools musl-dev
-          # Install aarch64 musl cross-compiler
-          wget -q https://musl.cc/aarch64-linux-musl-cross.tgz
-          tar -xzf aarch64-linux-musl-cross.tgz
-          echo "$PWD/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
-
-      - name: Add musl targets
-        run: |
-          rustup target add x86_64-unknown-linux-musl
-          rustup target add aarch64-unknown-linux-musl
-
-      - name: Configure cargo for cross-compilation
-        run: |
-          mkdir -p .cargo
-          cat >> .cargo/config.toml <<EOF
-          [target.aarch64-unknown-linux-musl]
-          linker = "aarch64-linux-musl-gcc"
-          EOF
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          rustup target add aarch64-unknown-linux-gnu
 
       - name: Build and package
         env:
           NGN_LLAMA_BACKEND: cpu
         run: |
           set -euo pipefail
-          make dist VERSION=${GITHUB_REF_NAME}
+          make dist VERSION=${GITHUB_REF_NAME} BUILD_CMD=cross
           if [ -f "dist/ngn-${GITHUB_REF_NAME}-linux-x86_64.tar.gz" ]; then
             cp dist/ngn-${GITHUB_REF_NAME}-linux-x86_64.tar.gz dist/ngn-latest-linux-x86_64.tar.gz
           fi
