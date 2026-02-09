@@ -8,7 +8,7 @@ name: ci
 
 jobs:
   linux-cpu:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 45
 
     env:
@@ -54,7 +54,7 @@ jobs:
           ./target/release/ngn run tests/test_thread_state_shared.ngn
 
   linux-aarch64-build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 45
 
     steps:
