@@ -124,6 +124,15 @@ fn main() {
 
     let args: Vec<String> = env::args().collect();
 
+    if args.len() >= 2 {
+        let command = args[1].as_str();
+        if command == "upgrade" {
+            let flags = &args[2..];
+            run_upgrade(flags);
+            return;
+        }
+    }
+
     if args.len() == 2 {
         let flag = args[1].as_str();
         if flag == "--version" || flag == "-V" {
@@ -136,6 +145,7 @@ fn main() {
         println!("Usage:");
         println!("  ngn run <file.ngn>           - Compile and run immediately");
         println!("  ngn build <file.ngn> [--bundle] [--stats]  - Compile to .mod or bundle");
+        println!("  ngn upgrade [--version <ver>] [--arch <arch>] [--dir <path>]  - Upgrade ngn in place");
         return;
     }
 
@@ -699,6 +709,136 @@ fn main() {
         }
         _ => println!("Unknown command: {}", command),
     }
+}
+
+fn run_upgrade(flags: &[String]) {
+    let mut version_override: Option<String> = None;
+    let mut arch_override: Option<String> = None;
+    let mut dir_override: Option<PathBuf> = None;
+    let mut i = 0;
+
+    while i < flags.len() {
+        match flags[i].as_str() {
+            "--version" => {
+                if i + 1 >= flags.len() {
+                    eprintln!("ngn Error: --version requires a value");
+                    std::process::exit(1);
+                }
+                version_override = Some(flags[i + 1].clone());
+                i += 2;
+            }
+            "--arch" => {
+                if i + 1 >= flags.len() {
+                    eprintln!("ngn Error: --arch requires a value");
+                    std::process::exit(1);
+                }
+                arch_override = Some(flags[i + 1].clone());
+                i += 2;
+            }
+            "--dir" => {
+                if i + 1 >= flags.len() {
+                    eprintln!("ngn Error: --dir requires a value");
+                    std::process::exit(1);
+                }
+                dir_override = Some(PathBuf::from(flags[i + 1].clone()));
+                i += 2;
+            }
+            "-h" | "--help" => {
+                println!("Usage:");
+                println!("  ngn upgrade [--version <ver>] [--arch <arch>] [--dir <path>]");
+                return;
+            }
+            other => {
+                eprintln!("ngn Error: Unknown flag '{}'", other);
+                eprintln!("  Use --help for usage");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    let install_dir = dir_override
+        .or_else(find_current_install_dir)
+        .unwrap_or_else(|| {
+            eprintln!("ngn Error: Could not determine install directory");
+            eprintln!("  Use --dir to specify it explicitly");
+            std::process::exit(1);
+        });
+
+    let script_url = "https://ngnlang.com/install";
+    let response = reqwest::blocking::get(script_url).unwrap_or_else(|err| {
+        eprintln!("ngn Error: Failed to download installer: {}", err);
+        std::process::exit(1);
+    });
+
+    if !response.status().is_success() {
+        eprintln!(
+            "ngn Error: Installer download failed with status {}",
+            response.status()
+        );
+        std::process::exit(1);
+    }
+
+    let script = response.text().unwrap_or_else(|err| {
+        eprintln!("ngn Error: Failed to read installer: {}", err);
+        std::process::exit(1);
+    });
+
+    let mut command = std::process::Command::new("/bin/bash");
+    command.arg("-s").arg("--");
+    if let Some(arch) = &arch_override {
+        command.arg("-a").arg(arch);
+    }
+
+    command.env("NGN_INSTALL_DIR", &install_dir);
+    if let Some(version) = &version_override {
+        command.env("NGN_VERSION", version);
+    }
+
+    let mut child = command
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .unwrap_or_else(|err| {
+            eprintln!("ngn Error: Failed to run bash: {}", err);
+            std::process::exit(1);
+        });
+
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        stdin.write_all(script.as_bytes()).unwrap_or_else(|err| {
+            eprintln!("ngn Error: Failed to send installer to bash: {}", err);
+            std::process::exit(1);
+        });
+    }
+
+    let status = child.wait().unwrap_or_else(|err| {
+        eprintln!("ngn Error: Failed to wait for installer: {}", err);
+        std::process::exit(1);
+    });
+
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+}
+
+fn find_current_install_dir() -> Option<PathBuf> {
+    if let Ok(path) = env::current_exe() {
+        if let Some(parent) = path.parent() {
+            return Some(parent.to_path_buf());
+        }
+    }
+
+    if let Ok(paths) = env::var("PATH") {
+        for path in env::split_paths(&paths) {
+            let candidate = path.join("ngn");
+            if candidate.is_file() {
+                return Some(path);
+            }
+        }
+    }
+
+    None
 }
 
 fn print_bytecode_stats(
