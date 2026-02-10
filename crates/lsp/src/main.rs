@@ -36,8 +36,8 @@ struct ModuleExports {
 }
 
 fn offset_to_position(text: &str, offset: usize) -> Position {
-    let mut line = 0;
-    let mut last_line_start = 0;
+    let mut line = 0u32;
+    let mut last_line_start = 0usize;
     for (i, c) in text.char_indices() {
         if i >= offset {
             break;
@@ -52,7 +52,9 @@ fn offset_to_position(text: &str, offset: usize) -> Position {
     } else {
         text.len()
     };
-    let character = text[last_line_start..slice_len].chars().count() as u32;
+    let character = text[last_line_start..slice_len]
+        .encode_utf16()
+        .count() as u32;
     Position { line, character }
 }
 
@@ -60,14 +62,14 @@ fn position_to_offset(text: &str, position: Position) -> usize {
     let mut line = 0u32;
     let mut col = 0u32;
     for (i, c) in text.char_indices() {
-        if line == position.line && col == position.character {
+        if line == position.line && col >= position.character {
             return i;
         }
         if c == '\n' {
             line += 1;
             col = 0;
         } else {
-            col += 1;
+            col += c.len_utf16() as u32;
         }
     }
     text.len()
@@ -1555,17 +1557,17 @@ impl LanguageServer for Backend {
         let mut scopes: Vec<std::collections::HashSet<String>> =
             vec![std::collections::HashSet::new()]; // Global scope
 
-        // Build line/column index from the source (character-based for LSP)
-        let mut line_starts = vec![0];
-        let mut char_count = 0;
+        // Build line/column index from the source (UTF-16 based for LSP)
+        let mut _line_starts = vec![0];
+        let mut _char_count = 0u32;
         for (_i, c) in text.char_indices() {
-            char_count += 1;
+            _char_count += c.len_utf16() as u32;
             if c == '\n' {
-                line_starts.push(char_count);
+                _line_starts.push(_char_count);
             }
         }
 
-        // Helper to convert byte offset to (line, character_offset)
+        // Helper to convert byte offset to (line, character_offset) in UTF-16 units
         let byte_to_line_col = |byte_offset: usize| -> (u32, u32) {
             let byte_offset = byte_offset.min(text.len());
             let mut current_line_start_byte = 0;
@@ -1581,9 +1583,9 @@ impl LanguageServer for Backend {
                 }
             }
 
-            // Re-calculate character offset in the line
+            // Re-calculate character offset in the line (UTF-16)
             let line_text = &text[current_line_start_byte..byte_offset];
-            let char_offset = line_text.chars().count();
+            let char_offset = line_text.encode_utf16().count();
 
             (line_count, char_offset as u32)
         };
@@ -1699,10 +1701,10 @@ impl LanguageServer for Backend {
                         }
                         // We have flags
                         let body_len = (text[span.start..body_end]
-                            .chars()
+                            .encode_utf16()
                             .count()) as u32;
                         let flags_len = (text[(span.start + last_slash_idx + 1)..span.end]
-                            .chars()
+                            .encode_utf16()
                             .count()) as u32;
 
                         // Emit body (regexp)
@@ -1731,7 +1733,7 @@ impl LanguageServer for Backend {
                 }
             }
 
-            let length = token_text.chars().count() as u32;
+            let length = token_text.encode_utf16().count() as u32;
 
             semantic_tokens.push(SemanticToken {
                 delta_line,
