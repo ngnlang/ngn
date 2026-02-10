@@ -4,6 +4,15 @@
   "description": "Language support for NGN",
   "version": "0.0.1",
   "publisher": "ngnlang",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ngnlang/ngn.git",
+    "directory": "editors/vscode"
+  },
+  "bugs": {
+    "url": "https://github.com/ngnlang/ngn/issues"
+  },
+  "homepage": "https://github.com/ngnlang/ngn/tree/main/editors/vscode",
   "engines": {
     "vscode": "^1.106.0"
   },
