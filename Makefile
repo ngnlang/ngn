@@ -18,6 +18,13 @@ all: dist lsp
 bench:
 	$(CARGO) run --release -p ngn --bin bench
 
+# Local release build (native target, no cross-compilation)
+release-local:
+	mkdir -p target/release
+	NGN_SKIP_RUNTIME_COPY=1 $(CARGO) build --release -p ngn --bin runtime
+	$(MAKE) embed-runtime RUNTIME=target/release/runtime EMBED_NAME=ngnr
+	NGN_EMBED_RUNTIME=ngnr $(CARGO) build --release -p ngn --bin ngn
+
 # Build the minimal runtime first, then the full ngn with embedded runtime
 release: runtime
 	NGN_EMBED_RUNTIME=ngnr $(BUILD_CMD) build --release -p ngn --bin ngn --target $(TARGET_X86)
