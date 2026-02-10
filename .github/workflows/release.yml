@@ -70,8 +70,8 @@ jobs:
         if: steps.lsp_changed.outputs.changed == 'true'
         run: |
           set -euo pipefail
-          cargo build --release -p ngn-lsp
-          cross build --release -p ngn-lsp --target aarch64-unknown-linux-gnu
+          cross build --release -p ngn-lsp
+          cargo build --release -p ngn-lsp --target aarch64-unknown-linux-gnu
           tar -C target/release -czf dist/ngn-lsp-${GITHUB_REF_NAME}-linux-x86_64.tar.gz ngn-lsp
           tar -C target/aarch64-unknown-linux-gnu/release -czf dist/ngn-lsp-${GITHUB_REF_NAME}-linux-arm64.tar.gz ngn-lsp
           cp dist/ngn-lsp-${GITHUB_REF_NAME}-linux-x86_64.tar.gz dist/ngn-lsp-latest-linux-x86_64.tar.gz
