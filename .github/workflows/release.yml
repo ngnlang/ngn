@@ -26,6 +26,8 @@ jobs:
         run: |
           cargo install cross --git https://github.com/cross-rs/cross
           rustup target add aarch64-unknown-linux-gnu
+          sudo apt-get update
+          sudo apt-get install -y clang
 
       - name: Detect LSP changes
         id: lsp_changed
@@ -70,9 +72,9 @@ jobs:
         if: steps.lsp_changed.outputs.changed == 'true'
         run: |
           set -euo pipefail
-          cross build --release -p ngn-lsp
-          cargo build --release -p ngn-lsp --target aarch64-unknown-linux-gnu
-          tar -C target/release -czf dist/ngn-lsp-${GITHUB_REF_NAME}-linux-x86_64.tar.gz ngn-lsp
+          CC=clang CXX=clang++ cargo build --release -p ngn-lsp --target x86_64-unknown-linux-gnu
+          cross build --release -p ngn-lsp --target aarch64-unknown-linux-gnu
+          tar -C target/x86_64-unknown-linux-gnu/release -czf dist/ngn-lsp-${GITHUB_REF_NAME}-linux-x86_64.tar.gz ngn-lsp
           tar -C target/aarch64-unknown-linux-gnu/release -czf dist/ngn-lsp-${GITHUB_REF_NAME}-linux-arm64.tar.gz ngn-lsp
           cp dist/ngn-lsp-${GITHUB_REF_NAME}-linux-x86_64.tar.gz dist/ngn-lsp-latest-linux-x86_64.tar.gz
           cp dist/ngn-lsp-${GITHUB_REF_NAME}-linux-arm64.tar.gz dist/ngn-lsp-latest-linux-arm64.tar.gz
