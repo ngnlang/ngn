@@ -72,6 +72,7 @@ jobs:
         if: steps.lsp_changed.outputs.changed == 'true'
         run: |
           set -euo pipefail
+          env | sort
           unset CARGO_BUILD_TARGET
           CC=clang CXX=clang++ cargo build --release -p ngn-lsp
           cross build --release -p ngn-lsp --target aarch64-unknown-linux-gnu
