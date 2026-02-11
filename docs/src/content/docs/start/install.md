@@ -41,3 +41,7 @@ If this doesn't work, you may need to add `ngn` and `ngnr` to your `PATH`, or re
 ```bash
 ngn --version
 ```
+
+## LSP
+
+We currently only support VSCode on x86_64. Search for the "ngn" extension and you should easily find it.
