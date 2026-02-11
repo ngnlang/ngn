@@ -95,11 +95,9 @@ export function activate(context: vscode.ExtensionContext) {
         return;
     }
 
-    let arch: 'x86_64' | 'arm64';
+    let arch: 'x86_64';
     if (process.arch === 'x64') {
         arch = 'x86_64';
-    } else if (process.arch === 'arm64') {
-        arch = 'arm64';
     } else {
         const message = `ngn language server is not available for architecture ${process.arch}.`;
         outputChannel.appendLine(message);

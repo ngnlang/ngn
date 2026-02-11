@@ -72,32 +72,10 @@ jobs:
         if: steps.lsp_changed.outputs.changed == 'true'
         run: |
           set -euo pipefail
-          env | sort
-          python - <<'PY'
-          import os
-          import pathlib
-
-          paths = [
-              pathlib.Path('.cargo/config.toml'),
-              pathlib.Path('.cargo/config'),
-              pathlib.Path(os.environ.get('CARGO_HOME', os.path.expanduser('~/.cargo'))) / 'config.toml',
-              pathlib.Path(os.environ.get('CARGO_HOME', os.path.expanduser('~/.cargo'))) / 'config',
-          ]
-
-          for path in paths:
-              if path.exists():
-                  print(f'--- {path} ---')
-                  print(path.read_text())
-          PY
-          cargo -vV
-          rustc -vV
           unset CARGO_BUILD_TARGET
-          CC=clang CXX=clang++ cargo build --release -p ngn-lsp -vv
-          cross build --release -p ngn-lsp --target aarch64-unknown-linux-gnu
+          CC=clang CXX=clang++ cargo build --release -p ngn-lsp
           tar -C target/release -czf dist/ngn-lsp-${GITHUB_REF_NAME}-linux-x86_64.tar.gz ngn-lsp
-          tar -C target/aarch64-unknown-linux-gnu/release -czf dist/ngn-lsp-${GITHUB_REF_NAME}-linux-arm64.tar.gz ngn-lsp
           cp dist/ngn-lsp-${GITHUB_REF_NAME}-linux-x86_64.tar.gz dist/ngn-lsp-latest-linux-x86_64.tar.gz
-          cp dist/ngn-lsp-${GITHUB_REF_NAME}-linux-arm64.tar.gz dist/ngn-lsp-latest-linux-arm64.tar.gz
 
       - name: Verify release artifacts
         run: |
@@ -112,9 +90,7 @@ jobs:
         run: |
           set -euo pipefail
           test -f "dist/ngn-lsp-${GITHUB_REF_NAME}-linux-x86_64.tar.gz"
-          test -f "dist/ngn-lsp-${GITHUB_REF_NAME}-linux-arm64.tar.gz"
           test -f "dist/ngn-lsp-latest-linux-x86_64.tar.gz"
-          test -f "dist/ngn-lsp-latest-linux-arm64.tar.gz"
 
       - name: Create release (if needed)
         env:
@@ -139,8 +115,6 @@ jobs:
           if [ "${{ steps.lsp_changed.outputs.changed }}" = "true" ]; then
             gh release upload "${GITHUB_REF_NAME}" \
               dist/ngn-lsp-${GITHUB_REF_NAME}-linux-x86_64.tar.gz \
-              dist/ngn-lsp-${GITHUB_REF_NAME}-linux-arm64.tar.gz \
               dist/ngn-lsp-latest-linux-x86_64.tar.gz \
-              dist/ngn-lsp-latest-linux-arm64.tar.gz \
               --clobber
           fi
