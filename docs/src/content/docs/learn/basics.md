@@ -83,6 +83,7 @@ Use to stop execution and show a runtime error.
 print("before")
 panic("Something went wrong")
 print("after") // not reached
+```
 
 ## String Interpolation
 ```ngn
@@ -159,7 +160,7 @@ fn main() {
 Closures are similar to functions, but have important differences:
 - assign them with `const` then call like a function
 - access to external values, even ones outside its environment
-- uses pipe syntax to wrap params
+- use a pair of `|` to wrap params, or an empty pair if none
 - param ownership transfer is the same as functions
 - to mutate the value of a variable from within a closure, use `state()` to declare the variable.
 
@@ -252,7 +253,7 @@ fn main() {
   check age? { return }
   print(age) // 42
 
-  // Missing optional fields become null
+  // Missing optional fields become Maybe::Null
   assert(!nickname)
 }
 ```

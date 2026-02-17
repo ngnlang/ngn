@@ -3,7 +3,7 @@ title: LLM Inference
 description: Use a local model
 ---
 
-ngn has an LLM toolbox mod, used for inference. You must install ngn with the `-f llm` feature, in order for `tbx::llm` to be available.
+ngn has an LLM toolbox mod, used for inference.
 
 ```ngn
 import { load, stream } from "tbx::llm"
