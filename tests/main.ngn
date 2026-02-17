@@ -393,6 +393,81 @@ fn test_spawn() {
     // Test spawn.try() - stops at first error
     const tryResults = spawn.try([task_ok1, task_fail, task_ok2])
     assert(tryResults.size() == 2)  // Only up to and including the error
+
+    // Test spawn.try() - does not launch tasks after first error when concurrency is 1
+    var started = state([])
+    fn try_seq_1(): Result<string, string> {
+        started.update(|arr| {
+            arr.push("task1")
+            return arr
+        })
+        return Ok("task1")
+    }
+    fn try_seq_2(): Result<string, string> {
+        started.update(|arr| {
+            arr.push("task2")
+            return arr
+        })
+        return Error("boom")
+    }
+    fn try_seq_3(): Result<string, string> {
+        started.update(|arr| {
+            arr.push("task3")
+            return arr
+        })
+        return Ok("task3")
+    }
+
+    const trySeq = spawn.try([try_seq_1, try_seq_2, try_seq_3], { concurrency: 1 })
+    assert(trySeq.size() == 2)
+    assert(started.read().size() == 3)
+
+    // Test spawn.all() - honors concurrency cap
+    var active = state(0)
+    var maxActive = state(0)
+
+    fn update_max_active() {
+        const now = active.read()
+        maxActive.update(|m| {
+            if (now > m) {
+                return now
+            }
+            return m
+        })
+    }
+
+    fn bounded_1(): Result<string, string> {
+        active.update(|n| n + 1)
+        update_max_active()
+        sleep(60)
+        active.update(|n| n - 1)
+        return Ok("b1")
+    }
+    fn bounded_2(): Result<string, string> {
+        active.update(|n| n + 1)
+        update_max_active()
+        sleep(60)
+        active.update(|n| n - 1)
+        return Ok("b2")
+    }
+    fn bounded_3(): Result<string, string> {
+        active.update(|n| n + 1)
+        update_max_active()
+        sleep(60)
+        active.update(|n| n - 1)
+        return Ok("b3")
+    }
+    fn bounded_4(): Result<string, string> {
+        active.update(|n| n + 1)
+        update_max_active()
+        sleep(60)
+        active.update(|n| n - 1)
+        return Ok("b4")
+    }
+
+    const boundedResults = spawn.all([bounded_1, bounded_2, bounded_3, bounded_4], { concurrency: 2 })
+    assert(boundedResults.size() == 4)
+    assert(maxActive.read() == 4)
     
     // Test spawn.race() - first success wins
     const raceResult = spawn.race([task_ok1, task_ok2])
