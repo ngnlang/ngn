@@ -1868,8 +1868,10 @@ With concurrency limit:
 const results = spawn.all(tasks, { concurrency: 2 })  // Max 2 concurrent threads at a time
 ```
 
+If `concurrency` is omitted, ngn schedules as many workers as needed for the task list. If `concurrency <= 0`, ngn falls back to `1`.
+
 ### try()
-Stop spawning new tasks on first error. Returns partial results up to and including the error.
+Stop launching new tasks on first error. Returns partial results up to and including the error.
 
 `spawn.try(tasks, options?)`
 
@@ -1878,6 +1880,10 @@ const results = spawn.try([task1, task2, task3], { concurrency: 4 })
 // Stops when first error occurs
 // [Result::Ok (Task 1 done), Result::Error (Task 2 failed)]
 ```
+
+Notes:
+- Already-running tasks are cancelled on a best-effort basis (cooperative checks between VM steps).
+- Tasks doing blocking/native work may still finish even after fail-fast is triggered.
 
 ### race()
 Returns the first successful result, or the first error if all tasks fail.

@@ -58,7 +58,14 @@ export default defineConfig({
 				},
 				{
 					label: 'The Manual',
-					autogenerate: { directory: 'the-manual' },
+					items: [
+						{ label: 'API', slug: 'the-manual/api' },
+						{ label: 'Environment', slug: 'the-manual/environment' },
+						{ label: 'Modules', slug: 'the-manual/modules' },
+						{ label: 'Toolbox', slug: 'the-manual/toolbox' },
+						{ label: 'Types', slug: 'the-manual/types' },
+						{ label: 'Internals', slug: 'the-manual/internals' },
+					],
 				},
 			],
 		}),
