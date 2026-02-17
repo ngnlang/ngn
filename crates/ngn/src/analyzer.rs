@@ -1,4 +1,4 @@
-use crate::lexer::{is_emoji_identifier, Span, Token};
+use crate::lexer::{Span, Token, is_emoji_identifier};
 use crate::parser::{
     EnumDef, EnumVariantDef, Expr, ExprKind, ModelDef, ModelField, Pattern, RoleDef, Statement,
     StatementKind, Type,
@@ -218,7 +218,7 @@ impl Analyzer {
         let mut global_scope = HashMap::new();
 
         // Register core globals from toolbox
-        use crate::toolbox::core::{get_type, GLOBAL_NAMES};
+        use crate::toolbox::core::{GLOBAL_NAMES, get_type};
         for name in GLOBAL_NAMES {
             if let Some(def) = get_type(name) {
                 global_scope.insert(

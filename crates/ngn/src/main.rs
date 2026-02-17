@@ -145,7 +145,9 @@ fn main() {
         println!("Usage:");
         println!("  ngn run <file.ngn>           - Compile and run immediately");
         println!("  ngn build <file.ngn> [--bundle] [--stats]  - Compile to .mod or bundle");
-        println!("  ngn upgrade [--version <ver>] [--arch <arch>] [--dir <path>]  - Upgrade ngn in place");
+        println!(
+            "  ngn upgrade [--version <ver>] [--arch <arch>] [--dir <path>]  - Upgrade ngn in place"
+        );
         return;
     }
 
@@ -977,7 +979,7 @@ fn load_module(module_path: &str, base_path: &PathBuf, cache: &mut ModuleCache) 
 
     // Check cache
     if let Some(entry) = cache.get(&resolved_path) {
-        return entry.0 .0.clone(); // Return cached exports
+        return entry.0.0.clone(); // Return cached exports
     }
 
     // Load source

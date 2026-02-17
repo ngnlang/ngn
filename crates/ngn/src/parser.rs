@@ -753,7 +753,7 @@ impl Parser {
                 self.advance(); // consume 'export'
                 if self.current_token == Token::Default {
                     self.advance(); // consume 'default'
-                                    // Expect an expression for now (typically an identifier)
+                    // Expect an expression for now (typically an identifier)
                     let expr = self.parse_expression();
                     let end = self.previous_span.end;
                     Statement {
@@ -2870,7 +2870,7 @@ impl Parser {
 
             if self.current_token == Token::Colon {
                 self.advance(); // consume ':'
-                                // Check for 'else if' vs 'else'
+                // Check for 'else if' vs 'else'
                 if self.current_token == Token::LParen {
                     // Inline Else If (Implicit If)
                     else_branch = Some(Box::new(self.parse_implicit_if()));
@@ -2967,8 +2967,8 @@ impl Parser {
         }
 
         let end = self.previous_span.end; // May not be accurate if RBrace handled by parent?
-                                          // Actually, parse_if_inner is called inside the braces loop of parent.
-                                          // It consumes segments inside the block.
+        // Actually, parse_if_inner is called inside the braces loop of parent.
+        // It consumes segments inside the block.
 
         let then_span = if !then_block.is_empty() {
             Span::new(

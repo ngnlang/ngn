@@ -3187,202 +3187,264 @@ impl Fiber {
         if options_reg == u16::MAX {
             return None;
         }
-        let options = self.get_reg_at(options_reg);
-        if let Value::Object(obj) = options {
-            if let Some(Value::Numeric(n)) = obj.fields.get("concurrency") {
-                let concurrency = match n {
-                    crate::value::Number::I64(v) => *v as usize,
-                    crate::value::Number::I32(v) => *v as usize,
-                    crate::value::Number::U64(v) => *v as usize,
-                    crate::value::Number::U32(v) => *v as usize,
-                    _ => 0,
-                };
-                return Some(concurrency);
+
+        fn parse_usize(n: &crate::value::Number) -> Option<usize> {
+            match n {
+                crate::value::Number::I64(v) => usize::try_from(*v).ok(),
+                crate::value::Number::I32(v) => usize::try_from(*v).ok(),
+                crate::value::Number::I16(v) => usize::try_from(*v).ok(),
+                crate::value::Number::I8(v) => usize::try_from(*v).ok(),
+                crate::value::Number::U64(v) => usize::try_from(*v).ok(),
+                crate::value::Number::U32(v) => Some(*v as usize),
+                crate::value::Number::U16(v) => Some(*v as usize),
+                crate::value::Number::U8(v) => Some(*v as usize),
+                crate::value::Number::F64(v) => {
+                    if v.is_finite() && *v >= 1.0 {
+                        Some(*v as usize)
+                    } else {
+                        None
+                    }
+                }
+                crate::value::Number::F32(v) => {
+                    if v.is_finite() && *v >= 1.0 {
+                        Some(*v as usize)
+                    } else {
+                        None
+                    }
+                }
             }
         }
+
+        let options = self.get_reg_at(options_reg);
+        match options {
+            Value::Object(obj) => {
+                if let Some(Value::Numeric(n)) = obj.fields.get("concurrency") {
+                    return parse_usize(n).filter(|v| *v > 0);
+                }
+            }
+            Value::Map(map) => {
+                if let Some(Value::Numeric(n)) = map.get(&Value::String("concurrency".to_string()))
+                {
+                    return parse_usize(n).filter(|v| *v > 0);
+                }
+            }
+            _ => {}
+        }
+
         None
+    }
+
+    fn wrap_spawn_result(value: Value) -> Value {
+        match &value {
+            Value::Enum(e) if e.enum_name == "Result" => value,
+            _ => EnumData::into_value(
+                "Result".to_string(),
+                "Ok".to_string(),
+                Some(Box::new(value)),
+            ),
+        }
+    }
+
+    fn spawn_error_value(message: String) -> Value {
+        EnumData::into_value(
+            "Result".to_string(),
+            "Error".to_string(),
+            Some(Box::new(Value::String(message))),
+        )
+    }
+
+    fn is_result_error(value: &Value) -> bool {
+        matches!(
+            value,
+            Value::Enum(e) if e.enum_name == "Result" && e.variant_name == "Error"
+        )
+    }
+
+    fn task_to_closure(task: Value) -> Result<Box<Closure>, Value> {
+        match task {
+            Value::Closure(c) => Ok(c),
+            Value::Function(f) => Ok(Box::new(Closure {
+                function: f,
+                upvalues: Vec::new(),
+            })),
+            _ => Err(Self::spawn_error_value(
+                "spawn.*() tasks must be functions or closures".to_string(),
+            )),
+        }
+    }
+
+    fn run_spawn_task_once(
+        task: Value,
+        task_index: usize,
+        globals_snapshot: Vec<Value>,
+        custom_methods: Arc<
+            Mutex<std::collections::HashMap<String, std::collections::HashMap<String, Value>>>,
+        >,
+        first_error_index: Arc<std::sync::atomic::AtomicUsize>,
+        fail_fast: bool,
+    ) -> Value {
+        let closure = match Self::task_to_closure(task) {
+            Ok(c) => c,
+            Err(err) => return err,
+        };
+
+        let mut fiber = Fiber::new(closure);
+        let mut thread_globals = globals_snapshot;
+        let mut thread_meta = vec![GlobalSlotMeta::frozen_initialized(); thread_globals.len()];
+        let mut panic_msg: Option<String> = None;
+        let mut result_val: Option<Value> = None;
+
+        loop {
+            if fail_fast {
+                let observed_error_index =
+                    first_error_index.load(std::sync::atomic::Ordering::Acquire);
+                if observed_error_index != usize::MAX && task_index > observed_error_index {
+                    return Self::spawn_error_value("Task cancelled".to_string());
+                }
+            }
+
+            let step_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                with_panic_suppressed(|| {
+                    fiber.run_step(&mut thread_globals, &mut thread_meta, &custom_methods)
+                })
+            }));
+
+            match step_result {
+                Ok(status) => match status {
+                    FiberStatus::Finished => {
+                        result_val = Some(fiber.return_value.unwrap_or(Value::Void));
+                        break;
+                    }
+                    FiberStatus::Running => continue,
+                    _ => {
+                        result_val = Some(Value::Void);
+                        break;
+                    }
+                },
+                Err(panic_info) => {
+                    let msg = panic_message(&panic_info);
+                    let location = fiber.current_location();
+                    let full_msg = if let Some(location) = location {
+                        format!("{}\n{}", msg, location)
+                    } else {
+                        msg
+                    };
+                    panic_msg = Some(full_msg);
+                    break;
+                }
+            }
+        }
+
+        if let Some(msg) = panic_msg {
+            Self::spawn_error_value(format!("Thread panicked: {}", msg))
+        } else {
+            Self::wrap_spawn_result(result_val.unwrap_or(Value::Void))
+        }
     }
 
     /// Run spawn tasks (used by spawn.all and spawn.try)
     fn run_spawn_tasks(
         &self,
         tasks: &[Value],
-        _concurrency: Option<usize>,
+        concurrency: Option<usize>,
         fail_fast: bool,
         globals: &mut Vec<Value>,
         custom_methods: &Arc<
             Mutex<std::collections::HashMap<String, std::collections::HashMap<String, Value>>>,
         >,
     ) -> Vec<Value> {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
         use std::sync::mpsc;
         use std::thread;
 
-        let mut results: Vec<Value> = Vec::new();
-        let _task_count = tasks.len();
+        if tasks.is_empty() {
+            return Vec::new();
+        }
+
+        let task_count = tasks.len();
+        let worker_count = concurrency.unwrap_or(task_count).max(1).min(task_count);
 
         // Create a channel for results
         let (tx, rx) = mpsc::channel::<(usize, Value)>();
+        let tasks_shared = Arc::new(tasks.to_vec());
+        let globals_snapshot = Arc::new(globals.clone());
+        let custom_methods_shared = custom_methods.clone();
+        let next_task = Arc::new(AtomicUsize::new(0));
+        let stop_launch = Arc::new(AtomicBool::new(false));
+        let first_error_index = Arc::new(AtomicUsize::new(usize::MAX));
 
-        // Collect closures for spawning
+        // Spawn bounded workers
         let mut handles = Vec::new();
+        for _ in 0..worker_count {
+            let tx = tx.clone();
+            let tasks_shared = tasks_shared.clone();
+            let globals_snapshot = globals_snapshot.clone();
+            let custom_methods_shared = custom_methods_shared.clone();
+            let next_task = next_task.clone();
+            let stop_launch = stop_launch.clone();
+            let first_error_index = first_error_index.clone();
 
-        for (idx, task) in tasks.iter().enumerate() {
-            if let Value::Closure(closure) = task.clone() {
-                let tx = tx.clone();
-                let closure_clone = closure.clone();
-                let globals_clone = globals.clone();
-                let custom_methods_clone = custom_methods.clone();
-
-                let handle = thread::spawn(move || {
-                    // Run the closure in a new fiber
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        let mut fiber = Fiber::new(closure_clone);
-                        let mut thread_globals = globals_clone;
-                        let mut thread_meta =
-                            vec![GlobalSlotMeta::frozen_initialized(); thread_globals.len()];
-
-                        // Run the fiber to completion
-                        loop {
-                            let status = fiber.run_step(
-                                &mut thread_globals,
-                                &mut thread_meta,
-                                &custom_methods_clone,
-                            );
-                            match status {
-                                FiberStatus::Finished => {
-                                    return fiber.return_value.unwrap_or(Value::Void);
-                                }
-                                FiberStatus::Running => continue,
-                                _ => break,
-                            }
-                        }
-                        Value::Void
-                    }));
-
-                    match result {
-                        Ok(value) => {
-                            let _ = tx.send((idx, value));
-                        }
-                        Err(panic_info) => {
-                            let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
-                                s.to_string()
-                            } else if let Some(s) = panic_info.downcast_ref::<String>() {
-                                s.clone()
-                            } else {
-                                "Unknown panic".to_string()
-                            };
-                            let error = crate::value::EnumData::into_value(
-                                "Result".to_string(),
-                                "Error".to_string(),
-                                Some(Box::new(Value::String(format!("Thread panicked: {}", msg)))),
-                            );
-                            let _ = tx.send((idx, error));
-                        }
+            let handle = thread::spawn(move || {
+                loop {
+                    if fail_fast && stop_launch.load(Ordering::Acquire) {
+                        break;
                     }
-                });
-                handles.push(handle);
-            } else if let Value::Function(func) = task.clone() {
-                // Handle raw functions (create closure from them)
-                let tx = tx.clone();
-                let func_clone = func.clone();
-                let globals_clone = globals.clone();
-                let custom_methods_clone = custom_methods.clone();
 
-                let handle = thread::spawn(move || {
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        let closure = Box::new(Closure {
-                            function: func_clone,
-                            upvalues: Vec::new(),
-                        });
-                        let mut fiber = Fiber::new(closure);
-                        let mut thread_globals = globals_clone;
-                        let mut thread_meta =
-                            vec![GlobalSlotMeta::frozen_initialized(); thread_globals.len()];
-
-                        loop {
-                            let status = fiber.run_step(
-                                &mut thread_globals,
-                                &mut thread_meta,
-                                &custom_methods_clone,
-                            );
-                            match status {
-                                FiberStatus::Finished => {
-                                    return fiber.return_value.unwrap_or(Value::Void);
-                                }
-                                FiberStatus::Running => continue,
-                                _ => break,
-                            }
-                        }
-                        Value::Void
-                    }));
-
-                    match result {
-                        Ok(value) => {
-                            let _ = tx.send((idx, value));
-                        }
-                        Err(panic_info) => {
-                            let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
-                                s.to_string()
-                            } else if let Some(s) = panic_info.downcast_ref::<String>() {
-                                s.clone()
-                            } else {
-                                "Unknown panic".to_string()
-                            };
-                            let error = crate::value::EnumData::into_value(
-                                "Result".to_string(),
-                                "Error".to_string(),
-                                Some(Box::new(Value::String(format!("Thread panicked: {}", msg)))),
-                            );
-                            let _ = tx.send((idx, error));
-                        }
+                    let idx = next_task.fetch_add(1, Ordering::AcqRel);
+                    if idx >= tasks_shared.len() {
+                        break;
                     }
-                });
-                handles.push(handle);
-            }
+
+                    if fail_fast && stop_launch.load(Ordering::Acquire) {
+                        break;
+                    }
+
+                    let result = Self::run_spawn_task_once(
+                        tasks_shared[idx].clone(),
+                        idx,
+                        (*globals_snapshot).clone(),
+                        custom_methods_shared.clone(),
+                        first_error_index.clone(),
+                        fail_fast,
+                    );
+
+                    if fail_fast && Self::is_result_error(&result) {
+                        first_error_index.fetch_min(idx, Ordering::AcqRel);
+                        stop_launch.store(true, Ordering::Release);
+                    }
+
+                    let _ = tx.send((idx, result));
+                }
+            });
+            handles.push(handle);
         }
 
         drop(tx); // Close the sender so rx iterator will terminate
 
-        // Collect results in order
-        let mut indexed_results: Vec<(usize, Value)> = Vec::new();
-        let mut error_found = false;
+        // Collect results
+        let mut indexed_results: Vec<(usize, Value)> = rx.into_iter().collect();
 
-        for (idx, result) in rx {
-            indexed_results.push((idx, result.clone()));
-
-            // Check for error in fail_fast mode
-            if fail_fast && !error_found {
-                if let Value::Enum(ref e) = result {
-                    if e.enum_name == "Result" && e.variant_name == "Error" {
-                        error_found = true;
-                    }
-                }
-            }
-        }
-
-        // Wait for all threads (they've already finished since rx closed)
+        // Wait for all threads
         for handle in handles {
             let _ = handle.join();
         }
 
-        // Sort by original index and extract values
+        // Sort by original index
         indexed_results.sort_by_key(|(idx, _)| *idx);
 
-        if fail_fast && error_found {
-            // Return results up to and including first error
+        if fail_fast {
+            let mut results: Vec<Value> = Vec::new();
             for (_, val) in indexed_results {
-                results.push(val.clone());
-                if let Value::Enum(ref e) = val {
-                    if e.enum_name == "Result" && e.variant_name == "Error" {
-                        break;
-                    }
+                let is_error = Self::is_result_error(&val);
+                results.push(val);
+                if is_error {
+                    break;
                 }
             }
+            results
         } else {
-            results = indexed_results.into_iter().map(|(_, v)| v).collect();
+            indexed_results.into_iter().map(|(_, v)| v).collect()
         }
-
-        results
     }
 
     /// Run spawn.race - return first success or first error if all fail

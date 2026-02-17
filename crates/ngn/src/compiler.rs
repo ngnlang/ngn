@@ -1,5 +1,5 @@
 use crate::bytecode::OpCode;
-use crate::lexer::{is_emoji_identifier, Span, Token};
+use crate::lexer::{Span, Token, is_emoji_identifier};
 use crate::parser::{EnumDef, Expr, ExprKind, ModelDef, Pattern, Statement, StatementKind};
 use crate::value::{Function, Number, Value};
 use std::collections::{HashMap, HashSet};
@@ -3030,8 +3030,8 @@ impl Compiler {
         // Condition was in match_reg, which will be freed when compile_match finishes
         self.reg_top = match_reg;
         self.temp_start = saved_temp_start.max(match_reg); // Restore but don't go below match_reg
-                                                           // Note: DO NOT restore next_index - the state_var slot must stay reserved
-                                                           // since DefVar was emitted for it and could cause collisions
+        // Note: DO NOT restore next_index - the state_var slot must stay reserved
+        // since DefVar was emitted for it and could cause collisions
     }
 
     fn compile_next(&mut self) {

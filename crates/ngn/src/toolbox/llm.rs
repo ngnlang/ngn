@@ -10,7 +10,7 @@
 //! - Closing the returned channel cancels generation (between tokens).
 
 use crate::{
-    blocking_pool::{global_blocking_pool, BlockingJob},
+    blocking_pool::{BlockingJob, global_blocking_pool},
     error::RuntimeError,
     value::{Channel, ExternalValue, ObjectData, Value},
 };
@@ -138,7 +138,9 @@ fn make_llm_model(handle: ExternalValue) -> Value {
     ObjectData::into_value("LlmModel".to_string(), fields)
 }
 
-fn get_model_handle(model_obj: &crate::value::ObjectData) -> Result<Arc<Mutex<LlmHandle>>, RuntimeError> {
+fn get_model_handle(
+    model_obj: &crate::value::ObjectData,
+) -> Result<Arc<Mutex<LlmHandle>>, RuntimeError> {
     match model_obj.fields.get("_handle") {
         Some(Value::External(e)) => {
             let any = e.inner.clone();
@@ -464,7 +466,9 @@ pub fn llm_stream(args: Vec<Value>) -> Result<Value, RuntimeError> {
     };
 
     if model_obj.model_name != "LlmModel" {
-        return Err(RuntimeError::TypeError("LLM.stream expects an LlmModel".into()));
+        return Err(RuntimeError::TypeError(
+            "LLM.stream expects an LlmModel".into(),
+        ));
     }
 
     let prompt = match &args[1] {
@@ -548,7 +552,9 @@ pub fn llm_stream(args: Vec<Value>) -> Result<Value, RuntimeError> {
             seed: opts.seed,
         };
 
-        let mut stream_ctx = StreamCtx { ch: out_clone.clone() };
+        let mut stream_ctx = StreamCtx {
+            ch: out_clone.clone(),
+        };
         unsafe {
             let mut err_buf = vec![0u8; 512];
             let rc = ngn_llama_generate(

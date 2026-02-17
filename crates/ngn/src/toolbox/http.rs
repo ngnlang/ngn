@@ -39,8 +39,12 @@ async fn call_handler_async(
 
     // Run fiber with cooperative yielding
     loop {
-        let (status, _steps) =
-            fiber.run_steps(&mut handler_globals, &mut handler_meta, &shared_methods, BATCH_SIZE);
+        let (status, _steps) = fiber.run_steps(
+            &mut handler_globals,
+            &mut handler_meta,
+            &shared_methods,
+            BATCH_SIZE,
+        );
         match status {
             FiberStatus::Finished => break,
             FiberStatus::Running => {
@@ -72,53 +76,54 @@ async fn call_handler_async(
 
                     loop {
                         // Run in smaller batches for better interleaving
-                        let step_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            crate::vm::with_panic_suppressed(|| {
-                                bg_fiber.run_steps(
-                                    &mut bg_globals_mut,
-                                    &mut bg_meta_mut,
-                                    &bg_methods,
-                                    50,
-                                )
-                            })
-                        }));
+                        let step_result =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                crate::vm::with_panic_suppressed(|| {
+                                    bg_fiber.run_steps(
+                                        &mut bg_globals_mut,
+                                        &mut bg_meta_mut,
+                                        &bg_methods,
+                                        50,
+                                    )
+                                })
+                            }));
                         match step_result {
                             Ok((status, _)) => match status {
-                            FiberStatus::Finished => break,
-                            FiberStatus::Running | FiberStatus::Suspended => {
-                                tokio::task::yield_now().await;
-                                continue;
-                            }
-                            FiberStatus::Spawning(nested) => {
-                                // For nested spawns, just continue (rare case)
-                                let _ = *nested;
-                                continue;
-                            }
-                            FiberStatus::Sleeping(ms) => {
-                                // Async sleep
-                                tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
-                                continue;
-                            }
-                            FiberStatus::Panicked(msg, location) => {
-                                let full_msg = if let Some(location) = location {
-                                    format!("{}\n{}", msg, location)
-                                } else {
-                                    msg
-                                };
-                                eprintln!("[ngn] Background thread panicked: {}", full_msg);
-                                if let Some(chan) = &bg_fiber.completion_channel {
-                                    let error = crate::value::EnumData::into_value(
-                                        "Result".to_string(),
-                                        "Error".to_string(),
-                                        Some(Box::new(Value::String(format!(
-                                            "Thread panicked: {}",
-                                            full_msg
-                                        )))),
-                                    );
-                                    chan.buffer.lock().unwrap().push_back(error);
+                                FiberStatus::Finished => break,
+                                FiberStatus::Running | FiberStatus::Suspended => {
+                                    tokio::task::yield_now().await;
+                                    continue;
                                 }
-                                break;
-                            }
+                                FiberStatus::Spawning(nested) => {
+                                    // For nested spawns, just continue (rare case)
+                                    let _ = *nested;
+                                    continue;
+                                }
+                                FiberStatus::Sleeping(ms) => {
+                                    // Async sleep
+                                    tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+                                    continue;
+                                }
+                                FiberStatus::Panicked(msg, location) => {
+                                    let full_msg = if let Some(location) = location {
+                                        format!("{}\n{}", msg, location)
+                                    } else {
+                                        msg
+                                    };
+                                    eprintln!("[ngn] Background thread panicked: {}", full_msg);
+                                    if let Some(chan) = &bg_fiber.completion_channel {
+                                        let error = crate::value::EnumData::into_value(
+                                            "Result".to_string(),
+                                            "Error".to_string(),
+                                            Some(Box::new(Value::String(format!(
+                                                "Thread panicked: {}",
+                                                full_msg
+                                            )))),
+                                        );
+                                        chan.buffer.lock().unwrap().push_back(error);
+                                    }
+                                    break;
+                                }
                             },
                             Err(panic_info) => {
                                 let msg = crate::vm::panic_message(&panic_info);
