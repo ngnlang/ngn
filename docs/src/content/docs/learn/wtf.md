@@ -63,7 +63,7 @@ var x = "hello"
 
 // the `<` in front of the type assumes ownership
 // and enables mutation inside the function
-fn doSomething(stuff: <string) {
+fn doSomething(stuff: < string) {
   // read and/or mutate "stuff".
   // memory is automatically cleaned up
 }
@@ -124,6 +124,10 @@ if (maybe_value?) {
 
 // note that "maybe_value" is still a "maybe" here, not the actual data
 ```
+
+:::note
+I'm considering dropping the parenthesis, to align with `check`. There was a reason I went this route, but the waters have gotten murky and I think this alignment would be better. Either that or I'll add parenthesis to `check`.
+:::
 
 ### check
 If it's a `Maybe::Null`, run the failure block. You must either return or break within the block.
