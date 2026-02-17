@@ -3,7 +3,9 @@ title: Start
 description: What is ngn?
 ---
 
-Pronounced "engine", ngn is a high-level programming language for the backend - APIs, MCP servers, and to serve AI purposes like LLM inference. It's intended to be easily learned and dearly loved; and draws inspiration from many other languages, with some unique modifications here and there.
+Pronounced "engine", it's a high-level programming language for the backend - APIs, MCP servers, and to serve AI purposes like LLM inference. It's intended to be easily learned and dearly loved; and draws inspiration from many other languages, with some unique modifications here and there.
+
+ngn is composed of a cli (ngn) and a VM runtime (ngnr). When you `ngn build main.ngn`, a `.mod` file (bytecode) is created. So, in production, you'd do `ngnr run main.mod`
 
 ## What you can expect
 
