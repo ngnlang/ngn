@@ -2,11 +2,13 @@ use ngn::analyzer::{Analyzer, Symbol};
 use ngn::bytecode::OpCode;
 use ngn::compiler::Compiler;
 use ngn::lexer::{Lexer, Span, Token};
-use ngn::parser::{Expr, ExprKind, Parser, Statement, StatementKind, Type};
+use ngn::parser::{
+    EnumDef, Expr, ExprKind, ModelDef, Parser, RoleDef, Statement, StatementKind, Type,
+};
 use ngn::toolbox::{self, Toolbox};
 use ngn::value::{ObjectData, Value};
 use ngn::vm::VM;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
@@ -14,10 +16,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 
-// Cached compiled exports from a module (with module's globals Arc for home_globals)
-type ModuleExports = HashMap<String, Value>;
+#[derive(Clone)]
+struct LoadedModule {
+    value_exports: HashMap<String, Value>,
+    type_alias_exports: HashMap<String, Type>,
+    model_exports: HashMap<String, ModelDef>,
+    role_exports: HashMap<String, RoleDef>,
+    enum_exports: HashMap<String, EnumDef>,
+}
+
 type ModuleGlobals = Arc<Vec<Value>>;
-type ModuleCacheEntry = (ModuleExports, ModuleGlobals);
+type ModuleCacheEntry = (LoadedModule, ModuleGlobals);
 type ModuleCache = HashMap<PathBuf, (ModuleCacheEntry, SystemTime)>;
 type BytecodePayload = (Vec<OpCode>, Vec<Span>, Vec<Value>, String, String);
 
@@ -240,18 +249,19 @@ fn main() {
             }
 
             // Load the module
-            let exports = load_module(source, &base_path, &mut module_cache);
+            let module = load_module(source, &base_path, &mut module_cache);
 
             // Inject each requested export into the compiler
             for (name, alias) in names {
-                if let Some(val) = exports.get(name) {
+                let bind_name = alias.as_ref().unwrap_or(name);
+
+                if let Some(val) = module.value_exports.get(name) {
                     // Add the exported Value to constants pool directly
                     // It's already a runtime Value (Closure, String, etc.)
                     let const_idx = compiler.add_constant(val.clone());
 
                     // Register in global table
                     let var_idx = compiler.next_index;
-                    let bind_name = alias.as_ref().unwrap_or(name);
                     compiler.global_table.insert(bind_name.clone(), var_idx);
                     compiler.next_index += 1;
 
@@ -305,15 +315,39 @@ fn main() {
                         }
                     };
                     analyzer.define_global(bind_name.clone(), symbol);
+                } else if let Some(model_def) = module.model_exports.get(name) {
+                    if bind_name != name {
+                        panic!(
+                            "Import Error: Model export '{}' cannot be aliased yet",
+                            name
+                        );
+                    }
+                    analyzer.define_imported_model(model_def.clone(), stmt.span);
+                } else if let Some(role_def) = module.role_exports.get(name) {
+                    if bind_name != name {
+                        panic!("Import Error: Role export '{}' cannot be aliased yet", name);
+                    }
+                    analyzer.define_imported_role(role_def.clone(), stmt.span);
+                } else if let Some(enum_def) = module.enum_exports.get(name) {
+                    if bind_name != name {
+                        panic!("Import Error: Enum export '{}' cannot be aliased yet", name);
+                    }
+                    analyzer.define_imported_enum(enum_def.clone(), stmt.span);
+                } else if let Some(target) = module.type_alias_exports.get(name) {
+                    analyzer.define_imported_type_alias(
+                        bind_name.clone(),
+                        target.clone(),
+                        stmt.span,
+                    );
                 } else {
                     panic!("Import Error: '{}' is not exported from '{}'", name, source);
                 }
             }
         } else if let StatementKind::ImportDefault { name, source } = &stmt.kind {
             // Load the module
-            let exports = load_module(source, &base_path, &mut module_cache);
+            let module = load_module(source, &base_path, &mut module_cache);
 
-            if let Some(val) = exports.get("default") {
+            if let Some(val) = module.value_exports.get("default") {
                 let const_idx = compiler.add_constant(val.clone());
                 let var_idx = compiler.next_index;
                 compiler.global_table.insert(name.clone(), var_idx);
@@ -414,9 +448,9 @@ fn main() {
                 continue;
             }
 
-            let exports = load_module(source, &base_path, &mut module_cache);
-            let (module_value, symbol) = if exports.len() == 1 {
-                if let Some(val) = exports.get("default") {
+            let module = load_module(source, &base_path, &mut module_cache);
+            let (module_value, symbol) = if module.value_exports.len() == 1 {
+                if let Some(val) = module.value_exports.get("default") {
                     let symbol = if let Value::Function(f) = val {
                         Symbol {
                             ty: Type::Function {
@@ -443,7 +477,8 @@ fn main() {
                     };
                     (val.clone(), symbol)
                 } else {
-                    let module_obj = ObjectData::into_value("Module".to_string(), exports);
+                    let module_obj =
+                        ObjectData::into_value("Module".to_string(), module.value_exports.clone());
                     (
                         module_obj,
                         Symbol {
@@ -453,7 +488,8 @@ fn main() {
                     )
                 }
             } else {
-                let module_obj = ObjectData::into_value("Module".to_string(), exports);
+                let module_obj =
+                    ObjectData::into_value("Module".to_string(), module.value_exports.clone());
                 (
                     module_obj,
                     Symbol {
@@ -541,6 +577,7 @@ fn main() {
 
     // Share analyzed model definitions with the compiler
     compiler.models = analyzer.model_defs().clone();
+    compiler.enums = analyzer.enum_defs().clone();
 
     // 3a. Now resolve the export type and check for fetch method
     let is_http_server = if let Some(expr_kind) = &default_export_expr_kind {
@@ -967,8 +1004,8 @@ fn check_for_embedded_bytecode() -> Option<BytecodePayload> {
     None
 }
 
-/// Load and compile a module, returning its exported functions (with home_globals injected)
-fn load_module(module_path: &str, base_path: &PathBuf, cache: &mut ModuleCache) -> ModuleExports {
+/// Load and compile a module, returning value exports and exported type metadata
+fn load_module(module_path: &str, base_path: &PathBuf, cache: &mut ModuleCache) -> LoadedModule {
     // Resolve relative path
     let resolved_path = if module_path.starts_with("./") || module_path.starts_with("../") {
         let parent = base_path.parent().unwrap_or(base_path);
@@ -979,7 +1016,7 @@ fn load_module(module_path: &str, base_path: &PathBuf, cache: &mut ModuleCache) 
 
     // Check cache
     if let Some(entry) = cache.get(&resolved_path) {
-        return entry.0.0.clone(); // Return cached exports
+        return entry.0.0.clone(); // Return cached module
     }
 
     // Load source
@@ -1000,6 +1037,12 @@ fn load_module(module_path: &str, base_path: &PathBuf, cache: &mut ModuleCache) 
 
     // 1. Identify exports and handle ExportDefault
     let mut export_names: Vec<String> = Vec::new();
+    let mut value_export_names: HashSet<String> = HashSet::new();
+    let mut type_export_names: HashSet<String> = HashSet::new();
+    let mut type_alias_exports: HashMap<String, Type> = HashMap::new();
+    let mut model_exports: HashMap<String, ModelDef> = HashMap::new();
+    let mut role_exports: HashMap<String, RoleDef> = HashMap::new();
+    let mut enum_exports: HashMap<String, EnumDef> = HashMap::new();
     let mut default_export_expr: Option<Expr> = None;
 
     for stmt in &statements {
@@ -1009,7 +1052,100 @@ fn load_module(module_path: &str, base_path: &PathBuf, cache: &mut ModuleCache) 
                 is_exported: true,
                 ..
             } => {
+                if type_export_names.contains(name) {
+                    panic!(
+                        "Import Error: '{}' is exported as both a value and a type in '{}'",
+                        name,
+                        resolved_path.display()
+                    );
+                }
+                value_export_names.insert(name.clone());
                 export_names.push(name.clone());
+            }
+            StatementKind::TypeAlias {
+                name,
+                target,
+                is_exported: true,
+            } => {
+                if value_export_names.contains(name) {
+                    panic!(
+                        "Import Error: '{}' is exported as both a value and a type in '{}'",
+                        name,
+                        resolved_path.display()
+                    );
+                }
+                if type_export_names.contains(name) {
+                    panic!(
+                        "Import Error: '{}' is exported as multiple type declarations in '{}'",
+                        name,
+                        resolved_path.display()
+                    );
+                }
+                type_export_names.insert(name.clone());
+                type_alias_exports.insert(name.clone(), target.clone());
+            }
+            StatementKind::Model {
+                def,
+                is_exported: true,
+            } => {
+                if value_export_names.contains(&def.name) {
+                    panic!(
+                        "Import Error: '{}' is exported as both a value and a type in '{}'",
+                        def.name,
+                        resolved_path.display()
+                    );
+                }
+                if type_export_names.contains(&def.name) {
+                    panic!(
+                        "Import Error: '{}' is exported as multiple type declarations in '{}'",
+                        def.name,
+                        resolved_path.display()
+                    );
+                }
+                type_export_names.insert(def.name.clone());
+                model_exports.insert(def.name.clone(), def.clone());
+            }
+            StatementKind::Role {
+                def,
+                is_exported: true,
+            } => {
+                if value_export_names.contains(&def.name) {
+                    panic!(
+                        "Import Error: '{}' is exported as both a value and a type in '{}'",
+                        def.name,
+                        resolved_path.display()
+                    );
+                }
+                if type_export_names.contains(&def.name) {
+                    panic!(
+                        "Import Error: '{}' is exported as multiple type declarations in '{}'",
+                        def.name,
+                        resolved_path.display()
+                    );
+                }
+                type_export_names.insert(def.name.clone());
+                role_exports.insert(def.name.clone(), def.clone());
+            }
+            StatementKind::Enum {
+                def,
+                is_exported: true,
+            } => {
+                if value_export_names.contains(&def.name) {
+                    panic!(
+                        "Import Error: '{}' is exported as both a value and a type in '{}'",
+                        def.name,
+                        resolved_path.display()
+                    );
+                }
+                if type_export_names.contains(&def.name) {
+                    panic!(
+                        "Import Error: '{}' is exported as multiple type declarations in '{}'",
+                        def.name,
+                        resolved_path.display()
+                    );
+                }
+                type_export_names.insert(def.name.clone());
+                enum_exports.insert(def.name.clone(), def.clone());
             }
             StatementKind::ExportDefault(expr) => {
                 default_export_expr = Some(expr.clone());
@@ -1046,7 +1182,7 @@ fn load_module(module_path: &str, base_path: &PathBuf, cache: &mut ModuleCache) 
 
     // Preload model definitions for optional fields/defaults
     for stmt in &processed_statements {
-        if let StatementKind::Model(def) = &stmt.kind {
+        if let StatementKind::Model { def, .. } = &stmt.kind {
             module_compiler.models.insert(def.name.clone(), def.clone());
         }
     }
@@ -1074,7 +1210,7 @@ fn load_module(module_path: &str, base_path: &PathBuf, cache: &mut ModuleCache) 
     let module_globals: ModuleGlobals = Arc::new(vm.globals.clone());
 
     // 6. Extract exports from VM globals and inject home_globals
-    let mut exports: ModuleExports = HashMap::new();
+    let mut exports: HashMap<String, Value> = HashMap::new();
 
     for name in &export_names {
         let export_key = if name == "__default__" {
@@ -1103,9 +1239,17 @@ fn load_module(module_path: &str, base_path: &PathBuf, cache: &mut ModuleCache) 
         }
     }
 
+    let loaded = LoadedModule {
+        value_exports: exports,
+        type_alias_exports,
+        model_exports,
+        role_exports,
+        enum_exports,
+    };
+
     cache.insert(
         resolved_path.clone(),
-        ((exports.clone(), module_globals), SystemTime::now()),
+        ((loaded.clone(), module_globals), SystemTime::now()),
     );
-    exports
+    loaded
 }

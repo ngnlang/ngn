@@ -165,6 +165,7 @@ pub enum StatementKind {
     TypeAlias {
         name: String,
         target: Type,
+        is_exported: bool,
     },
     Declaration {
         name: String,
@@ -253,9 +254,18 @@ pub enum StatementKind {
     Next,
     Break,
     Return(Option<Expr>),
-    Enum(EnumDef),
-    Model(ModelDef),
-    Role(RoleDef),
+    Enum {
+        def: EnumDef,
+        is_exported: bool,
+    },
+    Model {
+        def: ModelDef,
+        is_exported: bool,
+    },
+    Role {
+        def: RoleDef,
+        is_exported: bool,
+    },
     Extend {
         target: Type,
         role: Option<String>,
@@ -616,6 +626,10 @@ impl Parser {
     }
 
     fn parse_type_alias_stmt(&mut self) -> Statement {
+        self.parse_type_alias_stmt_with_export(false)
+    }
+
+    fn parse_type_alias_stmt_with_export(&mut self, is_exported: bool) -> Statement {
         let start = self.current_span.start;
         self.advance(); // consume 'type'
 
@@ -634,7 +648,11 @@ impl Parser {
         let end = self.previous_span.end;
 
         Statement {
-            kind: StatementKind::TypeAlias { name, target },
+            kind: StatementKind::TypeAlias {
+                name,
+                target,
+                is_exported,
+            },
             span: Span::new(start, end),
         }
     }
@@ -762,9 +780,16 @@ impl Parser {
                     }
                 } else if self.current_token == Token::Fn {
                     self.parse_function_with_export(true)
+                } else if self.current_token == Token::Type {
+                    self.parse_type_alias_stmt_with_export(true)
+                } else if self.current_token == Token::Model {
+                    self.parse_model_stmt_with_export(true)
+                } else if self.current_token == Token::Role {
+                    self.parse_role_stmt_with_export(true)
+                } else if self.current_token == Token::Enum {
+                    self.parse_enum_stmt_with_export(true)
                 } else {
-                    let msg =
-                        "Syntax Error: 'export' must be followed by 'fn' or 'default'".to_string();
+                    let msg = "Syntax Error: 'export' must be followed by 'fn', 'type', 'model', 'role', 'enum', or 'default'".to_string();
                     if self.current_token != Token::EOF {
                         self.advance();
                     }
@@ -3437,6 +3462,10 @@ impl Parser {
     }
 
     fn parse_enum_stmt(&mut self) -> Statement {
+        self.parse_enum_stmt_with_export(false)
+    }
+
+    fn parse_enum_stmt_with_export(&mut self, is_exported: bool) -> Statement {
         let start = self.current_span.start;
 
         if self.in_function {
@@ -3495,15 +3524,22 @@ impl Parser {
         self.type_params_in_scope = old_type_params;
 
         Statement {
-            kind: StatementKind::Enum(EnumDef {
-                name,
-                type_params,
-                variants,
-            }),
+            kind: StatementKind::Enum {
+                def: EnumDef {
+                    name,
+                    type_params,
+                    variants,
+                },
+                is_exported,
+            },
             span: Span::new(start, end),
         }
     }
     fn parse_model_stmt(&mut self) -> Statement {
+        self.parse_model_stmt_with_export(false)
+    }
+
+    fn parse_model_stmt_with_export(&mut self, is_exported: bool) -> Statement {
         let start = self.current_span.start;
 
         if self.in_function {
@@ -3576,16 +3612,23 @@ impl Parser {
         self.type_params_in_scope = old_type_params;
 
         Statement {
-            kind: StatementKind::Model(ModelDef {
-                name,
-                type_params,
-                fields,
-            }),
+            kind: StatementKind::Model {
+                def: ModelDef {
+                    name,
+                    type_params,
+                    fields,
+                },
+                is_exported,
+            },
             span: Span::new(start, end),
         }
     }
 
     fn parse_role_stmt(&mut self) -> Statement {
+        self.parse_role_stmt_with_export(false)
+    }
+
+    fn parse_role_stmt_with_export(&mut self, is_exported: bool) -> Statement {
         let start = self.current_span.start;
 
         if self.in_function {
@@ -3607,7 +3650,10 @@ impl Parser {
         let end = self.previous_span.end;
 
         Statement {
-            kind: StatementKind::Role(RoleDef { name, methods }),
+            kind: StatementKind::Role {
+                def: RoleDef { name, methods },
+                is_exported,
+            },
             span: Span::new(start, end),
         }
     }

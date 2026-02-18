@@ -2,7 +2,7 @@
 title: Modules
 ---
 
-You can use `export` and `import` to create modules in your project. This is a functions-only feature.
+You can use `export` and `import` to create modules in your project.
 
 ```ngn
 // math.ngn
@@ -48,4 +48,56 @@ export default add
 ```ngn
 // main.ngn
 import add from "math.ngn"
+```
+
+## Exporting types and models
+```ngn
+// types.ngn
+export type UserId = i64
+
+export model User {
+  id: UserId,
+  name: string
+}
+```
+
+## Exporting roles and enums
+```ngn
+// domain.ngn
+export role Named {
+  fn name(): string
+}
+
+export enum Status {
+  Active,
+  Disabled,
+  Error(string),
+}
+```
+
+```ngn
+// main.ngn
+import { Named, Status } from "domain.ngn"
+
+fn describe(status: Status): string {
+  match status {
+    Status::Active => "active"
+    Status::Disabled => "disabled"
+    Status::Error(message) => "error: ${message}"
+  }
+}
+```
+
+```ngn
+// main.ngn
+import { User, UserId } from "types.ngn"
+
+fn format_id(id: UserId): string {
+  return "id=${id}"
+}
+
+fn main() {
+  const user = User { id: 7, name: "Ari" }
+  print(format_id(user.id))
+}
 ```

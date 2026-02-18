@@ -745,6 +745,44 @@ impl Analyzer {
         &self.models
     }
 
+    pub fn enum_defs(&self) -> &HashMap<String, EnumDef> {
+        &self.enums
+    }
+
+    pub fn define_imported_type_alias(&mut self, name: String, target: Type, span: Span) {
+        let normalized = self.normalize_type(target);
+        self.type_aliases.insert(name.clone(), normalized.clone());
+        self.record_symbol(&name, SymbolKind::TypeAlias, normalized, span, false);
+    }
+
+    pub fn define_imported_model(&mut self, model_def: ModelDef, span: Span) {
+        let name = model_def.name.clone();
+        self.models.insert(name.clone(), model_def);
+        self.record_symbol(
+            &name,
+            SymbolKind::Model,
+            Type::Model(name.clone()),
+            span,
+            false,
+        );
+    }
+
+    pub fn define_imported_role(&mut self, role_def: RoleDef, span: Span) {
+        let name = role_def.name.clone();
+        self.roles.insert(name.clone(), role_def);
+        self.record_symbol(
+            &name,
+            SymbolKind::Role,
+            Type::Role(name.clone()),
+            span,
+            false,
+        );
+    }
+
+    pub fn define_imported_enum(&mut self, enum_def: EnumDef, span: Span) {
+        self.register_enum(&enum_def, span);
+    }
+
     pub fn new_with_index(source_len: usize) -> Self {
         let mut analyzer = Self::new();
         analyzer.index = Some(IndexState::new(source_len));
@@ -983,10 +1021,10 @@ impl Analyzer {
         // Pass 1a: Collect all top-level types (Enums, Models, Roles, TypeAliases)
         for stmt in statements {
             match &stmt.kind {
-                StatementKind::Enum(enum_def) => {
+                StatementKind::Enum { def: enum_def, .. } => {
                     self.register_enum(enum_def, stmt.span);
                 }
-                StatementKind::Model(model_def) => {
+                StatementKind::Model { def: model_def, .. } => {
                     self.models
                         .insert(model_def.name.clone(), model_def.clone());
                     self.record_symbol(
@@ -1018,7 +1056,7 @@ impl Analyzer {
                         }
                     }
                 }
-                StatementKind::Role(role_def) => {
+                StatementKind::Role { def: role_def, .. } => {
                     self.roles.insert(role_def.name.clone(), role_def.clone());
                     self.record_symbol(
                         &role_def.name,
@@ -1028,7 +1066,7 @@ impl Analyzer {
                         false,
                     );
                 }
-                StatementKind::TypeAlias { name, target } => {
+                StatementKind::TypeAlias { name, target, .. } => {
                     self.validate_type_args(target, stmt.span);
                     let normalized = self.normalize_type(target.clone());
                     self.type_aliases.insert(name.clone(), normalized);
@@ -1886,10 +1924,10 @@ impl Analyzer {
                 }
                 Type::Void
             }
-            StatementKind::Enum(_) => Type::Void,
+            StatementKind::Enum { .. } => Type::Void,
             StatementKind::Next => Type::Void,
-            StatementKind::Model(_) => Type::Void,
-            StatementKind::Role(_) => Type::Void,
+            StatementKind::Model { .. } => Type::Void,
+            StatementKind::Role { .. } => Type::Void,
             StatementKind::Extend {
                 target,
                 role,

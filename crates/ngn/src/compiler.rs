@@ -2057,7 +2057,7 @@ impl Compiler {
         self.instructions.set_span(stmt.span);
         match stmt.kind {
             StatementKind::TypeAlias { .. } => {}
-            StatementKind::Enum(enum_def) => {
+            StatementKind::Enum { def: enum_def, .. } => {
                 self.enums.insert(enum_def.name.clone(), enum_def);
             }
             StatementKind::Declaration {
@@ -2294,10 +2294,10 @@ impl Compiler {
                 self.temp_start = self.next_index as u16;
                 self.reg_top = self.temp_start;
             }
-            StatementKind::Model(def) => {
+            StatementKind::Model { def, .. } => {
                 self.models.insert(def.name.clone(), def.clone());
             }
-            StatementKind::Role(_) => {}
+            StatementKind::Role { .. } => {}
             StatementKind::Extend {
                 target, methods, ..
             } => {
