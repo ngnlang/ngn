@@ -1,0 +1,16 @@
+import { assert } from "tbx::test"
+import { User, UserId, make_name as name_of } from "./module_types_models.ngn"
+
+fn takes_id(id: UserId): string {
+    return "id=${id}"
+}
+
+fn main() {
+    const person = User { id: 7, name: "Ari" }
+    assert(name_of(person) == "Ari")
+
+    const msg = takes_id(person.id)
+    assert(msg == "id=7")
+
+    assert(true, "type/model import-export passed")
+}

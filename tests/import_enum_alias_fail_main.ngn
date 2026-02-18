@@ -1,0 +1,5 @@
+import { Status as TicketStatus } from "./module_roles_enums.ngn"
+
+fn main() {
+    TicketStatus::Active
+}

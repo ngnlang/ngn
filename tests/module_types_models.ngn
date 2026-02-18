@@ -1,0 +1,14 @@
+export type UserId = i64
+
+export model User {
+    id: UserId,
+    name: string
+}
+
+export fn make_name(user: User): string {
+    return user.name
+}
+
+fn local_roundtrip(user: User): UserId {
+    return user.id
+}

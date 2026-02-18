@@ -1,0 +1,26 @@
+import { assert } from "tbx::test"
+import { HasLabel, Status, is_active } from "./module_roles_enums.ngn"
+
+model Card {
+    title: string
+}
+
+extend Card with HasLabel {
+    fn label(): string {
+        return this.title
+    }
+}
+
+fn use_label(item: HasLabel): string {
+    return item.label()
+}
+
+fn main() {
+    const card = Card { title: "Hello" }
+    assert(use_label(card) == "Hello")
+
+    const status = Active
+    assert(is_active(status) == true)
+
+    assert(true, "role/enum import-export passed")
+}

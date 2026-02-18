@@ -1,0 +1,7 @@
+export fn Thing(): i64 {
+    return 1
+}
+
+export model Thing {
+    value: i64
+}

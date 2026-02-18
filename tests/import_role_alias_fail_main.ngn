@@ -1,0 +1,5 @@
+import { HasLabel as Label } from "./module_roles_enums.ngn"
+
+fn main() {
+    Label
+}

@@ -1,0 +1,6 @@
+import { assert } from "tbx::test"
+import { Thing } from "./module_export_name_conflict.ngn"
+
+fn main() {
+    assert(Thing() == 1)
+}

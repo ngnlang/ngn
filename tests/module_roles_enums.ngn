@@ -1,0 +1,12 @@
+export role HasLabel {
+    fn label(): string
+}
+
+export enum Status {
+    Active,
+    Disabled,
+}
+
+export fn is_active(status: Status): bool {
+    return status == Active
+}
