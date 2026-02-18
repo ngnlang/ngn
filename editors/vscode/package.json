@@ -37,6 +37,21 @@
         "path": "./syntaxes/ngn.tmLanguage.json"
       }
     ],
+    "configuration": {
+      "title": "ngn",
+      "properties": {
+        "ngn.languageServer.path": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to an ngn-lsp binary. When set, the extension uses this binary instead of downloading a release build."
+        },
+        "ngn.languageServer.preferWorkspaceBinary": {
+          "type": "boolean",
+          "default": true,
+          "description": "Prefer a workspace-built language server binary at target/debug/ngn-lsp or target/release/ngn-lsp when available."
+        }
+      }
+    },
     "configurationDefaults": {
       "[ngn]": {
         "editor.semanticHighlighting.enabled": true

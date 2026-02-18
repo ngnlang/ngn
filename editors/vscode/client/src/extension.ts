@@ -25,6 +25,54 @@ async function pathExists(filePath: string): Promise<boolean> {
     }
 }
 
+function expandHomeDir(filePath: string): string {
+    if (filePath.startsWith('~/')) {
+        const home = process.env.HOME;
+        if (home) {
+            return path.join(home, filePath.slice(2));
+        }
+    }
+    return filePath;
+}
+
+async function findWorkspaceServerBinary(): Promise<string | undefined> {
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    for (const folder of folders) {
+        const debugPath = path.join(folder.uri.fsPath, 'target', 'debug', 'ngn-lsp');
+        if (await pathExists(debugPath)) {
+            return debugPath;
+        }
+
+        const releasePath = path.join(folder.uri.fsPath, 'target', 'release', 'ngn-lsp');
+        if (await pathExists(releasePath)) {
+            return releasePath;
+        }
+    }
+    return undefined;
+}
+
+async function resolveConfiguredServerPath(configuredPath: string): Promise<string | undefined> {
+    const expanded = expandHomeDir(configuredPath);
+    if (path.isAbsolute(expanded)) {
+        return (await pathExists(expanded)) ? expanded : undefined;
+    }
+
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    for (const folder of folders) {
+        const candidate = path.resolve(folder.uri.fsPath, expanded);
+        if (await pathExists(candidate)) {
+            return candidate;
+        }
+    }
+
+    const fromCwd = path.resolve(expanded);
+    if (await pathExists(fromCwd)) {
+        return fromCwd;
+    }
+
+    return undefined;
+}
+
 async function downloadFile(url: string, destination: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
         const request = https.get(url, (response) => {
@@ -105,15 +153,38 @@ export function activate(context: vscode.ExtensionContext) {
         return;
     }
 
+    const config = vscode.workspace.getConfiguration('ngn');
+    const configuredPath = (config.get<string>('languageServer.path') ?? '').trim();
+    const preferWorkspaceBinary = config.get<boolean>('languageServer.preferWorkspaceBinary', true);
+
     const serverDir = path.join(context.globalStorageUri.fsPath, 'server', `linux-${arch}`);
-    const serverBinary = path.join(serverDir, 'ngn-lsp');
+    const downloadedServerBinary = path.join(serverDir, 'ngn-lsp');
     const assetName = `ngn-lsp-latest-linux-${arch}.tar.gz`;
     const downloadUrl = `https://github.com/ngnlang/ngn/releases/latest/download/${assetName}`;
     const archivePath = path.join(serverDir, assetName);
 
+    const resolveServerBinary = async (): Promise<{ command: string; source: string }> => {
+        if (configuredPath.length > 0) {
+            const resolved = await resolveConfiguredServerPath(configuredPath);
+            if (!resolved) {
+                throw new Error(`Configured ngn.languageServer.path does not exist: ${configuredPath}`);
+            }
+            return { command: resolved, source: 'configured path' };
+        }
+
+        if (preferWorkspaceBinary) {
+            const workspaceBinary = await findWorkspaceServerBinary();
+            if (workspaceBinary) {
+                return { command: workspaceBinary, source: 'workspace binary' };
+            }
+        }
+
+        return { command: downloadedServerBinary, source: 'downloaded release binary' };
+    };
+
     const ensureServer = async () => {
         await fs.promises.mkdir(serverDir, { recursive: true });
-        const serverExists = await pathExists(serverBinary);
+        const serverExists = await pathExists(downloadedServerBinary);
         const now = Date.now();
         const lastCheck = context.globalState.get<number>('ngn.lsp.lastCheck', 0);
         const shouldCheck = now - lastCheck > weekMs;
@@ -163,7 +234,7 @@ export function activate(context: vscode.ExtensionContext) {
         await downloadFile(downloadUrl, archivePath);
         outputChannel.appendLine(`Extracting ${assetName}`);
         await execFileAsync('tar', ['-xzf', archivePath, '-C', serverDir]);
-        await fs.promises.chmod(serverBinary, 0o755);
+        await fs.promises.chmod(downloadedServerBinary, 0o755);
         await fs.promises.unlink(archivePath).catch(() => undefined);
         await context.globalState.update('ngn.lsp.lastCheck', now);
         if (latestEtag) {
@@ -174,11 +245,16 @@ export function activate(context: vscode.ExtensionContext) {
         }
     };
 
-    ensureServer().then(() => {
-        outputChannel.appendLine(`Server binary path: ${serverBinary}`);
+    (async () => {
+        const server = await resolveServerBinary();
+        if (server.source === 'downloaded release binary') {
+            await ensureServer();
+        }
+
+        outputChannel.appendLine(`Server binary path: ${server.command} (${server.source})`);
         const serverOptions: ServerOptions = {
-            run: { command: serverBinary, transport: TransportKind.stdio },
-            debug: { command: serverBinary, transport: TransportKind.stdio },
+            run: { command: server.command, transport: TransportKind.stdio },
+            debug: { command: server.command, transport: TransportKind.stdio },
         };
 
         const clientOptions: LanguageClientOptions = {
@@ -194,7 +270,7 @@ export function activate(context: vscode.ExtensionContext) {
         }).catch((error) => {
             outputChannel.appendLine(`Failed to start language client: ${error}`);
         });
-    }).catch((error) => {
+    })().catch((error) => {
         const message = `Failed to prepare ngn language server: ${error}`;
         outputChannel.appendLine(message);
         vscode.window.showErrorMessage(message);

@@ -9,7 +9,10 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 use ngn::analyzer::Analyzer;
 use ngn::lexer::{Lexer, Span, Token};
-use ngn::parser::{ExprKind, ModelField, ParseDiagnostic, Parser, Statement, StatementKind, Type};
+use ngn::parser::{
+    EnumDef, ExprKind, ModelDef, ModelField, ParseDiagnostic, Parser, RoleDef, Statement,
+    StatementKind, Type,
+};
 use ngn::toolbox::Toolbox;
 use ngn::toolbox::core::{GLOBAL_NAMES, get_type};
 
@@ -31,7 +34,11 @@ struct DocumentState {
 
 #[derive(Debug, Clone)]
 struct ModuleExports {
-    exports: HashMap<String, Type>,
+    value_exports: HashMap<String, Type>,
+    type_alias_exports: HashMap<String, Type>,
+    model_exports: HashMap<String, ModelDef>,
+    role_exports: HashMap<String, RoleDef>,
+    enum_exports: HashMap<String, EnumDef>,
     default_export: Option<Type>,
 }
 
@@ -159,7 +166,11 @@ fn compute_module_exports(
     statements: &[Statement],
     analysis: &ngn::analyzer::Analysis,
 ) -> ModuleExports {
-    let mut exports = HashMap::new();
+    let mut value_exports = HashMap::new();
+    let mut type_alias_exports = HashMap::new();
+    let mut model_exports = HashMap::new();
+    let mut role_exports = HashMap::new();
+    let mut enum_exports = HashMap::new();
     let mut default_export = None;
 
     for stmt in statements {
@@ -169,7 +180,7 @@ fn compute_module_exports(
             } => {
                 if *is_exported {
                     let ty = lookup_symbol_global(&analysis.scopes, name).unwrap_or(Type::Any);
-                    exports.insert(name.clone(), ty);
+                    value_exports.insert(name.clone(), ty);
                 }
             }
             StatementKind::TypeAlias {
@@ -178,22 +189,22 @@ fn compute_module_exports(
                 is_exported,
             } => {
                 if *is_exported {
-                    exports.insert(name.clone(), target.clone());
+                    type_alias_exports.insert(name.clone(), target.clone());
                 }
             }
             StatementKind::Model { def, is_exported } => {
                 if *is_exported {
-                    exports.insert(def.name.clone(), Type::Model(def.name.clone()));
+                    model_exports.insert(def.name.clone(), def.clone());
                 }
             }
             StatementKind::Role { def, is_exported } => {
                 if *is_exported {
-                    exports.insert(def.name.clone(), Type::Role(def.name.clone()));
+                    role_exports.insert(def.name.clone(), def.clone());
                 }
             }
             StatementKind::Enum { def, is_exported } => {
                 if *is_exported {
-                    exports.insert(def.name.clone(), Type::Enum(def.name.clone()));
+                    enum_exports.insert(def.name.clone(), def.clone());
                 }
             }
             StatementKind::ExportDefault(expr) => {
@@ -210,7 +221,11 @@ fn compute_module_exports(
     }
 
     ModuleExports {
-        exports,
+        value_exports,
+        type_alias_exports,
+        model_exports,
+        role_exports,
+        enum_exports,
         default_export,
     }
 }
@@ -943,7 +958,7 @@ fn tbx_function_type(module: &str, name: &str) -> Option<Type> {
 fn tbx_module_exports(module: &str) -> Option<ModuleExports> {
     let toolbox = Toolbox::new();
     let tbx_module = toolbox.get_module(module)?;
-    let mut exports = HashMap::new();
+    let mut value_exports = HashMap::new();
 
     for name in tbx_module.functions.keys() {
         let ty = tbx_function_type(module, name).unwrap_or(Type::Function {
@@ -951,11 +966,15 @@ fn tbx_module_exports(module: &str) -> Option<ModuleExports> {
             optional_count: 0,
             return_type: Box::new(Type::Any),
         });
-        exports.insert(name.clone(), ty);
+        value_exports.insert(name.clone(), ty);
     }
 
     Some(ModuleExports {
-        exports,
+        value_exports,
+        type_alias_exports: HashMap::new(),
+        model_exports: HashMap::new(),
+        role_exports: HashMap::new(),
+        enum_exports: HashMap::new(),
         default_export: None,
     })
 }
@@ -1021,34 +1040,15 @@ impl Backend {
             }
 
             let parser_diagnostics = parser.diagnostics;
-
-            let mut analyzer = Analyzer::new_with_index(text.len());
-            let (analysis, analyzer_result) = analyzer.analyze_with_index(&statements);
-            let analyzer_diagnostics = match analyzer_result {
-                Ok(_) => Vec::new(),
-                Err(d) => d,
-            };
-
             let tokens = collect_tokens(text);
 
-            (
-                parser_diagnostics,
-                analyzer_diagnostics,
-                analysis,
-                tokens,
-                statements,
-            )
+            (parser_diagnostics, tokens, statements)
         }));
 
-        let (parser_diagnostics, analyzer_diagnostics, analysis, tokens, statements) = match result
-        {
-            Ok((parser_diagnostics, analyzer_diagnostics, analysis, tokens, statements)) => (
-                parser_diagnostics,
-                analyzer_diagnostics,
-                analysis,
-                tokens,
-                statements,
-            ),
+        let (parser_diagnostics, tokens, statements) = match result {
+            Ok((parser_diagnostics, tokens, statements)) => {
+                (parser_diagnostics, tokens, statements)
+            }
             Err(_) => {
                 let diagnostic = Diagnostic {
                     range: Range {
@@ -1079,12 +1079,193 @@ impl Backend {
             }
         };
 
+        let mut imported_symbols = HashMap::new();
+        let mut module_aliases = HashMap::new();
+        let mut analyzer = Analyzer::new_with_index(text.len());
         let mut raw_diagnostics: Vec<(String, Span)> = Vec::new();
         for ParseDiagnostic { message, span } in parser_diagnostics {
             raw_diagnostics.push((message, span));
         }
-        for diag in analyzer_diagnostics {
-            raw_diagnostics.push((diag.message, diag.span));
+
+        for stmt in &statements {
+            match &stmt.kind {
+                StatementKind::Import { names, source } => {
+                    if source.starts_with("tbx::") {
+                        let module = source.trim_start_matches("tbx::");
+                        if let Some(exports) = tbx_module_exports(module) {
+                            for (name, alias) in names {
+                                let import_name = alias.as_ref().unwrap_or(name);
+                                let ty = exports
+                                    .value_exports
+                                    .get(name)
+                                    .cloned()
+                                    .unwrap_or(Type::Any);
+                                imported_symbols.insert(import_name.clone(), ty);
+                                analyzer.define_global(
+                                    import_name.clone(),
+                                    ngn::analyzer::Symbol {
+                                        ty: imported_symbols
+                                            .get(import_name)
+                                            .cloned()
+                                            .unwrap_or(Type::Any),
+                                        is_mutable: false,
+                                    },
+                                );
+                            }
+                        }
+                        continue;
+                    }
+
+                    if let Some(path) = resolve_module_path(&uri, source) {
+                        let exports = self.load_module_exports(&path).await;
+                        if let Some(exports) = exports {
+                            for (name, alias) in names {
+                                let import_name = alias.as_ref().unwrap_or(name);
+                                if let Some(ty) = exports.value_exports.get(name) {
+                                    imported_symbols.insert(import_name.clone(), ty.clone());
+                                    analyzer.define_global(
+                                        import_name.clone(),
+                                        ngn::analyzer::Symbol {
+                                            ty: ty.clone(),
+                                            is_mutable: false,
+                                        },
+                                    );
+                                } else if let Some(target) = exports.type_alias_exports.get(name) {
+                                    imported_symbols.insert(import_name.clone(), target.clone());
+                                    analyzer.define_imported_type_alias(
+                                        import_name.clone(),
+                                        target.clone(),
+                                        stmt.span,
+                                    );
+                                } else if let Some(model_def) = exports.model_exports.get(name) {
+                                    if import_name != name {
+                                        raw_diagnostics.push((
+                                            format!(
+                                                "Import Error: Model export '{}' cannot be aliased yet",
+                                                name
+                                            ),
+                                            stmt.span,
+                                        ));
+                                        continue;
+                                    }
+                                    imported_symbols.insert(
+                                        import_name.clone(),
+                                        Type::Model(model_def.name.clone()),
+                                    );
+                                    analyzer.define_imported_model(model_def.clone(), stmt.span);
+                                } else if let Some(role_def) = exports.role_exports.get(name) {
+                                    if import_name != name {
+                                        raw_diagnostics.push((
+                                            format!(
+                                                "Import Error: Role export '{}' cannot be aliased yet",
+                                                name
+                                            ),
+                                            stmt.span,
+                                        ));
+                                        continue;
+                                    }
+                                    imported_symbols.insert(
+                                        import_name.clone(),
+                                        Type::Role(role_def.name.clone()),
+                                    );
+                                    analyzer.define_imported_role(role_def.clone(), stmt.span);
+                                } else if let Some(enum_def) = exports.enum_exports.get(name) {
+                                    if import_name != name {
+                                        raw_diagnostics.push((
+                                            format!(
+                                                "Import Error: Enum export '{}' cannot be aliased yet",
+                                                name
+                                            ),
+                                            stmt.span,
+                                        ));
+                                        continue;
+                                    }
+                                    imported_symbols.insert(
+                                        import_name.clone(),
+                                        Type::Enum(enum_def.name.clone()),
+                                    );
+                                    analyzer.define_imported_enum(enum_def.clone(), stmt.span);
+                                } else {
+                                    raw_diagnostics.push((
+                                        format!(
+                                            "Import Error: '{}' is not exported from '{}'",
+                                            name, source
+                                        ),
+                                        stmt.span,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+                StatementKind::ImportDefault { name, source } => {
+                    if source.starts_with("tbx::") {
+                        let ty = get_type(name).map(|def| def.ty).unwrap_or(Type::Any);
+                        imported_symbols.insert(name.clone(), ty.clone());
+                        analyzer.define_global(
+                            name.clone(),
+                            ngn::analyzer::Symbol {
+                                ty,
+                                is_mutable: false,
+                            },
+                        );
+                        continue;
+                    }
+
+                    if let Some(path) = resolve_module_path(&uri, source) {
+                        let exports = self.load_module_exports(&path).await;
+                        if let Some(exports) = exports {
+                            let ty = exports.default_export.unwrap_or(Type::Any);
+                            imported_symbols.insert(name.clone(), ty);
+                            analyzer.define_global(
+                                name.clone(),
+                                ngn::analyzer::Symbol {
+                                    ty: imported_symbols.get(name).cloned().unwrap_or(Type::Any),
+                                    is_mutable: false,
+                                },
+                            );
+                        }
+                    }
+                }
+                StatementKind::ImportModule { alias, source } => {
+                    if source.starts_with("tbx::") {
+                        let module = source.trim_start_matches("tbx::");
+                        if let Some(exports) = tbx_module_exports(module) {
+                            module_aliases.insert(alias.clone(), exports);
+                            analyzer.define_global(
+                                alias.clone(),
+                                ngn::analyzer::Symbol {
+                                    ty: Type::Any,
+                                    is_mutable: false,
+                                },
+                            );
+                        }
+                        continue;
+                    }
+
+                    if let Some(path) = resolve_module_path(&uri, source) {
+                        let exports = self.load_module_exports(&path).await;
+                        if let Some(exports) = exports {
+                            module_aliases.insert(alias.clone(), exports);
+                            analyzer.define_global(
+                                alias.clone(),
+                                ngn::analyzer::Symbol {
+                                    ty: Type::Any,
+                                    is_mutable: false,
+                                },
+                            );
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let (analysis, analyzer_result) = analyzer.analyze_with_index(&statements);
+        if let Err(diags) = analyzer_result {
+            for diag in diags {
+                raw_diagnostics.push((diag.message, diag.span));
+            }
         }
 
         let mut seen = HashSet::new();
@@ -1109,76 +1290,9 @@ impl Backend {
             .publish_diagnostics(uri.clone(), lsp_diagnostics, None)
             .await;
 
-        let mut imported_symbols = HashMap::new();
-        let mut module_aliases = HashMap::new();
-
         if let Ok(path) = uri.to_file_path() {
             let module_exports = compute_module_exports(&statements, &analysis);
             self.module_cache.write().await.insert(path, module_exports);
-        }
-
-        for stmt in &statements {
-            match &stmt.kind {
-                StatementKind::Import { names, source } => {
-                    if source.starts_with("tbx::") {
-                        let module = source.trim_start_matches("tbx::");
-                        if let Some(exports) = tbx_module_exports(module) {
-                            for (name, alias) in names {
-                                let import_name = alias.as_ref().unwrap_or(name);
-                                let ty = exports.exports.get(name).cloned().unwrap_or(Type::Any);
-                                imported_symbols.insert(import_name.clone(), ty);
-                            }
-                        }
-                        continue;
-                    }
-
-                    if let Some(path) = resolve_module_path(&uri, source) {
-                        let exports = self.load_module_exports(&path).await;
-                        if let Some(exports) = exports {
-                            for (name, alias) in names {
-                                let import_name = alias.as_ref().unwrap_or(name);
-                                let ty = exports.exports.get(name).cloned().unwrap_or(Type::Any);
-                                imported_symbols.insert(import_name.clone(), ty);
-                            }
-                        }
-                    }
-                }
-                StatementKind::ImportDefault { name, source } => {
-                    if source.starts_with("tbx::") {
-                        if let Some(def) = get_type(name) {
-                            imported_symbols.insert(name.clone(), def.ty);
-                        } else {
-                            imported_symbols.insert(name.clone(), Type::Any);
-                        }
-                        continue;
-                    }
-
-                    if let Some(path) = resolve_module_path(&uri, source) {
-                        let exports = self.load_module_exports(&path).await;
-                        if let Some(exports) = exports {
-                            let ty = exports.default_export.unwrap_or(Type::Any);
-                            imported_symbols.insert(name.clone(), ty);
-                        }
-                    }
-                }
-                StatementKind::ImportModule { alias, source } => {
-                    if source.starts_with("tbx::") {
-                        let module = source.trim_start_matches("tbx::");
-                        if let Some(exports) = tbx_module_exports(module) {
-                            module_aliases.insert(alias.clone(), exports);
-                        }
-                        continue;
-                    }
-
-                    if let Some(path) = resolve_module_path(&uri, source) {
-                        let exports = self.load_module_exports(&path).await;
-                        if let Some(exports) = exports {
-                            module_aliases.insert(alias.clone(), exports);
-                        }
-                    }
-                }
-                _ => {}
-            }
         }
 
         DocumentState {
@@ -1797,7 +1911,7 @@ impl LanguageServer for Backend {
                 if hover_text.is_none() && token_idx >= 2 {
                     if let Token::Identifier(obj_name) = &doc.tokens[token_idx - 2].0 {
                         if let Some(exports) = doc.module_aliases.get(obj_name) {
-                            if let Some(ty) = exports.exports.get(name) {
+                            if let Some(ty) = exports.value_exports.get(name) {
                                 hover_text = Some(format!("{}: {}", name, ty));
                             }
                         }
@@ -1955,7 +2069,7 @@ impl LanguageServer for Backend {
             if let Some(name) = &member_object_name {
                 if let Some(exports) = doc.module_aliases.get(name) {
                     let mut items = Vec::new();
-                    for (export_name, export_ty) in &exports.exports {
+                    for (export_name, export_ty) in &exports.value_exports {
                         items.push(CompletionItem {
                             label: export_name.clone(),
                             kind: Some(CompletionItemKind::FUNCTION),
