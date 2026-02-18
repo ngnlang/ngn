@@ -1,6 +1,6 @@
 [package]
 name = "ngn-lsp"
-version.workspace = true
+version = "0.2.2"
 edition.workspace = true
 
 [dependencies]

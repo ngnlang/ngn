@@ -160,7 +160,7 @@ export function activate(context: vscode.ExtensionContext) {
     const serverDir = path.join(context.globalStorageUri.fsPath, 'server', `linux-${arch}`);
     const downloadedServerBinary = path.join(serverDir, 'ngn-lsp');
     const assetName = `ngn-lsp-latest-linux-${arch}.tar.gz`;
-    const downloadUrl = `https://github.com/ngnlang/ngn/releases/latest/download/${assetName}`;
+    const downloadUrl = `https://github.com/ngnlang/ngn/releases/download/lsp-latest/${assetName}`;
     const archivePath = path.join(serverDir, assetName);
 
     const resolveServerBinary = async (): Promise<{ command: string; source: string }> => {

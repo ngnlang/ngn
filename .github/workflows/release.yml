@@ -1,4 +1,4 @@
-name: release
+name: release-ngn
 
 on:
   push:
@@ -29,32 +29,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang
 
-      - name: Detect LSP changes
-        id: lsp_changed
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import os
-          import subprocess
-
-          tag = os.environ.get("GITHUB_REF_NAME")
-          tags = subprocess.check_output(["git", "tag", "--sort=creatordate"]).decode().splitlines()
-          prev_tag = None
-          if tag in tags:
-              idx = tags.index(tag)
-              if idx > 0:
-                  prev_tag = tags[idx - 1]
-
-          if not prev_tag:
-              changed = True
-          else:
-              diff = subprocess.check_output(["git", "diff", "--name-only", f"{prev_tag}..{tag}"]).decode().splitlines()
-              changed = any(p.startswith("crates/lsp/") for p in diff)
-
-          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write(f"changed={'true' if changed else 'false'}\n")
-          PY
-
       - name: Build and package
         env:
           NGN_LLAMA_BACKEND: cpu
@@ -68,15 +42,6 @@ jobs:
             cp dist/ngn-${GITHUB_REF_NAME}-linux-arm64.tar.gz dist/ngn-latest-linux-arm64.tar.gz
           fi
 
-      - name: Build and package LSP
-        if: steps.lsp_changed.outputs.changed == 'true'
-        run: |
-          set -euo pipefail
-          unset CARGO_BUILD_TARGET
-          CC=clang CXX=clang++ cargo build --release -p ngn-lsp
-          tar -C target/release -czf dist/ngn-lsp-${GITHUB_REF_NAME}-linux-x86_64.tar.gz ngn-lsp
-          cp dist/ngn-lsp-${GITHUB_REF_NAME}-linux-x86_64.tar.gz dist/ngn-lsp-latest-linux-x86_64.tar.gz
-
       - name: Verify release artifacts
         run: |
           set -euo pipefail
@@ -84,13 +49,6 @@ jobs:
           test -f "dist/ngn-${GITHUB_REF_NAME}-linux-arm64.tar.gz"
           test -f "dist/ngn-latest-linux-x86_64.tar.gz"
           test -f "dist/ngn-latest-linux-arm64.tar.gz"
-
-      - name: Verify LSP release artifacts
-        if: steps.lsp_changed.outputs.changed == 'true'
-        run: |
-          set -euo pipefail
-          test -f "dist/ngn-lsp-${GITHUB_REF_NAME}-linux-x86_64.tar.gz"
-          test -f "dist/ngn-lsp-latest-linux-x86_64.tar.gz"
 
       - name: Create release (if needed)
         env:
@@ -112,9 +70,3 @@ jobs:
             dist/ngn-latest-linux-x86_64.tar.gz \
             dist/ngn-latest-linux-arm64.tar.gz \
             --clobber
-          if [ "${{ steps.lsp_changed.outputs.changed }}" = "true" ]; then
-            gh release upload "${GITHUB_REF_NAME}" \
-              dist/ngn-lsp-${GITHUB_REF_NAME}-linux-x86_64.tar.gz \
-              dist/ngn-lsp-latest-linux-x86_64.tar.gz \
-              --clobber
-          fi

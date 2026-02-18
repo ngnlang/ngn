@@ -1,0 +1,84 @@
+name: release-lsp
+
+on:
+  push:
+    tags:
+      - "lsp-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release-lsp:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Resolve LSP version
+        id: lsp_version
+        run: |
+          set -euo pipefail
+          LSP_VERSION=$(cargo metadata --no-deps --format-version 1 | python -c 'import json,sys; data=json.load(sys.stdin); print(next(p["version"] for p in data["packages"] if p["name"]=="ngn-lsp"))')
+          EXPECTED_TAG="lsp-v${LSP_VERSION}"
+          if [ "${GITHUB_REF_NAME}" != "${EXPECTED_TAG}" ]; then
+            echo "Tag/version mismatch: got ${GITHUB_REF_NAME}, expected ${EXPECTED_TAG} from crates/lsp/Cargo.toml" >&2
+            exit 1
+          fi
+          echo "version=${LSP_VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and package LSP
+        run: |
+          set -euo pipefail
+          unset CARGO_BUILD_TARGET
+          cargo build --release -p ngn-lsp
+          mkdir -p dist
+          tar -C target/release -czf dist/ngn-lsp-v${{ steps.lsp_version.outputs.version }}-linux-x86_64.tar.gz ngn-lsp
+          cp dist/ngn-lsp-v${{ steps.lsp_version.outputs.version }}-linux-x86_64.tar.gz dist/ngn-lsp-latest-linux-x86_64.tar.gz
+
+      - name: Verify LSP release artifacts
+        run: |
+          set -euo pipefail
+          test -f "dist/ngn-lsp-v${{ steps.lsp_version.outputs.version }}-linux-x86_64.tar.gz"
+          test -f "dist/ngn-lsp-latest-linux-x86_64.tar.gz"
+
+      - name: Create release (if needed)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --generate-notes
+          fi
+
+      - name: Upload versioned LSP asset
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "${GITHUB_REF_NAME}" \
+            dist/ngn-lsp-v${{ steps.lsp_version.outputs.version }}-linux-x86_64.tar.gz \
+            --clobber
+
+      - name: Create rolling lsp-latest release (if needed)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "lsp-latest" >/dev/null 2>&1; then
+            gh release create "lsp-latest" --title "lsp-latest" --notes "Rolling latest ngn-lsp binary"
+          fi
+
+      - name: Upload rolling latest LSP asset
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "lsp-latest" \
+            dist/ngn-lsp-latest-linux-x86_64.tar.gz \
+            --clobber
