@@ -2,7 +2,7 @@
   "name": "vscode-ngn",
   "displayName": "ngn",
   "description": "Language support for NGN",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "publisher": "ngnlang",
   "repository": {
     "type": "git",
