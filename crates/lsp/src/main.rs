@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
@@ -10,8 +10,8 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 use ngn::analyzer::Analyzer;
 use ngn::lexer::{Lexer, Span, Token};
 use ngn::parser::{ExprKind, ModelField, ParseDiagnostic, Parser, Statement, StatementKind, Type};
-use ngn::toolbox::core::{get_type, GLOBAL_NAMES};
 use ngn::toolbox::Toolbox;
+use ngn::toolbox::core::{GLOBAL_NAMES, get_type};
 
 #[derive(Debug)]
 struct Backend {
@@ -52,9 +52,7 @@ fn offset_to_position(text: &str, offset: usize) -> Position {
     } else {
         text.len()
     };
-    let character = text[last_line_start..slice_len]
-        .encode_utf16()
-        .count() as u32;
+    let character = text[last_line_start..slice_len].encode_utf16().count() as u32;
     Position { line, character }
 }
 
@@ -89,19 +87,19 @@ fn collect_tokens(text: &str) -> Vec<(Token, Span)> {
 }
 
 fn find_token_at_offset(tokens: &[(Token, Span)], offset: usize) -> Option<(usize, &Token, Span)> {
-    tokens
-        .iter()
-        .enumerate()
-        .find_map(|(idx, (token, span))| {
-            if span.start <= offset && offset < span.end {
-                Some((idx, token, *span))
-            } else {
-                None
-            }
-        })
+    tokens.iter().enumerate().find_map(|(idx, (token, span))| {
+        if span.start <= offset && offset < span.end {
+            Some((idx, token, *span))
+        } else {
+            None
+        }
+    })
 }
 
-fn find_token_before_offset(tokens: &[(Token, Span)], offset: usize) -> Option<(usize, &Token, Span)> {
+fn find_token_before_offset(
+    tokens: &[(Token, Span)],
+    offset: usize,
+) -> Option<(usize, &Token, Span)> {
     let mut last: Option<(usize, &Token, Span)> = None;
     for (idx, (token, span)) in tokens.iter().enumerate() {
         if span.end > offset {
@@ -134,12 +132,7 @@ fn lookup_symbol_in_scope(
 ) -> Option<ngn::analyzer::SymbolInfo> {
     loop {
         if let Some(scope) = scopes.get(scope_id) {
-            if let Some(symbol) = scope
-                .symbols
-                .iter()
-                .rev()
-                .find(|s| s.name == name)
-            {
+            if let Some(symbol) = scope.symbols.iter().rev().find(|s| s.name == name) {
                 return Some(symbol.clone());
             }
             if let Some(parent) = scope.parent {
@@ -162,17 +155,45 @@ fn lookup_symbol_global(scopes: &[ngn::analyzer::ScopeInfo], name: &str) -> Opti
         .map(|s| s.ty.clone())
 }
 
-fn compute_module_exports(statements: &[Statement], analysis: &ngn::analyzer::Analysis) -> ModuleExports {
+fn compute_module_exports(
+    statements: &[Statement],
+    analysis: &ngn::analyzer::Analysis,
+) -> ModuleExports {
     let mut exports = HashMap::new();
     let mut default_export = None;
 
     for stmt in statements {
         match &stmt.kind {
-            StatementKind::Function { name, is_exported, .. } => {
+            StatementKind::Function {
+                name, is_exported, ..
+            } => {
                 if *is_exported {
-                    let ty = lookup_symbol_global(&analysis.scopes, name)
-                        .unwrap_or(Type::Any);
+                    let ty = lookup_symbol_global(&analysis.scopes, name).unwrap_or(Type::Any);
                     exports.insert(name.clone(), ty);
+                }
+            }
+            StatementKind::TypeAlias {
+                name,
+                target,
+                is_exported,
+            } => {
+                if *is_exported {
+                    exports.insert(name.clone(), target.clone());
+                }
+            }
+            StatementKind::Model { def, is_exported } => {
+                if *is_exported {
+                    exports.insert(def.name.clone(), Type::Model(def.name.clone()));
+                }
+            }
+            StatementKind::Role { def, is_exported } => {
+                if *is_exported {
+                    exports.insert(def.name.clone(), Type::Role(def.name.clone()));
+                }
+            }
+            StatementKind::Enum { def, is_exported } => {
+                if *is_exported {
+                    exports.insert(def.name.clone(), Type::Enum(def.name.clone()));
                 }
             }
             StatementKind::ExportDefault(expr) => {
@@ -251,9 +272,7 @@ fn find_call_site<'a>(
 
 fn unwrap_maybe(ty: &Type) -> (Type, bool) {
     match ty {
-        Type::Generic(name, args) if name == "Maybe" && args.len() == 1 => {
-            (args[0].clone(), true)
-        }
+        Type::Generic(name, args) if name == "Maybe" && args.len() == 1 => (args[0].clone(), true),
         _ => (ty.clone(), false),
     }
 }
@@ -336,10 +355,7 @@ fn substitute_type_params(ty: &Type, params: &[String], args: &[Type]) -> Type {
     }
 }
 
-fn model_fields_for_type(
-    analysis: &ngn::analyzer::Analysis,
-    ty: &Type,
-) -> Vec<(String, Type)> {
+fn model_fields_for_type(analysis: &ngn::analyzer::Analysis, ty: &Type) -> Vec<(String, Type)> {
     match ty {
         Type::Model(name) => analysis
             .models
@@ -349,10 +365,7 @@ fn model_fields_for_type(
                     .iter()
                     .map(|field| {
                         let field_ty = if field.is_optional {
-                            Type::Generic(
-                                "Maybe".to_string(),
-                                vec![field.field_type.clone()],
-                            )
+                            Type::Generic("Maybe".to_string(), vec![field.field_type.clone()])
                         } else {
                             field.field_type.clone()
                         };
@@ -393,19 +406,8 @@ fn builtin_methods_for_type(ty: &Type) -> Vec<&'static str> {
         Type::Array(_) => vec!["size", "push", "pop", "splice", "slice", "copy", "each"],
         Type::Bytes => vec!["length", "copy", "slice", "toString", "toStringStrict"],
         Type::String => vec![
-            "length",
-            "index",
-            "includes",
-            "starts",
-            "ends",
-            "upper",
-            "lower",
-            "trim",
-            "replace",
-            "repeat",
-            "copy",
-            "slice",
-            "split",
+            "length", "index", "includes", "starts", "ends", "upper", "lower", "trim", "replace",
+            "repeat", "copy", "slice", "split",
         ],
         Type::Tuple(_) => vec!["size", "toArray", "includes", "index", "copy", "join"],
         Type::State(_) => vec!["read", "write", "update"],
@@ -419,7 +421,10 @@ fn builtin_methods_for_type(ty: &Type) -> Vec<&'static str> {
         Type::Model(name) if name == "Response" => vec!["text", "json"],
         Type::Model(name) if name == "Request" => vec!["clone", "text", "json", "formData"],
         Type::Union(members) => {
-            if members.iter().all(|t| matches!(t, Type::String | Type::Bytes)) {
+            if members
+                .iter()
+                .all(|t| matches!(t, Type::String | Type::Bytes))
+            {
                 vec!["toString", "toStringStrict"]
             } else {
                 Vec::new()
@@ -508,10 +513,7 @@ fn builtin_method_type(ty: &Type, method: &str) -> Option<Type> {
                 return_type: Box::new(Type::String),
             }),
             "replace" => Some(Type::Function {
-                params: vec![
-                    Type::Union(vec![Type::String, Type::Regex]),
-                    Type::String,
-                ],
+                params: vec![Type::Union(vec![Type::String, Type::Regex]), Type::String],
                 optional_count: 0,
                 return_type: Box::new(Type::String),
             }),
@@ -609,10 +611,7 @@ fn builtin_method_type(ty: &Type, method: &str) -> Option<Type> {
             "get" => Some(Type::Function {
                 params: vec![*key.clone()],
                 optional_count: 0,
-                return_type: Box::new(Type::Generic(
-                    "Maybe".to_string(),
-                    vec![*value.clone()],
-                )),
+                return_type: Box::new(Type::Generic("Maybe".to_string(), vec![*value.clone()])),
             }),
             "set" => Some(Type::Function {
                 params: vec![*key.clone(), *value.clone()],
@@ -698,10 +697,7 @@ fn builtin_method_type(ty: &Type, method: &str) -> Option<Type> {
             "get" => Some(Type::Function {
                 params: vec![Type::String],
                 optional_count: 0,
-                return_type: Box::new(Type::Generic(
-                    "Maybe".to_string(),
-                    vec![Type::String],
-                )),
+                return_type: Box::new(Type::Generic("Maybe".to_string(), vec![Type::String])),
             }),
             "has" => Some(Type::Function {
                 params: vec![Type::String],
@@ -769,10 +765,7 @@ fn builtin_method_type(ty: &Type, method: &str) -> Option<Type> {
             "formData" => Some(Type::Function {
                 params: vec![],
                 optional_count: 0,
-                return_type: Box::new(Type::Map(
-                    Box::new(Type::String),
-                    Box::new(Type::String),
-                )),
+                return_type: Box::new(Type::Map(Box::new(Type::String), Box::new(Type::String))),
             }),
             _ => None,
         },
@@ -930,11 +923,7 @@ fn tbx_function_type(module: &str, name: &str) -> Option<Type> {
             )),
         },
         ("llm", "generate") => Type::Function {
-            params: vec![
-                Type::Model("LlmModel".to_string()),
-                Type::String,
-                Type::Any,
-            ],
+            params: vec![Type::Model("LlmModel".to_string()), Type::String, Type::Any],
             optional_count: 1,
             return_type: Box::new(Type::Generic(
                 "Result".to_string(),
@@ -942,15 +931,9 @@ fn tbx_function_type(module: &str, name: &str) -> Option<Type> {
             )),
         },
         ("llm", "stream") => Type::Function {
-            params: vec![
-                Type::Model("LlmModel".to_string()),
-                Type::String,
-                Type::Any,
-            ],
+            params: vec![Type::Model("LlmModel".to_string()), Type::String, Type::Any],
             optional_count: 1,
-            return_type: Box::new(Type::Channel(Box::new(Type::Model(
-                "LlmChunk".to_string(),
-            )))),
+            return_type: Box::new(Type::Channel(Box::new(Type::Model("LlmChunk".to_string())))),
         },
         _ => return None,
     };
@@ -1057,15 +1040,26 @@ impl Backend {
             )
         }));
 
-        let (parser_diagnostics, analyzer_diagnostics, analysis, tokens, statements) = match result {
-            Ok((parser_diagnostics, analyzer_diagnostics, analysis, tokens, statements)) => {
-                (parser_diagnostics, analyzer_diagnostics, analysis, tokens, statements)
-            }
+        let (parser_diagnostics, analyzer_diagnostics, analysis, tokens, statements) = match result
+        {
+            Ok((parser_diagnostics, analyzer_diagnostics, analysis, tokens, statements)) => (
+                parser_diagnostics,
+                analyzer_diagnostics,
+                analysis,
+                tokens,
+                statements,
+            ),
             Err(_) => {
                 let diagnostic = Diagnostic {
                     range: Range {
-                        start: Position { line: 0, character: 0 },
-                        end: Position { line: 0, character: 1 },
+                        start: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: 0,
+                            character: 1,
+                        },
                     },
                     severity: Some(DiagnosticSeverity::ERROR),
                     message: "Internal error: ngn parser crashed".to_string(),
@@ -1120,10 +1114,7 @@ impl Backend {
 
         if let Ok(path) = uri.to_file_path() {
             let module_exports = compute_module_exports(&statements, &analysis);
-            self.module_cache
-                .write()
-                .await
-                .insert(path, module_exports);
+            self.module_cache.write().await.insert(path, module_exports);
         }
 
         for stmt in &statements {
@@ -1134,11 +1125,7 @@ impl Backend {
                         if let Some(exports) = tbx_module_exports(module) {
                             for (name, alias) in names {
                                 let import_name = alias.as_ref().unwrap_or(name);
-                                let ty = exports
-                                    .exports
-                                    .get(name)
-                                    .cloned()
-                                    .unwrap_or(Type::Any);
+                                let ty = exports.exports.get(name).cloned().unwrap_or(Type::Any);
                                 imported_symbols.insert(import_name.clone(), ty);
                             }
                         }
@@ -1150,11 +1137,7 @@ impl Backend {
                         if let Some(exports) = exports {
                             for (name, alias) in names {
                                 let import_name = alias.as_ref().unwrap_or(name);
-                                let ty = exports
-                                    .exports
-                                    .get(name)
-                                    .cloned()
-                                    .unwrap_or(Type::Any);
+                                let ty = exports.exports.get(name).cloned().unwrap_or(Type::Any);
                                 imported_symbols.insert(import_name.clone(), ty);
                             }
                         }
@@ -1231,15 +1214,15 @@ fn get_semantic_type(
         Some(Token::Enum | Token::Model | Token::Role | Token::Extend | Token::With)
     );
 
-    let is_likely_class = matches!(token, Token::Identifier(name) 
+    let is_likely_class = matches!(token, Token::Identifier(name)
         if name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false));
 
     let is_method_call =
         matches!(prev_token, Some(Token::Period)) && matches!(next_token, Some(Token::LParen));
 
     let mut modifiers = vec![];
-    let is_map_set_type = matches!(token, Token::Map | Token::Set)
-        && matches!(next_token, Some(Token::LessThan));
+    let is_map_set_type =
+        matches!(token, Token::Map | Token::Set) && matches!(next_token, Some(Token::LessThan));
 
     // Declaration check - determine if we are in a declaration
     if let Some(Token::Const | Token::Global) = prev_token {
@@ -1519,10 +1502,7 @@ impl LanguageServer for Backend {
         let uri = params.text_document.uri.clone();
         let text = params.text_document.text;
         let state = self.validate_document(uri.clone(), &text).await;
-        self.documents
-            .write()
-            .await
-            .insert(uri.to_string(), state);
+        self.documents.write().await.insert(uri.to_string(), state);
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -1530,10 +1510,7 @@ impl LanguageServer for Backend {
         if let Some(change) = params.content_changes.last() {
             let text = change.text.clone();
             let state = self.validate_document(uri.clone(), &text).await;
-            self.documents
-                .write()
-                .await
-                .insert(uri.to_string(), state);
+            self.documents.write().await.insert(uri.to_string(), state);
         }
     }
 
@@ -1686,8 +1663,13 @@ impl LanguageServer for Backend {
                 _ => false,
             };
 
-            let (token_type, token_modifiers_bitset) =
-                get_semantic_type(token, prev_token, next_token, is_constant, is_default_library);
+            let (token_type, token_modifiers_bitset) = get_semantic_type(
+                token,
+                prev_token,
+                next_token,
+                is_constant,
+                is_default_library,
+            );
 
             let token_text = &text[span.start..span.end];
 
@@ -1700,9 +1682,7 @@ impl LanguageServer for Backend {
                             continue;
                         }
                         // We have flags
-                        let body_len = (text[span.start..body_end]
-                            .encode_utf16()
-                            .count()) as u32;
+                        let body_len = (text[span.start..body_end].encode_utf16().count()) as u32;
                         let flags_len = (text[(span.start + last_slash_idx + 1)..span.end]
                             .encode_utf16()
                             .count()) as u32;
@@ -1780,8 +1760,11 @@ impl LanguageServer for Backend {
         };
 
         let offset = position_to_offset(&doc.text, position);
-        let token_info = find_token_at_offset(&doc.tokens, offset)
-            .or_else(|| offset.checked_sub(1).and_then(|off| find_token_at_offset(&doc.tokens, off)));
+        let token_info = find_token_at_offset(&doc.tokens, offset).or_else(|| {
+            offset
+                .checked_sub(1)
+                .and_then(|off| find_token_at_offset(&doc.tokens, off))
+        });
 
         let (token_idx, token, token_span) = match token_info {
             Some((idx, token, span)) => (idx, token, span),
@@ -1799,7 +1782,10 @@ impl LanguageServer for Backend {
         } else if let Token::Identifier(name) = token {
             let mut is_member = false;
             if token_idx > 0 {
-                is_member = matches!(doc.tokens[token_idx - 1].0, Token::Period | Token::QuestionDot);
+                is_member = matches!(
+                    doc.tokens[token_idx - 1].0,
+                    Token::Period | Token::QuestionDot
+                );
             }
 
             if is_member {
@@ -1832,7 +1818,7 @@ impl LanguageServer for Backend {
                     if let Some(symbol) = lookup_symbol_in_scope(&analysis.scopes, scope_id, name) {
                         hover_text = Some(format!("{}: {}", symbol.name, symbol.ty));
                     } else if let Some(ty) = analysis.expr_types.get(&token_span) {
-                    hover_text = Some(format!("{}: {}", name, ty));
+                        hover_text = Some(format!("{}: {}", name, ty));
                     } else if let Some(def) = get_type(name) {
                         hover_text = Some(format!("{}: {}", name, def.ty));
                     }
@@ -1871,8 +1857,11 @@ impl LanguageServer for Backend {
 
         let offset = position_to_offset(&doc.text, position);
 
-        let token_at = find_token_at_offset(&doc.tokens, offset)
-            .or_else(|| offset.checked_sub(1).and_then(|off| find_token_at_offset(&doc.tokens, off)));
+        let token_at = find_token_at_offset(&doc.tokens, offset).or_else(|| {
+            offset
+                .checked_sub(1)
+                .and_then(|off| find_token_at_offset(&doc.tokens, off))
+        });
         let mut member_context = false;
         let mut enum_context = false;
         let mut enum_name: Option<String> = None;
@@ -2109,25 +2098,30 @@ impl LanguageServer for Backend {
         while let Some(scope) = current.and_then(|id| analysis.scopes.get(id)) {
             for symbol in scope.symbols.iter().rev() {
                 if seen.insert(symbol.name.clone()) {
-                    let (kind, detail_ty) = if let Some(import_ty) = doc.imported_symbols.get(&symbol.name) {
-                        let kind = if matches!(import_ty, Type::Function { .. }) {
-                            CompletionItemKind::FUNCTION
+                    let (kind, detail_ty) =
+                        if let Some(import_ty) = doc.imported_symbols.get(&symbol.name) {
+                            let kind = if matches!(import_ty, Type::Function { .. }) {
+                                CompletionItemKind::FUNCTION
+                            } else {
+                                CompletionItemKind::VARIABLE
+                            };
+                            (kind, import_ty.clone())
                         } else {
-                            CompletionItemKind::VARIABLE
+                            let kind = match symbol.kind {
+                                ngn::analyzer::SymbolKind::Function => CompletionItemKind::FUNCTION,
+                                ngn::analyzer::SymbolKind::Variable => CompletionItemKind::VARIABLE,
+                                ngn::analyzer::SymbolKind::Model => CompletionItemKind::STRUCT,
+                                ngn::analyzer::SymbolKind::Enum => CompletionItemKind::ENUM,
+                                ngn::analyzer::SymbolKind::EnumVariant => {
+                                    CompletionItemKind::ENUM_MEMBER
+                                }
+                                ngn::analyzer::SymbolKind::Role => CompletionItemKind::INTERFACE,
+                                ngn::analyzer::SymbolKind::TypeAlias => {
+                                    CompletionItemKind::TYPE_PARAMETER
+                                }
+                            };
+                            (kind, symbol.ty.clone())
                         };
-                        (kind, import_ty.clone())
-                    } else {
-                        let kind = match symbol.kind {
-                        ngn::analyzer::SymbolKind::Function => CompletionItemKind::FUNCTION,
-                        ngn::analyzer::SymbolKind::Variable => CompletionItemKind::VARIABLE,
-                        ngn::analyzer::SymbolKind::Model => CompletionItemKind::STRUCT,
-                        ngn::analyzer::SymbolKind::Enum => CompletionItemKind::ENUM,
-                        ngn::analyzer::SymbolKind::EnumVariant => CompletionItemKind::ENUM_MEMBER,
-                        ngn::analyzer::SymbolKind::Role => CompletionItemKind::INTERFACE,
-                        ngn::analyzer::SymbolKind::TypeAlias => CompletionItemKind::TYPE_PARAMETER,
-                        };
-                        (kind, symbol.ty.clone())
-                    };
                     items.push(CompletionItem {
                         label: symbol.name.clone(),
                         kind: Some(kind),
@@ -2136,37 +2130,16 @@ impl LanguageServer for Backend {
                     });
                 }
             }
-            current = scope.parent.and_then(|parent| analysis.scopes.get(parent)).map(|s| s.id);
+            current = scope
+                .parent
+                .and_then(|parent| analysis.scopes.get(parent))
+                .map(|s| s.id);
         }
 
         const KEYWORDS: &[&str] = &[
-            "var",
-            "const",
-            "global",
-            "fn",
-            "return",
-            "if",
-            "while",
-            "loop",
-            "for",
-            "in",
-            "match",
-            "next",
-            "break",
-            "once",
-            "import",
-            "from",
-            "as",
-            "enum",
-            "export",
-            "default",
-            "model",
-            "role",
-            "extend",
-            "with",
-            "this",
-            "check",
-            "null",
+            "var", "const", "global", "fn", "return", "if", "while", "loop", "for", "in", "match",
+            "next", "break", "once", "import", "from", "as", "enum", "export", "default", "model",
+            "role", "extend", "with", "this", "check", "null",
         ];
 
         for kw in KEYWORDS {
@@ -2193,11 +2166,12 @@ impl LanguageServer for Backend {
         Ok(Some(CompletionResponse::Array(items)))
     }
 
-    async fn signature_help(
-        &self,
-        params: SignatureHelpParams,
-    ) -> Result<Option<SignatureHelp>> {
-        let uri = params.text_document_position_params.text_document.uri.to_string();
+    async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .to_string();
         let position = params.text_document_position_params.position;
 
         let documents = self.documents.read().await;
